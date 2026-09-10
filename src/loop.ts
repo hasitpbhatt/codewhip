@@ -9,6 +9,11 @@ import { SYSTEM_PROMPT } from "./system.js";
 
 export type AskUser = (question: string) => Promise<boolean>;
 
+export type LoopEvent = {
+  kind: "tool";
+  text: string;
+};
+
 export type LoopArgs = {
   prompt: string;
   model: string;
@@ -19,6 +24,8 @@ export type LoopArgs = {
   port: ChatPort;
   signal?: AbortSignal;
   askUser?: AskUser;
+  /** Progress listener (index.ts prints). Never throws into the loop. */
+  onEvent?: (event: LoopEvent) => void;
 };
 
 export type LoopResult = {
@@ -79,6 +86,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let cancelled = false;
   let text = "";
   let error: string | undefined;
+  const emit = (msg: string): void => {
+    try {
+      args.onEvent?.({ kind: "tool", text: msg });
+    } catch {
+      // Listener failures never break the loop.
+    }
+  };
 
   for (let step = 1; step <= args.maxSteps; step++) {
     if (args.signal?.aborted === true) {
@@ -134,6 +148,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "loop:bad-call", sha256Hex(out));
+        emit(`deny ${call.name} (loop:bad-call)`);
         continue;
       }
       const preview = previewForLog(call.name, parsed);
@@ -142,6 +157,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", verdict.ruleId, sha256Hex(out));
+        emit(`deny ${call.name} ${preview} (${verdict.ruleId})`);
         continue;
       }
       let proceed = verdict.decision === "allow";
@@ -154,6 +170,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
           record("deny", `${verdict.ruleId}+held`, sha256Hex(out));
+          emit(`held ${call.name} ${preview} (${verdict.ruleId})`);
           continue;
         } else {
           let approved = false;
@@ -166,6 +183,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             const out = `held for approval (${verdict.ruleId}) — declined`;
             messages.push({ role: "tool", toolCallId: call.id, content: out });
             record("deny", `${verdict.ruleId}+declined`, sha256Hex(out));
+            emit(`held ${call.name} ${preview} (${verdict.ruleId})`);
             continue;
           }
           proceed = true;
@@ -185,6 +203,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       messages.push({ role: "tool", toolCallId: call.id, content: result.output });
       record("allow", ruleId, sha256Hex(redactSecrets(result.output).slice(0, 2000)));
+      emit(`${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }
 

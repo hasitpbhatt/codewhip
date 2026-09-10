@@ -206,6 +206,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       port: makeNvidiaPort(apiKey),
       signal: ctrl.signal,
       askUser: promptApproval,
+      onEvent: (e) => console.log(`▸ ${e.text}`),
     });
     if (result.cancelled) {
       console.log("cancelled — partial transcript kept.");
