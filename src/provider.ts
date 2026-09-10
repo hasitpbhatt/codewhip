@@ -7,7 +7,10 @@ import type {
 
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com";
 export const NVIDIA_DEFAULT_MODEL = "moonshotai/kimi-k3";
+export const MISTRAL_BASE_URL = "https://api.mistral.ai";
+export const MISTRAL_DEFAULT_MODEL = "devstral-small-latest";
 const NVIDIA_TIMEOUT_MS = 45000;
+const MISTRAL_TIMEOUT_MS = 45000;
 const MAX_BODY_CHARS = 500;
 
 export type ChatRole = "system" | "user";
@@ -169,6 +172,99 @@ function toLoopToolCalls(raw: Array<NvidiaToolCallMsg> | undefined): LoopToolCal
   return out;
 }
 
+function mistralStatusHint(status: number, body: string): string {
+  if (status === 401 || status === 403) {
+    return "invalid MISTRAL_API_KEY (create one at console.mistral.ai)";
+  }
+  if (status === 404 || status === 410) {
+    return `unknown or retired mistral model. ${body}`;
+  }
+  if (status === 429) {
+    return "mistral rate limited (free mode caps RPS + tokens/min + tokens/month — see Limits in console.mistral.ai)";
+  }
+  return `mistral api error ${status}. ${body}`;
+}
+
+/** Mistral adapter implementing the loop's ChatPort (OpenAI-compatible). */
+export function makeMistralPort(apiKey: string, timeoutMs?: number): ChatPort {
+  const limit = timeoutMs ?? MISTRAL_TIMEOUT_MS;
+  return async ({ model, messages, tools, signal }): Promise<ChatPortResponse> => {
+    if (apiKey.length === 0) {
+      return { ok: false, error: "missing api key" };
+    }
+    if (model.length === 0 || model.length > 200) {
+      return { ok: false, error: "bad model id (empty or >200 chars)" };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(new Error("timeout")), limit);
+    const onAbort = (): void => ctrl.abort(signal?.reason);
+    try {
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          return { ok: false, error: "cancelled" };
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      const res = await fetch(`${MISTRAL_BASE_URL}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: toWireMessages(messages),
+          tools: tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.parameters },
+          })),
+          stream: false,
+        }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        let body = "";
+        try {
+          body = (await res.text()).slice(0, MAX_BODY_CHARS);
+        } catch {
+          body = "";
+        }
+        return { ok: false, error: mistralStatusHint(res.status, body) };
+      }
+      let data: NvidiaChatResponse;
+      try {
+        data = (await res.json()) as NvidiaChatResponse;
+      } catch {
+        return { ok: false, error: "mistral api returned invalid JSON" };
+      }
+      const msg = Array.isArray(data.choices) ? data.choices[0]?.message : undefined;
+      const content = typeof msg?.content === "string" ? msg.content : null;
+      const toolCalls = toLoopToolCalls(msg?.tool_calls);
+      if ((content === null || content.length === 0) && toolCalls.length === 0) {
+        return { ok: false, error: "mistral api returned no text or tool calls" };
+      }
+      return {
+        ok: true,
+        text: content,
+        toolCalls,
+        promptTokens: toCount(data.usage?.prompt_tokens),
+        completionTokens: toCount(data.usage?.completion_tokens),
+      };
+    } catch (err) {
+      if (signal !== undefined && signal.aborted) {
+        return { ok: false, error: "cancelled" };
+      }
+      const name = err instanceof Error ? err.name : "";
+      if (name === "TimeoutError" || name === "AbortError") {
+        return { ok: false, error: `mistral api timed out after ${limit}ms` };
+      }
+      return { ok: false, error: `network error: ${err instanceof Error ? err.message : "fetch failed"}` };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  };
+}
 /** Tool-calling adapter implementing the loop's ChatPort over NVIDIA. */
 export function makeNvidiaPort(apiKey: string, timeoutMs?: number): ChatPort {
   const limit = timeoutMs ?? NVIDIA_TIMEOUT_MS;

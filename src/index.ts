@@ -4,14 +4,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { makeNvidiaPort, NVIDIA_DEFAULT_MODEL } from "./provider.js";
+import { makeMistralPort, makeNvidiaPort, NVIDIA_DEFAULT_MODEL, MISTRAL_DEFAULT_MODEL } from "./provider.js";
 import { agentLoop } from "./loop.js";
 import {
-  clearApiKey,
+  clearKey,
   configDir,
+  envVarFor,
+  keyUrlFor,
+  parseProviderId,
   promptHidden,
-  resolveApiKey,
-  saveApiKey,
+  resolveKey,
+  saveKey,
+  type ProviderId,
 } from "./auth.js";
 
 const require = createRequire(import.meta.url);
@@ -20,6 +24,7 @@ const pkg: { version: string } = require("../package.json");
 type RunOptions = {
   prompt: string;
   model: string;
+  provider: ProviderId;
   budget: number;
   maxSteps: number;
   yolo: boolean;
@@ -34,36 +39,47 @@ function printHelp(): void {
   console.log("Commands:");
   console.log("  init                 scaffold AGENTS.md + policy + local key (30s)");
   console.log('  run "<prompt>"       run an agent session (headless; no prompt = REPL)');
-  console.log("  auth                 store your NVIDIA key (login/logout/status)");
+  console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral])");
   console.log("  audit                inspect the audit chain (--verify, --last N)");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
-  console.log(`  --model <id>         NVIDIA model id (default: ${NVIDIA_DEFAULT_MODEL})`);
+  console.log(`  --model <id>         model id (default depends on --provider)`);
+  console.log("  --provider <id>      nvidia|mistral (default: nvidia)");
   console.log("  --budget <dollars>   max spend, preflight check (default: 0.50)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  -v, --version        print version");
   console.log("");
-  console.log("Env: NVIDIA_API_KEY wins when set; else the key from `codewhip auth login`.");
-  console.log("  (get a free key at https://build.nvidia.com/settings/api-keys).");
-  console.log("Receipts: every run prints `tokens / model mix / $` (NVIDIA free tier = $0).");
+  console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY env wins when set; else `codewhip auth login <provider>`.");
+  console.log("  (nvidia free key: build.nvidia.com/settings/api-keys; mistral key: console.mistral.ai)");
+  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; mistral cost untracked).");
   console.log("Status: agentLoop() live (read/search/edit/bash) — policy-checked, metered.");
 }
 
-function printReceipt(model: string, promptTokens: number, completionTokens: number): void {
+function costNote(provider: ProviderId): string {
+  // Honest meter: only NVIDIA's free tier is known-$0. Mistral free mode is
+  // $0 but pay-go bills — point at their console instead of printing fiction.
+  return provider === "nvidia"
+    ? "$0.0000 (nvidia free tier)"
+    : "cost untracked (see console.mistral.ai usage)";
+}
+
+function printReceipt(model: string, promptTokens: number, completionTokens: number, cost: string): void {
   console.log("");
   console.log(
-    `receipt: ${promptTokens} prompt + ${completionTokens} completion tokens / ${model} / $0.0000 (nvidia free tier)`
+    `receipt: ${promptTokens} prompt + ${completionTokens} completion tokens / ${model} / ${cost}`
   );
 }
 
-function printStubReceipt(model: string): void {
-  printReceipt(model, 0, 0);
+function printStubReceipt(model: string, provider: ProviderId): void {
+  printReceipt(model, 0, 0, costNote(provider));
 }
 
 function parseRunArgs(args: string[]): RunOptions | null {
   let model = NVIDIA_DEFAULT_MODEL;
+  let modelExplicit = false;
+  let provider: ProviderId = "nvidia";
   let budget = 0.5;
   let maxSteps = 25;
   let yolo = false;
@@ -81,6 +97,16 @@ function parseRunArgs(args: string[]): RunOptions | null {
       const v = args[i + 1];
       if (v === undefined || v.startsWith("-")) return fail("--model needs a value");
       model = args[++i] as string;
+      modelExplicit = true;
+    } else if (a === "--provider") {
+      const v = args[i + 1];
+      const parsed = parseProviderId(v);
+      if (parsed === null) return fail("--provider must be nvidia|mistral");
+      provider = parsed;
+      i++;
+      if (!modelExplicit) {
+        model = provider === "mistral" ? MISTRAL_DEFAULT_MODEL : NVIDIA_DEFAULT_MODEL;
+      }
     } else if (a === "--budget") {
       const v = args[i + 1];
       if (v === undefined) return fail("--budget needs a value");
@@ -101,7 +127,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
       return fail(`unknown flag: ${a}`);
     }
   }
-  return { prompt: positional.join(" "), model, budget, maxSteps, yolo };
+  return { prompt: positional.join(" "), model, provider, budget, maxSteps, yolo };
 }
 
 function cmdInit(): void {
@@ -160,11 +186,11 @@ function cmdInit(): void {
   console.log('done. try: codewhip run "fix the failing test"');
 }
 
-function missingKeyHelp(): void {
-  console.error("codewhip: NVIDIA_API_KEY is not set and no stored key found (the key is never printed or logged).");
-  console.error("  Persist once: codewhip auth login   (hidden prompt, 0600 file; NVIDIA_API_KEY env still wins)");
-  console.error('  Or per terminal, PowerShell: $env:NVIDIA_API_KEY = "nvapi-..."');
-  console.error("  Get a free key at https://build.nvidia.com/settings/api-keys");
+function missingKeyHelp(provider: ProviderId): void {
+  console.error(`codewhip: ${envVarFor(provider)} is not set and no stored ${provider} key found (the key is never printed or logged).`);
+  console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, 0600 file; env still wins)`);
+  console.error(`  Or per terminal, PowerShell: $env:${envVarFor(provider)} = "..."`);
+  console.error(`  Get a key at ${keyUrlFor(provider)}`);
   process.exitCode = 1;
 }
 
@@ -183,11 +209,11 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
-  console.log(`model: ${opts.model}`);
-  const { key: apiKey } = resolveApiKey();
+  console.log(`model: ${opts.provider}:${opts.model}`);
+  const { key: apiKey } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
-    missingKeyHelp();
-    printStubReceipt(opts.model);
+    missingKeyHelp(opts.provider);
+    printStubReceipt(opts.model, opts.provider);
     return;
   }
   const ctrl = new AbortController();
@@ -203,7 +229,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
       stdinIsTTY: process.stdin.isTTY === true,
-      port: makeNvidiaPort(apiKey),
+      port: opts.provider === "mistral" ? makeMistralPort(apiKey) : makeNvidiaPort(apiKey),
       signal: ctrl.signal,
       askUser: promptApproval,
       onEvent: (e) => console.log(`▸ ${e.text}`),
@@ -218,7 +244,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log("");
       console.log(result.text);
     }
-    printReceipt(opts.model, result.promptTokens, result.completionTokens);
+    printReceipt(`${opts.provider}:${opts.model}`, result.promptTokens, result.completionTokens, costNote(opts.provider));
   } finally {
     process.removeListener("SIGINT", onSigint);
   }
@@ -242,43 +268,55 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
     rl.prompt();
   });
   rl.on("close", () => {
-    printStubReceipt(defaults.model);
+    printStubReceipt(defaults.model, defaults.provider);
   });
 }
 
 async function cmdAuth(args: string[]): Promise<void> {
   const sub = args[0] ?? "status";
-  if (sub === "login") {
-    const key = (await promptHidden("Enter NVIDIA API key: ")).trim();
-    if (key.length === 0) {
-      console.error("auth: cancelled (empty key, not saved)");
+  if (sub === "login" || sub === "logout") {
+    const provider = parseProviderId(args[1]) ?? "nvidia";
+    if (args[1] !== undefined && parseProviderId(args[1]) === null) {
+      console.error("usage: codewhip auth login|logout [nvidia|mistral]");
       process.exitCode = 1;
       return;
     }
-    saveApiKey(key);
-    console.log(`auth: saved (source: file, ${configDir()})`);
-    return;
-  }
-  if (sub === "logout") {
-    if (clearApiKey()) {
-      console.log("auth: removed (source was file)");
+    if (sub === "login") {
+      const key = (await promptHidden(`Enter ${provider} API key: `)).trim();
+      if (key.length === 0) {
+        console.error("auth: cancelled (empty key, not saved)");
+        process.exitCode = 1;
+        return;
+      }
+      saveKey(provider, key);
+      console.log(`auth: ${provider} saved (source: file, ${configDir()})`);
+      return;
+    }
+    if (clearKey(provider)) {
+      console.log(`auth: ${provider} removed (source was file)`);
     } else {
-      console.log("auth: nothing stored");
+      console.log(`auth: ${provider} nothing stored`);
       process.exitCode = 1;
     }
     return;
   }
   if (sub === "status") {
-    const { source } = resolveApiKey();
-    if (source === "none") {
-      console.log("auth: missing (no env, no file)");
-      process.exitCode = 1;
-      return;
+    let missing = 0;
+    for (const provider of ["nvidia", "mistral"] as ProviderId[]) {
+      const { source } = resolveKey(provider);
+      if (source === "none") {
+        console.log(`auth: ${provider} missing (no env, no file)`);
+        missing++;
+      } else {
+        console.log(`auth: ${provider} set (source: ${source})`);
+      }
     }
-    console.log(`auth: set (source: ${source})`);
+    if (missing === 2) {
+      process.exitCode = 1;
+    }
     return;
   }
-  console.error("usage: codewhip auth [login|logout|status]");
+  console.error("usage: codewhip auth [login|logout|status] [nvidia|mistral]");
   process.exitCode = 1;
 }
 

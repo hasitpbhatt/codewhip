@@ -134,16 +134,18 @@ codewhip run "fix the failing test"
 
 Alternative without watch mode: `npm run build` manually after each change, or skip the link entirely with `npm run dev -- run "fix the failing test"`.
 
-### Provider key (NVIDIA free tier, persistent)
+### Provider keys (persistent, per provider)
 
 ```sh
-codewhip auth login    # hidden prompt, paste once; stored 0600 outside the repo
-codewhip auth status   # set (source: env|file) or missing — never prints the key
-codewhip auth logout   # deletes the stored key (re-run login to rotate)
-codewhip run "Say OK"  # uses NVIDIA_API_KEY env when set, else the stored key
+codewhip auth login            # nvidia: hidden prompt, paste once; stored 0600 outside the repo
+codewhip auth login mistral    # same for mistral (devstral default)
+codewhip auth status           # per provider: set (source: env|file) or missing — never prints keys
+codewhip auth logout mistral   # deletes the stored key (re-run login to rotate)
+codewhip run "Say OK"                              # nvidia default (kimi-k3, free tier $0)
+codewhip run "Say OK" --provider mistral           # mistral default (devstral-small-latest)
 ```
 
-Get a free key at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0). Env wins when set (CI-friendly). The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; mistral cost is untracked (see console usage). The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
 
 ## The five Naval agents
 
