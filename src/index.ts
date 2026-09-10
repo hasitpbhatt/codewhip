@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { chatNvidia, NVIDIA_DEFAULT_MODEL } from "./provider.js";
+import { makeNvidiaPort, NVIDIA_DEFAULT_MODEL } from "./provider.js";
+import { agentLoop } from "./loop.js";
 import {
   clearApiKey,
   configDir,
@@ -40,14 +41,14 @@ function printHelp(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         NVIDIA model id (default: ${NVIDIA_DEFAULT_MODEL})`);
   console.log("  --budget <dollars>   max spend, preflight check (default: 0.50)");
-  console.log("  --max-steps <n>      reserved for agentLoop (default: 25)");
-  console.log("  --yolo               explicit bypass, logged + bannered (default: off)");
+  console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
+  console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  -v, --version        print version");
   console.log("");
   console.log("Env: NVIDIA_API_KEY wins when set; else the key from `codewhip auth login`.");
   console.log("  (get a free key at https://build.nvidia.com/settings/api-keys).");
   console.log("Receipts: every run prints `tokens / model mix / $` (NVIDIA free tier = $0).");
-  console.log("Status: single-shot chat live; agentLoop() with tools lands next.");
+  console.log("Status: agentLoop() live (read/search/edit/bash) — policy-checked, metered.");
 }
 
 function printReceipt(model: string, promptTokens: number, completionTokens: number): void {
@@ -167,9 +168,20 @@ function missingKeyHelp(): void {
   process.exitCode = 1;
 }
 
+function promptApproval(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer: string) => {
+      rl.close();
+      const a = answer.trim().toLowerCase();
+      resolve(a === "y" || a === "yes");
+    });
+  });
+}
+
 async function cmdRun(opts: RunOptions): Promise<void> {
   if (opts.yolo) {
-    console.log("!! --yolo is explicit, logged, bannered. harness jail still applies.");
+    console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
   console.log(`model: ${opts.model}`);
   const { key: apiKey } = resolveApiKey();
@@ -178,20 +190,37 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     printStubReceipt(opts.model);
     return;
   }
-  const result = await chatNvidia({
-    apiKey,
-    model: opts.model,
-    messages: [{ role: "user", content: opts.prompt }],
-  });
-  if (!result.ok) {
-    console.error(`codewhip: ${result.error}`);
-    process.exitCode = 1;
-    printStubReceipt(opts.model);
-    return;
+  const ctrl = new AbortController();
+  const onSigint = (): void => {
+    ctrl.abort();
+  };
+  process.on("SIGINT", onSigint);
+  try {
+    const result = await agentLoop({
+      prompt: opts.prompt,
+      model: opts.model,
+      cwd: process.cwd(),
+      maxSteps: opts.maxSteps,
+      yolo: opts.yolo,
+      stdinIsTTY: process.stdin.isTTY === true,
+      port: makeNvidiaPort(apiKey),
+      signal: ctrl.signal,
+      askUser: promptApproval,
+    });
+    if (result.cancelled) {
+      console.log("cancelled — partial transcript kept.");
+    }
+    if (result.error !== undefined) {
+      console.error(`codewhip: ${result.error}`);
+      process.exitCode = 1;
+    } else if (result.text.length > 0) {
+      console.log("");
+      console.log(result.text);
+    }
+    printReceipt(opts.model, result.promptTokens, result.completionTokens);
+  } finally {
+    process.removeListener("SIGINT", onSigint);
   }
-  console.log("");
-  console.log(result.text);
-  printReceipt(result.model, result.promptTokens, result.completionTokens);
 }
 
 function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
