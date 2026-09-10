@@ -5,7 +5,8 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { makeMistralPort, makeNvidiaPort, NVIDIA_DEFAULT_MODEL, MISTRAL_DEFAULT_MODEL } from "./provider.js";
-import { agentLoop } from "./loop.js";
+import { agentLoop, type FailoverTarget } from "./loop.js";
+import type { UsageBucket } from "./outcomes.js";
 import {
   clearKey,
   configDir,
@@ -28,6 +29,9 @@ type RunOptions = {
   budget: number;
   maxSteps: number;
   yolo: boolean;
+  retryWait: boolean;
+  failover: boolean;
+  modelExplicit: boolean;
 };
 
 function printHelp(): void {
@@ -49,6 +53,8 @@ function printHelp(): void {
   console.log("  --budget <dollars>   max spend, preflight check (default: 0.50)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
+  console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
+  console.log("  --failover           one switch to the other provider on 429 per run (default: off; may bill pay-go)");
   console.log("  -v, --version        print version");
   console.log("");
   console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY env wins when set; else `codewhip auth login <provider>`.");
@@ -72,6 +78,24 @@ function printReceipt(model: string, promptTokens: number, completionTokens: num
   );
 }
 
+function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: string): void {
+  const list = buckets.length > 0
+    ? buckets
+    : [{ label: provider, model, prompt: 0, completion: 0 }];
+  let p = 0;
+  let c = 0;
+  const parts: string[] = [];
+  const costs: string[] = [];
+  for (const b of list) {
+    p += b.prompt;
+    c += b.completion;
+    parts.push(`${b.label}:${b.model} ${b.prompt}+${b.completion}`);
+    costs.push(costNote(b.label === "mistral" ? "mistral" : "nvidia"));
+  }
+  console.log("");
+  console.log(`receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`);
+}
+
 function printStubReceipt(model: string, provider: ProviderId): void {
   printReceipt(model, 0, 0, costNote(provider));
 }
@@ -83,6 +107,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let budget = 0.5;
   let maxSteps = 25;
   let yolo = false;
+  let retryWait = false;
+  let failover = false;
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
@@ -121,13 +147,17 @@ function parseRunArgs(args: string[]): RunOptions | null {
       maxSteps = n;
     } else if (a === "--yolo") {
       yolo = true;
+    } else if (a === "--retry-wait") {
+      retryWait = true;
+    } else if (a === "--failover") {
+      failover = true;
     } else if (!a.startsWith("-")) {
       positional.push(a);
     } else {
       return fail(`unknown flag: ${a}`);
     }
   }
-  return { prompt: positional.join(" "), model, provider, budget, maxSteps, yolo };
+  return { prompt: positional.join(" "), model, provider, budget, maxSteps, yolo, retryWait, failover, modelExplicit };
 }
 
 function cmdInit(): void {
@@ -209,12 +239,39 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
+  if (opts.retryWait) {
+    console.log("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
+  }
   console.log(`model: ${opts.provider}:${opts.model}`);
   const { key: apiKey } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
     printStubReceipt(opts.model, opts.provider);
     return;
+  }
+  let failoverTarget: FailoverTarget | undefined;
+  if (opts.failover) {
+    const other: ProviderId = opts.provider === "nvidia" ? "mistral" : "nvidia";
+    if (opts.modelExplicit) {
+      console.error("codewhip: --failover needs the default model (drop --model; per-provider defaults apply)");
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const target = resolveKey(other);
+    if (target.key.length === 0) {
+      console.error(`codewhip: --failover needs a ${other} key (${envVarFor(other)} or: codewhip auth login ${other})`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const targetModel = other === "mistral" ? MISTRAL_DEFAULT_MODEL : NVIDIA_DEFAULT_MODEL;
+    console.log(`!! --failover armed: one switch to ${other}:${targetModel} on 429. May bill ${other} pay-go.`);
+    failoverTarget = {
+      label: other,
+      model: targetModel,
+      port: other === "mistral" ? makeMistralPort(target.key) : makeNvidiaPort(target.key),
+    };
   }
   const ctrl = new AbortController();
   const onSigint = (): void => {
@@ -225,6 +282,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     const result = await agentLoop({
       prompt: opts.prompt,
       model: opts.model,
+      label: opts.provider,
       cwd: process.cwd(),
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
@@ -232,7 +290,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       port: opts.provider === "mistral" ? makeMistralPort(apiKey) : makeNvidiaPort(apiKey),
       signal: ctrl.signal,
       askUser: promptApproval,
-      onEvent: (e) => console.log(`▸ ${e.text}`),
+      retryWait: opts.retryWait,
+      failover: failoverTarget,
+      onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : "◆"} ${e.text}`),
     });
     if (result.cancelled) {
       console.log("cancelled — partial transcript kept.");
@@ -244,7 +304,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log("");
       console.log(result.text);
     }
-    printReceipt(`${opts.provider}:${opts.model}`, result.promptTokens, result.completionTokens, costNote(opts.provider));
+    printMixReceipt(result.usageByModel, opts.provider, opts.model);
   } finally {
     process.removeListener("SIGINT", onSigint);
   }

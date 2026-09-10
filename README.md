@@ -147,6 +147,15 @@ codewhip run "Say OK" --provider mistral           # mistral default (devstral-s
 
 Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; mistral cost is untracked (see console usage). The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
 
+### Surviving rate limits (opt-in, off by default)
+
+```sh
+codewhip run "..." --retry-wait   # one Retry-After wait (<=60s) on 429 per run; avoid in CI
+codewhip run "..." --failover     # one switch to the other provider on 429 per run
+```
+
+Both need the other provider's key up front (`--failover` aborts otherwise — it never runs keyless). `--failover` uses per-provider default models (drop `--model` when armed) and banners because it may bill pay-go. 429s from anywhere else (auth, 5xx, timeouts) never wait or switch. Receipts show the per-model mix when a run crosses providers.
+
 ## The five Naval agents
 
 This repo ships its strategy team as reusable subagents

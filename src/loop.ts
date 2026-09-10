@@ -4,19 +4,27 @@ import type { ToolResult } from "./tools/types.js";
 import { checkPermission } from "./policy.js";
 import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
-import { appendOutcome, newRunId, promptHash, type OutcomeToolCall } from "./outcomes.js";
+import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
 import { SYSTEM_PROMPT } from "./system.js";
 
 export type AskUser = (question: string) => Promise<boolean>;
 
 export type LoopEvent = {
-  kind: "tool";
+  kind: "tool" | "retry" | "failover";
   text: string;
+};
+
+export type FailoverTarget = {
+  label: string;
+  model: string;
+  port: ChatPort;
 };
 
 export type LoopArgs = {
   prompt: string;
   model: string;
+  /** Primary provider label for receipts (e.g. "nvidia"). */
+  label: string;
   cwd: string;
   maxSteps: number;
   yolo: boolean;
@@ -24,6 +32,10 @@ export type LoopArgs = {
   port: ChatPort;
   signal?: AbortSignal;
   askUser?: AskUser;
+  /** One bounded Retry-After wait per run (off unless explicitly armed). */
+  retryWait?: boolean;
+  /** One cross-provider switch per run on 429 only (off unless armed). */
+  failover?: FailoverTarget;
   /** Progress listener (index.ts prints). Never throws into the loop. */
   onEvent?: (event: LoopEvent) => void;
 };
@@ -33,6 +45,9 @@ export type LoopResult = {
   error?: string;
   promptTokens: number;
   completionTokens: number;
+  usageByModel: UsageBucket[];
+  waitedMs: number;
+  failovers: FailoverRecord[];
   steps: number;
   toolCalls: number;
   cancelled: boolean;
@@ -67,6 +82,25 @@ function withTimeout(p: Promise<ToolResult>, ms: number): Promise<ToolResult> {
   ]);
 }
 
+/** Abortable sleep: true when fully slept, false when cancelled (instant). */
+function sleepMs(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * Single async agent loop: stream → permission check → exec → append → repeat.
  * Never throws, never calls process.exit — returns partial results on cancel.
@@ -86,12 +120,31 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let cancelled = false;
   let text = "";
   let error: string | undefined;
-  const emit = (msg: string): void => {
+  const emit = (kind: LoopEvent["kind"], msg: string): void => {
     try {
-      args.onEvent?.({ kind: "tool", text: msg });
+      args.onEvent?.({ kind, text: msg });
     } catch {
       // Listener failures never break the loop.
     }
+  };
+
+  let current = { label: args.label, model: args.model, port: args.port };
+  const buckets = new Map<string, UsageBucket>();
+  const failoverTrail: FailoverRecord[] = [];
+  let waitedMs = 0;
+  let waitedOnce = false;
+  let failedOver = false;
+  const addUsage = (p: number, c: number): void => {
+    promptTokens += p;
+    completionTokens += c;
+    const key = `${current.label}:${current.model}`;
+    let bucket = buckets.get(key);
+    if (bucket === undefined) {
+      bucket = { label: current.label, model: current.model, prompt: 0, completion: 0 };
+      buckets.set(key, bucket);
+    }
+    bucket.prompt += p;
+    bucket.completion += c;
   };
 
   for (let step = 1; step <= args.maxSteps; step++) {
@@ -100,28 +153,70 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       break;
     }
     steps = step;
-    let turn: Awaited<ReturnType<ChatPort>>;
-    try {
-      turn = await args.port({
-        model: args.model,
-        messages,
-        tools: toolSpecs(),
-        signal: args.signal,
-      });
-    } catch (err) {
-      error = err instanceof Error ? err.message : "provider failed";
-      break;
-    }
-    if (!turn.ok) {
-      if (turn.error === "cancelled") {
-        cancelled = true;
-      } else {
-        error = turn.error;
+    // One turn: at most one bounded wait and one failover per RUN.
+    // Retries never consume maxSteps; a failed turn leaves no message behind.
+    let turn: Awaited<ReturnType<ChatPort>> | null = null;
+    for (;;) {
+      let attempt: Awaited<ReturnType<ChatPort>>;
+      try {
+        attempt = await current.port({
+          model: current.model,
+          messages,
+          tools: toolSpecs(),
+          signal: args.signal,
+        });
+      } catch (err) {
+        error = err instanceof Error ? err.message : "provider failed";
+        break;
       }
+      if (attempt.ok) {
+        turn = attempt;
+        break;
+      }
+      if (attempt.error === "cancelled" || (args.signal !== undefined && args.signal.aborted)) {
+        cancelled = true;
+        break;
+      }
+      if (attempt.retryable !== "rate-limited") {
+        error = attempt.error;
+        break;
+      }
+      if (
+        args.retryWait === true &&
+        !waitedOnce &&
+        !failedOver &&
+        attempt.retryAfterMs !== undefined &&
+        attempt.retryAfterMs > 0
+      ) {
+        waitedOnce = true;
+        const wait = Math.min(attempt.retryAfterMs, 60000);
+        emit("retry", `rate limited on ${current.label} — waiting ${Math.round(wait / 1000)}s (once)`);
+        const slept = await sleepMs(wait, args.signal);
+        if (!slept) {
+          cancelled = true;
+          break;
+        }
+        waitedMs += wait;
+        continue;
+      }
+      if (args.failover !== undefined && !failedOver) {
+        failedOver = true;
+        const from = `${current.label}:${current.model}`;
+        const to = `${args.failover.label}:${args.failover.model}`;
+        failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
+        emit("failover", `rate limited on ${current.label} — failing over to ${to}`);
+        current = { label: args.failover.label, model: args.failover.model, port: args.failover.port };
+        continue;
+      }
+      error = failedOver
+        ? `rate limited on ${args.label} and ${current.label} (waited ${waitedMs}ms) — partial transcript kept`
+        : attempt.error;
       break;
     }
-    promptTokens += turn.promptTokens;
-    completionTokens += turn.completionTokens;
+    if (cancelled || error !== undefined || turn === null) {
+      break;
+    }
+    addUsage(turn.promptTokens, turn.completionTokens);
     messages.push({
       role: "assistant",
       content: turn.text ?? "",
@@ -148,7 +243,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "loop:bad-call", sha256Hex(out));
-        emit(`deny ${call.name} (loop:bad-call)`);
+        emit("tool", `deny ${call.name} (loop:bad-call)`);
         continue;
       }
       const preview = previewForLog(call.name, parsed);
@@ -157,7 +252,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", verdict.ruleId, sha256Hex(out));
-        emit(`deny ${call.name} ${preview} (${verdict.ruleId})`);
+        emit("tool", `deny ${call.name} ${preview} (${verdict.ruleId})`);
         continue;
       }
       let proceed = verdict.decision === "allow";
@@ -170,7 +265,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
           record("deny", `${verdict.ruleId}+held`, sha256Hex(out));
-          emit(`held ${call.name} ${preview} (${verdict.ruleId})`);
+          emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
           continue;
         } else {
           let approved = false;
@@ -183,7 +278,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             const out = `held for approval (${verdict.ruleId}) — declined`;
             messages.push({ role: "tool", toolCallId: call.id, content: out });
             record("deny", `${verdict.ruleId}+declined`, sha256Hex(out));
-            emit(`held ${call.name} ${preview} (${verdict.ruleId})`);
+            emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
             continue;
           }
           proceed = true;
@@ -203,7 +298,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       messages.push({ role: "tool", toolCallId: call.id, content: result.output });
       record("allow", ruleId, sha256Hex(redactSecrets(result.output).slice(0, 2000)));
-      emit(`${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
+      emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }
 
@@ -218,6 +313,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     usage: { prompt: promptTokens, completion: completionTokens },
     result_preview_redacted: text.slice(0, 2000),
     verdict: null,
+    usageByModel: [...buckets.values()],
+    failovers: failoverTrail,
   });
 
   return {
@@ -225,6 +322,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     error,
     promptTokens,
     completionTokens,
+    usageByModel: [...buckets.values()],
+    waitedMs,
+    failovers: failoverTrail,
     steps,
     toolCalls: calls.length,
     cancelled,
