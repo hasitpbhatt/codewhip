@@ -70,3 +70,9 @@ P1 — trust that spreads:
 - **$/task** (metered, by class): H1 bar polish <$0.05, implement <$1.50, blended <$0.50 default budget; print every run.
 - **Memory lines accrued/week** (promoted `memory.md`/`policy.md` lines surviving 30d, not raw logs): H1 bar +3–5 durable lines/repo/week, revert-rate on memorized patterns trending down.
 - **Trusted runs/team/week** (runs with zero bypasses + shared audit): H1 bar ≥4–5/week for pilot teams; north-star for H2 pricing (free → $20 pro → $40 team).
+
+## Rulings log (additive, newest last)
+
+- 2026-09-10 — `outcomes.jsonl` v1 stays frozen: retry/failover lands as
+  OPTIONAL `usageByModel[]` + `failovers[]` only (`v:1` literal, all existing
+  fields byte-identical). Old readers ignore unknown keys; no migration.

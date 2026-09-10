@@ -29,9 +29,20 @@ export type ChatPortResult = {
   completionTokens: number;
 };
 
+export type RetryableKind = "rate-limited" | "auth" | "other";
+
+export type PortFailure = {
+  ok: false;
+  error: string;
+  /** Typed by the adapter from HTTP status — the loop never string-sniffs. */
+  retryable: RetryableKind;
+  /** Parsed Retry-After, capped at 60s. Absent when not waitable. */
+  retryAfterMs?: number;
+};
+
 export type ChatPortResponse =
   | ({ ok: true } & ChatPortResult)
-  | { ok: false; error: string };
+  | PortFailure;
 
 /**
  * Narrow provider port. The loop depends ONLY on this — Week-2 adds
