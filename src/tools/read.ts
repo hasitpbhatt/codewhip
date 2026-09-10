@@ -1,31 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { realpathSync } from "node:fs";
 import type { ToolContext, ToolResult } from "./types.js";
-
-function jailPath(cwd: string, target: string): string | null {
-  const resolved = path.resolve(cwd, target);
-  let realCwd: string;
-  try {
-    realCwd = realpathSync(cwd);
-  } catch {
-    realCwd = cwd;
-  }
-  let realTarget: string;
-  try {
-    const dir = path.dirname(resolved);
-    const realDir = realpathSync(fs.existsSync(resolved) ? resolved : dir);
-    realTarget = fs.existsSync(resolved)
-      ? realDir
-      : path.join(realDir, path.basename(resolved));
-  } catch {
-    return null;
-  }
-  if (realTarget !== realCwd && !realTarget.startsWith(realCwd + path.sep)) {
-    return null;
-  }
-  return resolved;
-}
+import { jailPath } from "./jail.js";
 
 export async function readTool(
   ctx: ToolContext,

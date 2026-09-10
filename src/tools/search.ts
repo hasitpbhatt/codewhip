@@ -1,10 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolContext, ToolResult } from "./types.js";
+import { jailPath } from "./jail.js";
 
 const MAX_RESULTS = 50;
 const MAX_FILES = 2000;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".codewhip"]);
+// Never crawl secret material: redaction-at-write lands Week-3, so don't read it at all.
+const SKIP_FILES = [/^\.env(\.|$)/i, /\.pem$/i, /\.key$/i, /credentials\.json$/i];
 
 function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -23,6 +26,7 @@ function walk(cwd: string, rel: string, out: string[]): void {
   }
   for (const e of entries) {
     if (out.length >= MAX_FILES) return;
+    if (e.isSymbolicLink()) continue;
     if (e.name.startsWith(".") && e.name !== ".env") {
       if (e.isDirectory() && e.name !== ".codewhip") continue;
     }
@@ -31,6 +35,7 @@ function walk(cwd: string, rel: string, out: string[]): void {
     if (e.isDirectory()) {
       walk(cwd, next, out);
     } else if (e.isFile()) {
+      if (SKIP_FILES.some((rx) => rx.test(e.name))) continue;
       out.push(next);
     }
   }
@@ -59,7 +64,8 @@ export async function searchTool(
   for (const rel of files) {
     if (hits.length >= MAX_RESULTS) break;
     if (globRx && !globRx.test(rel) && !globRx.test(path.basename(rel))) continue;
-    const abs = path.join(ctx.cwd, rel);
+    const abs = jailPath(ctx.cwd, rel);
+    if (abs === null) continue;
     let stat: fs.Stats;
     try {
       stat = fs.statSync(abs);
