@@ -10,7 +10,7 @@ import type {
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com";
 export const NVIDIA_DEFAULT_MODEL = "moonshotai/kimi-k3";
 export const MISTRAL_BASE_URL = "https://api.mistral.ai";
-export const MISTRAL_DEFAULT_MODEL = "codestral-latest";
+export const MISTRAL_DEFAULT_MODEL = "mistral-small-latest";
 const NVIDIA_TIMEOUT_MS = 45000;
 const MISTRAL_TIMEOUT_MS = 45000;
 const MAX_BODY_CHARS = 500;
