@@ -27,16 +27,25 @@ function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export function checkPermission(tool: ToolName, commandPreview: string): PermissionDecision {
+/** Non-overridable denylist probe, shared by the loop and bash itself. */
+export function matchDenylist(commandPreview: string): string | null {
   const norm = normalize(commandPreview);
   for (const p of DENY_PATTERNS) {
     if (norm.includes(p)) {
-      return {
-        decision: "deny",
-        ruleId: `denylist:${p}`,
-        reason: `matched non-overridable denylist "${p}"`,
-      };
+      return p;
     }
+  }
+  return null;
+}
+
+export function checkPermission(tool: ToolName, commandPreview: string): PermissionDecision {
+  const denied = matchDenylist(commandPreview);
+  if (denied !== null) {
+    return {
+      decision: "deny",
+      ruleId: `denylist:${denied}`,
+      reason: `matched non-overridable denylist "${denied}"`,
+    };
   }
   if (tool === "read" || tool === "search") {
     return {
@@ -45,6 +54,7 @@ export function checkPermission(tool: ToolName, commandPreview: string): Permiss
       reason: "read-only tools are allow by default",
     };
   }
+  const norm = normalize(commandPreview);
   if (tool === "bash" && !CHAIN_RX.test(commandPreview)) {
     for (const safe of SAFE_BASH_PREFIXES) {
       if (norm === safe || norm.startsWith(safe + " ")) {

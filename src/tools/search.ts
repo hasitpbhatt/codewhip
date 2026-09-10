@@ -41,10 +41,22 @@ function walk(cwd: string, rel: string, out: string[]): void {
   }
 }
 
-export async function searchTool(
-  ctx: ToolContext,
-  args: { query: string; glob?: string }
-): Promise<ToolResult> {
+export type SearchArgs = {
+  query: string;
+  glob?: string;
+};
+
+/** Hand-guard (Week-1): static spec + guard instead of zod, zero new deps. */
+export function isSearchArgs(x: unknown): x is SearchArgs {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r["query"] === "string" &&
+    (r["glob"] === undefined || typeof r["glob"] === "string")
+  );
+}
+
+export async function searchTool(ctx: ToolContext, args: SearchArgs): Promise<ToolResult> {
   if (!args.query || typeof args.query !== "string") {
     return { ok: false, output: "search: missing required arg `query` (string)" };
   }

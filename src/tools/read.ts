@@ -2,10 +2,24 @@ import * as fs from "node:fs";
 import type { ToolContext, ToolResult } from "./types.js";
 import { jailPath } from "./jail.js";
 
-export async function readTool(
-  ctx: ToolContext,
-  args: { path: string; offset?: number; limit?: number }
-): Promise<ToolResult> {
+export type ReadArgs = {
+  path: string;
+  offset?: number;
+  limit?: number;
+};
+
+/** Hand-guard (Week-1): static spec + guard instead of zod, zero new deps. */
+export function isReadArgs(x: unknown): x is ReadArgs {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r["path"] === "string" &&
+    (r["offset"] === undefined || typeof r["offset"] === "number") &&
+    (r["limit"] === undefined || typeof r["limit"] === "number")
+  );
+}
+
+export async function readTool(ctx: ToolContext, args: ReadArgs): Promise<ToolResult> {
   if (!args.path || typeof args.path !== "string") {
     return { ok: false, output: "read: missing required arg `path` (string)" };
   }
