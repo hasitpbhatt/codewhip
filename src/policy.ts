@@ -1,32 +1,65 @@
 import type { Permission, ToolName } from "./tools/types.js";
 
+export type PermissionDecision = {
+  decision: Permission;
+  /** Auditable rule pointer: denylist:<pattern> | allowlist:<prefix> | default:<scope> */
+  ruleId: string;
+  reason: string;
+};
+
+// Non-overridable: checked first, --yolo never bypasses.
 const DENY_PATTERNS: string[] = [
   "rm -rf /",
+  "rm -rf ~",
   "git push --force",
+  "git push -f",
+  "--force-with-lease",
   "mkfs",
   ":(){:|:&};:",
 ];
 
 const SAFE_BASH_PREFIXES: string[] = ["git status", "git diff", "ls", "dir"];
 
-export function checkPermission(tool: ToolName, commandPreview: string): Permission {
+// Shell chaining breaks prefix allowlisting (e.g. `git status; rm -rf /`).
+const CHAIN_RX = /[;&|]|`|\$\(/;
+
+function normalize(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function checkPermission(tool: ToolName, commandPreview: string): PermissionDecision {
+  const norm = normalize(commandPreview);
   for (const p of DENY_PATTERNS) {
-    if (commandPreview.includes(p)) {
-      return "deny";
+    if (norm.includes(p)) {
+      return {
+        decision: "deny",
+        ruleId: `denylist:${p}`,
+        reason: `matched non-overridable denylist "${p}"`,
+      };
     }
   }
   if (tool === "read" || tool === "search") {
-    return "allow";
+    return {
+      decision: "allow",
+      ruleId: "default:read:allow",
+      reason: "read-only tools are allow by default",
+    };
   }
-  if (tool === "bash") {
+  if (tool === "bash" && !CHAIN_RX.test(commandPreview)) {
     for (const safe of SAFE_BASH_PREFIXES) {
-      if (commandPreview.startsWith(safe)) {
-        return "allow";
+      if (norm === safe || norm.startsWith(safe + " ")) {
+        return {
+          decision: "allow",
+          ruleId: `allowlist:${safe}`,
+          reason: `exact allowlisted prefix "${safe}" with no shell chaining`,
+        };
       }
     }
-    return "ask";
   }
-  return "ask";
+  if (tool === "edit") {
+    return { decision: "ask", ruleId: "default:edit:ask", reason: "mutations ask by default" };
+  }
+  return { decision: "ask", ruleId: "default:shell:ask", reason: "shell asks by default" };
 }
 
 export function describePolicy(): string {
