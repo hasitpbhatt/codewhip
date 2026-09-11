@@ -48,6 +48,96 @@ type RunOptions = {
   modelExplicit: boolean;
 };
 
+function printRunOptions(): void {
+  console.log("Options (run):");
+  console.log(`  --model <id>         model id (default depends on --provider)`);
+  console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
+  console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
+  console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
+  console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
+  console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
+  console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
+  console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
+  console.log("  --failover           one switch to the next provider with a stored key on 429 per run (default: off; may bill pay-go)");
+  console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
+  console.log("  -v, --version        print version");
+}
+
+function printKeysHelp(): void {
+  // Key help derives from the registry (builtins + customs) — adding a
+  // provider stays one table row, never a help-text edit. Consoles show
+  // bare domains (the registry holds full URLs for error messages).
+  const cfgs = listAllProviderConfigs();
+  console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
+  console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
+  console.log("  llm7 works with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+}
+
+/** One-command topics for `codewhip help <command>` / `codewhip <command> --help`. Returns false for unknown topics. */
+function printCommandHelp(topic: string): boolean {
+  switch (topic) {
+    case "init":
+      console.log('codewhip init — scaffold AGENTS.md + codewhip-policy.yaml + .codewhip/key (ed25519, local only).');
+      console.log("  Existing files are kept, never overwritten.");
+      console.log("  Next: codewhip demo --deny (offline, $0) — then: codewhip auth login nvidia");
+      return true;
+    case "run":
+      console.log('codewhip run "<prompt>" [options] — run an agent session (headless; no prompt on a TTY = REPL).');
+      printRunOptions();
+      console.log("  No key yet? codewhip demo --deny (offline, $0) — or --provider llm7 (keyless, rate-limited).");
+      printKeysHelp();
+      return true;
+    case "auth":
+      console.log("codewhip auth login <provider>   — store a key (hidden prompt, 0600 file; env still wins)");
+      console.log("codewhip auth logout <provider>  — forget the stored key");
+      console.log("codewhip auth status [provider]  — set/missing per provider (keys are never printed)");
+      printKeysHelp();
+      return true;
+    case "models":
+      console.log("codewhip models [provider] — list served models with agency tags (default: nvidia).");
+      console.log("  Needs the provider key (see: codewhip help auth) — except llm7, which is anonymous.");
+      return true;
+    case "provider":
+      console.log("codewhip provider list            — known providers (builtin + custom)");
+      console.log(`codewhip ${PROVIDER_ADD_USAGE}`);
+      console.log("codewhip provider remove <id>     — forget a custom provider (builtins stay)");
+      console.log("codewhip provider show <id>       — base URLs, default model, env var, key console");
+      return true;
+    case "audit":
+      console.log("codewhip audit [--verify|--last <n>|--replay <runId>|--export <file>] — inspect the hash-chained log.");
+      console.log("  --verify proves the chain (needs .codewhip/key); hashes cover redacted content only.");
+      return true;
+    case "metrics":
+      console.log("codewhip metrics — aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week).");
+      console.log("  Reads .codewhip/outcomes.jsonl + verdicts.jsonl; honest about unmeasurable bars.");
+      return true;
+    case "verdict":
+      console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
+      console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
+      return true;
+    case "demo":
+      console.log("codewhip demo --deny — offline wedge demo: five disasters refused on the $0 fake port (no key needed).");
+      console.log("  Writes to the local audit log like a real run; start here before fetching keys.");
+      return true;
+    case "policy":
+      console.log("codewhip policy candidates        — tools declined 3+ times with the same shape (promotion-ready)");
+      console.log('codewhip policy approve "<tool:shape>" — promote a candidate into a standing deny');
+      console.log("codewhip policy list              — standing denies");
+      return true;
+    case "pack":
+      console.log("codewhip pack list                — policy packs shipped locally (no registry in H1)");
+      console.log("codewhip pack pull <name> [--force] — install a pack (enforced from the next run)");
+      return true;
+    default:
+      return false;
+  }
+}
+
+function printHelpTopicError(topic: string): void {
+  console.error(`help: no topic "${topic}" (topics: init run auth models provider audit metrics verdict demo policy pack)`);
+  process.exitCode = 1;
+}
+
 function printHelp(): void {
   console.log("codewhip - crack through code like a whip");
   console.log("");
@@ -66,28 +156,11 @@ function printHelp(): void {
   console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
   console.log("  pack                 team policy packs shipped locally (list/pull <name> [--force])");
-  console.log("  help                 show this help");
+  console.log("  help [command]       show this help (or one command's: codewhip help run)");
   console.log("");
-  console.log("Options (run):");
-  console.log(`  --model <id>         model id (default depends on --provider)`);
-  console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
-  console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
-  console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
-  console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
-  console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
-  console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
-  console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
-  console.log("  --failover           one switch to the next provider with a stored key on 429 per run (default: off; may bill pay-go)");
-  console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
-  console.log("  -v, --version        print version");
+  printRunOptions();
   console.log("");
-  // Key help derives from the registry (builtins + customs) — adding a
-  // provider stays one table row, never a help-text edit. Consoles show
-  // bare domains (the registry holds full URLs for error messages).
-  const cfgs = listAllProviderConfigs();
-  console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
-  console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
-  console.log("  llm7 works with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+  printKeysHelp();
   console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; other providers print cost untracked).");
   console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);
 }
@@ -153,7 +226,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
-    console.error(`run: ${msg} (see: codewhip help)`);
+    console.error(`run: ${msg} (see: codewhip help run)`);
     process.exitCode = 1;
     return null;
   };
@@ -585,6 +658,8 @@ async function cmdModels(args: string[]): Promise<void> {
   }
 }
 
+const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY [--chat-path /…] [--models-path /…] [--key-url https://…] [--brand <name>] [--timeout-ms 45000]';
+
 function cmdProvider(args: string[]): void {
   const sub = args[0] ?? "list";
   if (sub === "list") {
@@ -615,7 +690,7 @@ function cmdProvider(args: string[]): void {
   if (sub === "add") {
     const id = args[1] ?? "";
     const rest = args.slice(2);
-    const usage = 'usage: codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY [--chat-path /…] [--models-path /…] [--key-url https://…] [--brand <name>] [--timeout-ms 45000]';
+    const usage = PROVIDER_ADD_USAGE;
     if (id.length === 0) {
       console.error(usage);
       process.exitCode = 1;
@@ -908,8 +983,21 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
-    printHelp();
+    const topic = args[1] ?? "";
+    if (topic.length === 0 || topic === "help") {
+      printHelp();
+      return;
+    }
+    if (printCommandHelp(topic)) return;
+    printHelpTopicError(topic);
     return;
+  }
+  // `codewhip <command> --help` prints that command's topic. Help wins over
+  // other flags (conventional); a prompt that is exactly --help/-h is the
+  // accepted casualty — quote a longer prompt instead.
+  const rest = args.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    if (printCommandHelp(command)) return;
   }
   if (command === "init") {
     cmdInit();
@@ -925,7 +1013,7 @@ async function main(): Promise<void> {
         cmdRepl(opts);
         return;
       }
-      console.error('usage: codewhip run "<prompt>" [--model id] [--token-budget 250000] [--max-steps 25]');
+      console.error('usage: codewhip run "<prompt>" [--model id] [--token-budget 250000] [--max-steps 25] (see: codewhip help run)');
       process.exitCode = 1;
       return;
     }
