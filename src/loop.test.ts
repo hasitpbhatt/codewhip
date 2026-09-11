@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentLoop, withTimeout } from "./loop.js";
-import { makeFakePort, textTurn, toolTurn, rateLimited } from "./testkit/fakePort.js";
+import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure } from "./testkit/fakePort.js";
 import { listRules } from "./remember-store.js";
 import { readAuditLog, verifyChain } from "./audit.js";
 import type { ToolResult } from "./tools/types.js";
@@ -191,6 +191,41 @@ describe("loop", () => {
     });
     ok(ev.some((t) => t.includes("rotating")));
     strictEqual(r.text, "done");
+  });
+  it("timeout rotates through candidates like a 429 (fresh attempt beats waiting)", async () => {
+    const ev: string[] = [];
+    const { port, record } = makeFakePort([timeoutFailure(), timeoutFailure(), textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", models: ["a", "b", "c"], label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.error, undefined);
+    ok(ev.some((t) => t.includes("timed out") && t.includes("rotating")));
+    strictEqual(record.map((c) => c.model).join(","), "a,b,c");
+  });
+  it("timeout never triggers retry-wait (waiting helps 429s, not slow models)", async () => {
+    const ev: string[] = [];
+    const { port } = makeFakePort([timeoutFailure()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, retryWait: true,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(cwd),
+    });
+    ok(!ev.some((t) => t.includes("waiting")));
+    ok(r.error !== undefined && r.error.includes("--models"));
+  });
+  it("unarmed timeout names its remedy (rotate, fail over, or allow longer calls)", async () => {
+    const { port } = makeFakePort([timeoutFailure()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined && r.error.includes("timed out after"));
+    ok(r.error.includes("--models <a,b>"));
+    ok(r.error.includes("--failover"));
+    ok(r.error.includes("--timeout-ms"));
   });
   it("token budget stops the run with a partial receipt", async () => {
     const ev: string[] = [];

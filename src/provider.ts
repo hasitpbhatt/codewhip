@@ -58,14 +58,13 @@ export type ProviderConfig = {
   anonymousKey?: string;
 };
 
-const NVIDIA_TIMEOUT_MS = 45000;
-const MISTRAL_TIMEOUT_MS = 45000;
-const SENSENOVA_TIMEOUT_MS = 45000;
-const ALIBABA_TIMEOUT_MS = 45000;
-const LLM7_TIMEOUT_MS = 45000;
-const TOKENHARBOR_TIMEOUT_MS = 45000;
-const BAI_TIMEOUT_MS = 45000;
-const FABRYKA_TIMEOUT_MS = 45000;
+/**
+ * Single default for every builtin chat call. One place on purpose: eight
+ * identical per-provider constants already diverged once (45s -> 120s), and
+ * per-provider tuning belongs in the row below, not in a constant farm.
+ * Custom providers carry their own timeoutMs (default in custom-providers.ts).
+ */
+export const DEFAULT_CHAT_TIMEOUT_MS = 120000;
 const MAX_BODY_CHARS = 500;
 
 export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
@@ -78,7 +77,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "moonshotai/kimi-k3",
     envVar: "NVIDIA_API_KEY",
     keyUrl: "https://build.nvidia.com/settings/api-keys",
-    timeoutMs: NVIDIA_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "free tier ~40 req/min — wait and retry",
   },
   mistral: {
@@ -90,7 +89,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "mistral-small-latest",
     envVar: "MISTRAL_API_KEY",
     keyUrl: "https://console.mistral.ai",
-    timeoutMs: MISTRAL_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint:
       "free mode caps RPS + tokens/min + tokens/month — see Limits in console.mistral.ai",
   },
@@ -103,7 +102,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "sensenova-6.8-flash-lite",
     envVar: "SENSENOVA_API_KEY",
     keyUrl: "https://token.sensenova.ai",
-    timeoutMs: SENSENOVA_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
   },
   alibaba: {
     id: "alibaba",
@@ -114,7 +113,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "qwen-plus",
     envVar: "ALIBABA_API_KEY",
     keyUrl: "https://dashscope-intl.aliyun.com",
-    timeoutMs: ALIBABA_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
   },
   llm7: {
     id: "llm7",
@@ -125,7 +124,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "default",
     envVar: "LLM7_API_KEY",
     keyUrl: "https://dash.llm7.io",
-    timeoutMs: LLM7_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "anonymous access is heavily rate-limited — add a dash.llm7.io token for higher limits",
     anonymousKey: "unused",
   },
@@ -138,7 +137,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "th-orchestra",
     envVar: "TOKENHARBOR_API_KEY",
     keyUrl: "https://tokenharbor.ai/dashboard/api-keys",
-    timeoutMs: TOKENHARBOR_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
   },
   bai: {
     id: "bai",
@@ -151,7 +150,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "GPT-5 Nano",
     envVar: "BAI_API_KEY",
     keyUrl: "https://chat.b.ai/chat",
-    timeoutMs: BAI_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
   },
   fabryka: {
     id: "fabryka",
@@ -162,7 +161,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     defaultModel: "qwen3.6-35b-a3b",
     envVar: "FABRYKA_API_KEY",
     keyUrl: "https://router.fabryka.ai",
-    timeoutMs: FABRYKA_TIMEOUT_MS,
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "single-GPU backend: keep concurrency at 1, concurrent requests fail",
   },
 };
@@ -366,7 +365,7 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
       }
       const name = err instanceof Error ? err.name : "";
       if (name === "TimeoutError" || name === "AbortError") {
-        return { ok: false, error: `${brand} api timed out after ${limit}ms`, retryable: "other" };
+        return { ok: false, error: `${brand} api timed out after ${limit}ms`, retryable: "timeout" };
       }
       return { ok: false, error: `network error: ${err instanceof Error ? err.message : "fetch failed"}`, retryable: "other" };
     } finally {

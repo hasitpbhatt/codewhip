@@ -40,12 +40,12 @@ export type LoopArgs = {
   askUser?: AskUser;
   /** One bounded Retry-After wait per run (off unless explicitly armed). */
   retryWait?: boolean;
-  /** One cross-provider switch per run on 429 only (off unless armed). */
+  /** One cross-provider switch per run on rate-limit/timeout (off unless armed). */
   failover?: FailoverTarget;
   /**
    * Ordered same-provider model candidates, head first (head === model).
    * Empty by default (no rotation). Each candidate is tried at most once
-   * per run, on rate-limited turns only — never on auth/other failures.
+   * per run, on rate-limited/timeout turns only — never on auth/other failures.
    */
   models?: string[];
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
@@ -243,11 +243,17 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         cancelled = true;
         break;
       }
-      if (attempt.retryable !== "rate-limited") {
+      if (attempt.retryable !== "rate-limited" && attempt.retryable !== "timeout") {
         error = attempt.error;
         break;
       }
+      // Timeouts join the rotation path: a fresh attempt on a different
+      // model (or provider) beats waiting — waiting helps 429s, not slow
+      // models or stalled connections. Retry-wait stays 429-only.
+      const timedOut = attempt.retryable === "timeout";
+      const cause = timedOut ? "timed out" : "rate limited";
       if (
+        !timedOut &&
         args.retryWait === true &&
         !waitedOnce &&
         !failedOver &&
@@ -265,17 +271,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         waitedMs += wait;
         continue;
       }
-      // Same-provider model rotation: each candidate once per run, 429-only.
-      // Ordered after the single retry-wait and before cross-provider
-      // failover (same-provider moves are cheaper than provider switches).
-      // Transcript carries over: same provider, same tool specs.
+      // Same-provider model rotation: each candidate once per run, on
+      // rate-limit or timeout. Ordered after the single retry-wait and
+      // before cross-provider failover (same-provider moves are cheaper
+      // than provider switches). Transcript carries over: same provider,
+      // same tool specs.
       const next = (args.models ?? []).find((m) => !tried.has(m));
       if (next !== undefined) {
         tried.add(next);
         const from = `${current.label}:${current.model}`;
         const to = `${current.label}:${next}`;
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        emit("failover", `rate limited on ${current.model} — rotating to ${next}`);
+        emit("failover", `${cause} on ${current.model} — rotating to ${next}`);
         current = { ...current, model: next };
         continue;
       }
@@ -284,14 +291,16 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const from = `${current.label}:${current.model}`;
         const to = `${args.failover.label}:${args.failover.model}`;
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        emit("failover", `rate limited on ${current.label} — failing over to ${to}`);
+        emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
         current = { label: args.failover.label, model: args.failover.model, port: args.failover.port };
         continue;
       }
       const triedList = [...tried].map((m) => `${args.label}:${m}`).join(", ");
-      error = failedOver || tried.size > 1
-        ? `rate limited (tried ${triedList}${failedOver ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — partial transcript kept`
-        : attempt.error;
+      error = timedOut && !failedOver && tried.size === 1
+        ? `${attempt.error} — retry with --models <a,b> to rotate, --failover to switch provider, or --timeout-ms to allow longer calls`
+        : failedOver || tried.size > 1
+          ? `${cause} (tried ${triedList}${failedOver ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — partial transcript kept`
+          : attempt.error;
       break;
     }
     if (cancelled || error !== undefined || turn === null) {

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
-import { chatUrlFor, modelsUrlFor, makePort, makePortForConfig, parseProviderId, isBuiltinProviderId, PROVIDERS, PROVIDER_IDS } from "./provider.js";
+import { chatUrlFor, modelsUrlFor, makePort, makePortForConfig, parseProviderId, isBuiltinProviderId, PROVIDERS, PROVIDER_IDS, DEFAULT_CHAT_TIMEOUT_MS } from "./provider.js";
 import { parseRetryAfter } from "./provider.js";
 
 describe("provider", () => {
@@ -86,5 +86,27 @@ describe("provider", () => {
     strictEqual(parseProviderId("fabryka"), "fabryka");
     strictEqual(parseProviderId("bogus"), null);
     strictEqual(parseProviderId(undefined), null);
+  });
+  it("all builtins share the single chat-call default (no per-provider constant farm)", () => {
+    strictEqual(DEFAULT_CHAT_TIMEOUT_MS, 120000);
+    for (const id of PROVIDER_IDS) {
+      strictEqual(PROVIDERS[id].timeoutMs, DEFAULT_CHAT_TIMEOUT_MS, id);
+    }
+  });
+  it("aborted calls report retryable timeout (rotation path, not terminal other)", async () => {
+    const realFetch = globalThis.fetch;
+    const hangingFetch = (): Promise<Response> =>
+      Promise.reject(Object.assign(new Error("timeout"), { name: "AbortError" }));
+    globalThis.fetch = hangingFetch as typeof fetch;
+    try {
+      const port = makePort("nvidia", "test-key");
+      const res = await port({ model: "m", messages: [], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      strictEqual(res.retryable, "timeout");
+      ok(res.error.includes("timed out after 120000ms"));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

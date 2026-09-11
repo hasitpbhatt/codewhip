@@ -40,6 +40,10 @@ export function toolTurn(
 export function rateLimited(retryAfterMs?: number): ChatPortResponse {
   return { ok: false, error: "rate limited", retryable: "rate-limited", retryAfterMs };
 }
+/** Shorthand: a provider-side timeout (joins the rotation path, never retry-wait). */
+export function timeoutFailure(): ChatPortResponse {
+  return { ok: false, error: "test api timed out after 120000ms", retryable: "timeout" };
+}
 /** Shorthand: an auth failure. */
 export function authFailure(): ChatPortResponse {
   return { ok: false, error: "invalid key", retryable: "auth" };

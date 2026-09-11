@@ -29,7 +29,7 @@ export type ChatPortResult = {
   completionTokens: number;
 };
 
-export type RetryableKind = "rate-limited" | "auth" | "other";
+export type RetryableKind = "rate-limited" | "timeout" | "auth" | "other";
 
 export type PortFailure = {
   ok: false;

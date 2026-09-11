@@ -51,14 +51,14 @@ type RunOptions = {
 function printRunOptions(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
-  console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
+  console.log(`  --models <a,b,c>     rotate models in order on rate-limit/timeout, each once per run (default: off)`);
   console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
   console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
-  console.log("  --failover           one switch to the next provider with a stored key on 429 per run (default: off; may bill pay-go)");
+  console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
 }
@@ -437,7 +437,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   }
   console.log(`model: ${opts.provider}:${opts.model}`);
   if (opts.models.length > 1) {
-    console.log(`!! rotation armed: on 429 walk ${opts.models.join(" -> ")} (each once per run, 429-only)`);
+    console.log(`!! rotation armed: on rate-limit/timeout walk ${opts.models.join(" -> ")} (each once per run)`);
   }
   const runCfg = getProviderConfig(opts.provider);
   if (runCfg === null) {
@@ -480,7 +480,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       return;
     }
     const targetModel = nextCfg.defaultModel;
-    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on 429. May bill ${next} pay-go.`);
+    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout. May bill ${next} pay-go.`);
     failoverTarget = {
       label: next,
       model: targetModel,
