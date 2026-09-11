@@ -153,7 +153,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
-    console.error(`run: ${msg}`);
+    console.error(`run: ${msg} (see: codewhip help)`);
     process.exitCode = 1;
     return null;
   };
@@ -283,7 +283,7 @@ function cmdInit(): void {
   } else {
     console.log("kept .codewhip/key (exists)");
   }
-  console.log('done. try: codewhip run "fix the failing test"');
+  console.log('done. next: codewhip demo --deny (offline, $0) — then: codewhip auth login nvidia');
 }
 
 function missingKeyHelp(provider: string): void {
@@ -294,6 +294,8 @@ function missingKeyHelp(provider: string): void {
   console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, 0600 file; env still wins)`);
   console.error(`  Or per terminal, PowerShell: $env:${envVar} = "..."`);
   console.error(`  Get a key at ${keyUrl}`);
+  console.error(`  No key yet? Try the offline wedge demo (no key, $0): codewhip demo --deny`);
+  console.error(`  Or run keyless now: codewhip run "<prompt>" --provider llm7 (anonymous, rate-limited)`);
   process.exitCode = 1;
 }
 
@@ -867,8 +869,13 @@ function cmdVerdict(args: string[]): void {
   const cwd = process.cwd();
   const prefix = args[0] ?? "";
   const value = args[1] ?? "";
-  if (prefix.length < 4 || !isVerdict(value)) {
-    console.error("usage: codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected>");
+  if (prefix.length < 4) {
+    console.error(`verdict: prefix "${prefix}" is too short (need >=4 chars of the runId; see: codewhip metrics)`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!isVerdict(value)) {
+    console.error(`verdict: "${value}" is not a judgment (want: accepted|edited|reverted|rejected)`);
     process.exitCode = 1;
     return;
   }
