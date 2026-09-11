@@ -36,7 +36,7 @@ P0 — loop that earns:
 - [x] P0 policy jail: harness-side (0 prompt tokens), fail-closed defaults (`read:allow edit/write/shell:ask`) + v1 path jail (realpath, no symlink escape) + non-overridable denylist + explicit `denylist:shell-chaining` (newlines/`;`/`|`/`&`/backtick/`$()`).
 - [x] P0 `.codewhip/audit.log` hash-chained JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`, ed25519-signed with the `init` key, hashes-only at write) + `audit --verify/--last/--replay` + `--export` signed bundle.
 - [x] P0 `.codewhip/outcomes.jsonl` written every run (allow/deny + ruleIds, usageByModel, failovers) + `always allow` memory in `.codewhip/remembered.jsonl` (v2: curated shapes, provenance {ts/runId/preview_hash}, self-protecting). Future: `memory.md` + `notes/` + inject (~400 tokens) + `memory distill/approve`.
-- [x] P0 `codewhip init` (AGENTS.md + policy digest + keygen) + `codewhip run` (headless + stdin REPL) + auth/models/audit CLI. Future: `--share` redacted link.
+- [x] P0 `codewhip init` (AGENTS.md + policy digest + keygen) + `codewhip run` (headless + stdin REPL) + auth/models/audit CLI + `run --share` (local redacted bundle, chain-anchored, signed; hosted links need a server).
 
 P1 — trust that spreads:
 - [ ] P1 3-class router (implement→Sonnet-class / polish→cheap Flash-class / private→local) + proven <$0.05 polish receipt before any launch.
@@ -96,3 +96,11 @@ P1 — trust that spreads:
   construction; result hashes match outcomes byte-for-byte). `--verify`
   re-walks seq/prev_hash/signatures; `--replay` renders; `--export` writes a
   signed content-addressed bundle (`chain_tail` anchors the tail). 92/92 tests.
+
+- 2026-09-11 — **`run --share` ships (local redacted bundle, no server).**
+  `src/share.ts`: prompt, per-tool previews (already redacted at the model
+  boundary), policy verdicts, receipt — scrubbed again for key-shaped
+  tokens/PEMs/emails plus env-assignment values (names kept), anchored to
+  `audit.log` via `audit_tail`, signed when a key exists. LoopResult gains
+  `runId` + per-call `trace`. The "link" is the bundle path + content hash;
+  hosted/public links need a server and stay out of H1. 101/101 tests.

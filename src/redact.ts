@@ -21,3 +21,14 @@ export function redactSecrets(text: string): string {
   }
   return out;
 }
+
+// Shell/.env-style assignments with ALL-CAPS names: `export FOO=bar`,
+// `FOO=bar`, `FOO: bar` (docker-compose). The name is kept (useful for
+// debugging a share bundle); the value is masked. Only applied on the share
+// path — the model boundary keeps current behavior so prompts aren't mangled.
+const ENV_RX = /^(\s*(?:export\s+)?[A-Z_][A-Z0-9_]*\s*[:=])\s*\S(.*)$/gm;
+
+export function redactEnvValues(text: string): string {
+  ENV_RX.lastIndex = 0;
+  return text.replace(ENV_RX, (_m, head: string) => `${head} [redacted]`);
+}

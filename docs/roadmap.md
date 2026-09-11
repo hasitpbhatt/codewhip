@@ -47,9 +47,10 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
   Future: `memory.md` (<100 lines: do/don't/gotchas), `notes/<path>.md`,
   inject ~400 tokens/run, `memory distill/approve` — all audited tool calls
   (no provenance, no ship).
-- [ ] **P0 entry points** — `codewhip init` (30s: `AGENTS.md` + policy +
-  local ed25519 keygen); `codewhip run` (headless + REPL); `--share`
-  redacted link (env values, keys, emails stripped via allowlist regex).
+- [x] **P0 entry points** — `codewhip init` (30s: `AGENTS.md` + policy +
+  local ed25519 keygen); `codewhip run` (headless + REPL); `run --share`
+  writes a local redacted bundle (keys/emails/env-values scrubbed, anchored
+  to the audit chain, signed when a key exists — no upload/server in H1).
 
 ### P1 — trust that spreads
 

@@ -56,9 +56,11 @@ describe("loop", () => {
       stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(runCwd),
     });
     strictEqual(r.toolCalls, 2);
+    strictEqual(r.trace.length, 2);
+    strictEqual(r.trace[0]?.policy, "deny:denylist:rm -rf /");
+    strictEqual(r.trace[1]?.actor, "yolo");
     const { entries } = readAuditLog(runCwd);
-    strictEqual(entries.length, 2);
-    strictEqual(entries[0]?.tool, "bash");
+    strictEqual(entries.length, 2);    strictEqual(entries[0]?.tool, "bash");
     strictEqual(entries[0]?.actor, "policy");
     ok((entries[0]?.policy ?? "").startsWith("deny:"), entries[0]?.policy);
     strictEqual(entries[1]?.actor, "yolo");

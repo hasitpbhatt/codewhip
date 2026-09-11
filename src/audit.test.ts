@@ -155,7 +155,11 @@ describe("audit chain", () => {
     const file = auditPath(cwd);
     const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
     const first = JSON.parse(lines[0] as string) as AuditEntry;
-    first.sig = (first.sig as string).slice(0, -2) + "00";
+    const orig = first.sig as string;
+    // Flip a byte in the middle — guaranteed to differ (no 1/256 no-op).
+    const flip = orig.slice(10, 12) === "ff" ? "00" : "ff";
+    first.sig = orig.slice(0, 10) + flip + orig.slice(12);
+    strictEqual(first.sig === orig, false);
     fs.writeFileSync(file, JSON.stringify(first) + "\n", "utf8");
     const v = verifyChain(cwd);
     strictEqual(v.valid, false);

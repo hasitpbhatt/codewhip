@@ -11,8 +11,8 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (92 tests) pins the
-policy, jail, memory, audit chain, and loop. The five Naval agents have debated and
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (101 tests) pins the
+policy, jail, memory, audit chain, share redaction, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
@@ -36,6 +36,7 @@ codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + loc
 codewhip auth login mistral        # optional; every provider needs a key (see "Provider keys")
 codewhip run "fix the failing test"
 codewhip run "refactor auth" --token-budget 250000
+codewhip run "refactor auth" --share    # + redacted share bundle (.codewhip/share-<runId>.json)
 codewhip audit --last 20           # tail the hash-chained audit log
 codewhip audit --verify            # re-walk seq/prev_hash + ed25519 signatures
 codewhip audit --replay 20         # readable action replay (newest last)
@@ -75,6 +76,11 @@ receipt anyway.
   `audit --verify` re-walks the chain and signatures; `--replay` renders it;
   `--export` writes a signed content-addressed bundle. Tail tampering is
   anchored by the bundle's `chain_tail`; non-tail tampering breaks the next link.
+- **Share:** `run --share` writes `.codewhip/share-<runId>.json` — prompt,
+  per-tool previews, policy verdicts, receipt — scrubbed twice (key-shaped
+  tokens/PEMs/emails plus env-assignment values, names kept), anchored to the
+  audit chain (`audit_tail`) and signed when a key exists. Local-file v1: no
+  upload, no server; the "link" is the bundle path plus its content hash.
 - **Router:** 3 task classes (implement → frontier, polish → cheap Flash-class,
   private → local), `--token-budget` enforced mid-run (
   default 250000), same-provider `--models a,b,c` rotation and one-shot
@@ -92,7 +98,7 @@ src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defau
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 92-test suite
+src/testkit/            $0 fake ChatPort for the 101-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -108,7 +114,8 @@ AGENTS.md               working agreement for coding agents
 
 - **H1 (parity + trust):** `agentLoop()` → five tools → 4 providers + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
-  (provenanced) → hash-chained audit → `init`/`run`/`--share` →
+  (provenanced) → hash-chained audit → `init`/`run`/`--share` (local redacted
+  bundles; hosted links need a server) →
   3-class router with <$0.05 polish receipt → GitHub Action + 1 starter pack.
 - **H2 (past Claude):** sandbox profiles, pack registry + SSO/retention (paid),
   graph memory on proven pain, full provider matrix, auditor bundle v2,
@@ -124,7 +131,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (92 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (101 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.

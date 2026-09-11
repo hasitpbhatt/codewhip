@@ -148,6 +148,27 @@ export function appendEntry(cwd: string, input: AuditInput): boolean {
   }
 }
 
+/**
+ * Sign an arbitrary canonical blob with the repo key. Null in unsigned repos.
+ * Shared by --export and --share so both bundles carry the same trust root.
+ */
+export function signBlob(cwd: string, canonical: string): string | null {
+  const priv = loadPrivateKey(cwd);
+  if (priv === null) {
+    return null;
+  }
+  return edSign(null, Buffer.from(canonical, "utf8"), priv).toString("hex");
+}
+
+/** Hash of the last chain entry ("" when empty) — anchors exports/shares. */
+export function chainTail(cwd: string): string {
+  const { entries } = readAuditLog(cwd);
+  if (entries.length === 0) {
+    return "";
+  }
+  return entryHash(entries[entries.length - 1] as AuditEntry);
+}
+
 export type AuditVerification = {
   valid: boolean;
   total: number;
@@ -242,10 +263,7 @@ export function buildBundle(cwd: string): { bundle: AuditBundle; json: string } 
   const priv = loadPrivateKey(cwd);
   const bundle: AuditBundle = {
     ...base,
-    bundle_sig:
-      priv === null
-        ? null
-        : edSign(null, Buffer.from(canonicalJson(base), "utf8"), priv).toString("hex"),
+    bundle_sig: priv === null ? null : signBlob(cwd, canonicalJson(base)),
   };
   return { bundle, json: JSON.stringify(bundle) };
 }

@@ -55,8 +55,18 @@ export type LoopArgs = {
   onEvent?: (event: LoopEvent) => void;
 };
 
+export type LoopTraceCall = {
+  seq: number;
+  tool: string;
+  policy: string;
+  actor: AuditActor;
+  /** Redacted output/deny preview (capped) — safe to embed in a share bundle. */
+  preview: string;
+};
+
 export type LoopResult = {
   text: string;
+  runId: string;
   error?: string;
   promptTokens: number;
   completionTokens: number;
@@ -65,6 +75,7 @@ export type LoopResult = {
   failovers: FailoverRecord[];
   steps: number;
   toolCalls: number;
+  trace: LoopTraceCall[];
   cancelled: boolean;
 };
 
@@ -163,6 +174,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   ];
   const calls: OutcomeToolCall[] = [];
   const auditEntries: AuditInput[] = [];
+  const trace: LoopTraceCall[] = [];
   let promptTokens = 0;
   let completionTokens = 0;
   let steps = 0;
@@ -308,7 +320,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         parsed = null;
       }
       const hash = argsHash(parsed ?? call.argsJson);
-      const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor): void => {
+      const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string): void => {
         calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId });
         auditEntries.push({
           runId,
@@ -318,11 +330,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           result_hash: resultHash,
           policy: `${decision}:${ruleId}`,
         });
+        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: preview.slice(0, 500) });
       };
       if (def === null || parsed === null) {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
         messages.push({ role: "tool", toolCallId: call.id, content: out });
-        record("deny", "loop:bad-call", sha256Hex(out), "policy");
+        record("deny", "loop:bad-call", sha256Hex(out), "policy", out);
         emit("tool", `deny ${call.name} (loop:bad-call)`);
         continue;
       }
@@ -332,7 +345,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (verdict.decision === "deny") {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
-        record("deny", verdict.ruleId, sha256Hex(out), "policy");
+        record("deny", verdict.ruleId, sha256Hex(out), "policy", redactSecrets(out));
         emit("tool", `deny ${call.name} ${preview} (${verdict.ruleId})`);
         continue;
       }
@@ -347,7 +360,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         } else if (!args.stdinIsTTY || args.askUser === undefined) {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
-          record("deny", `${verdict.ruleId}+held`, sha256Hex(out), "policy");
+          record("deny", `${verdict.ruleId}+held`, sha256Hex(out), "policy", out);
           emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
           continue;
         } else {
@@ -384,7 +397,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             if (answer === "no") {
               const out = `held for approval (${verdict.ruleId}) — declined`;
               messages.push({ role: "tool", toolCallId: call.id, content: out });
-              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human");
+              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out);
               emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
               continue;
             }
@@ -436,7 +449,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         toolCallId: call.id,
         content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
       });
-      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor);
+      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }
@@ -461,6 +474,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
 
   return {
     text,
+    runId,
     error,
     promptTokens,
     completionTokens,
@@ -469,6 +483,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     failovers: failoverTrail,
     steps,
     toolCalls: calls.length,
+    trace,
     cancelled,
   };
 }

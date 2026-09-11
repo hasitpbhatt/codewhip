@@ -10,6 +10,7 @@ import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
 import type { UsageBucket } from "./outcomes.js";
 import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
+import { writeShareBundle } from "./share.js";
 import {
   clearKey,
   configDir,
@@ -32,6 +33,8 @@ type RunOptions = {
   yolo: boolean;
   retryWait: boolean;
   failover: boolean;
+  /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
+  share: boolean;
   modelExplicit: boolean;
 };
 
@@ -58,6 +61,7 @@ function printHelp(): void {
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on 429 per run (default: off; may bill pay-go)");
+  console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
   console.log("");
   console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY / SENSENOVA_API_KEY / ALIBABA_API_KEY env wins when set; else `codewhip auth login <provider>`.");
@@ -81,7 +85,7 @@ function printReceipt(model: string, promptTokens: number, completionTokens: num
   );
 }
 
-function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: string): void {
+function mixReceiptString(buckets: UsageBucket[], provider: ProviderId, model: string): string {
   const list = buckets.length > 0
     ? buckets
     : [{ label: provider, model, prompt: 0, completion: 0 }];
@@ -95,8 +99,12 @@ function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: st
     parts.push(`${b.label}:${b.model} ${b.prompt}+${b.completion}`);
     costs.push(costNote(b.label));
   }
+  return `receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`;
+}
+
+function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: string): void {
   console.log("");
-  console.log(`receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`);
+  console.log(mixReceiptString(buckets, provider, model));
 }
 
 function printStubReceipt(model: string, provider: ProviderId): void {
@@ -113,6 +121,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let yolo = false;
   let retryWait = false;
   let failover = false;
+  let share = false;
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
@@ -167,6 +176,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
       retryWait = true;
     } else if (a === "--failover") {
       failover = true;
+    } else if (a === "--share") {
+      share = true;
     } else if (!a.startsWith("-")) {
       positional.push(a);
     } else {
@@ -177,7 +188,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, tokenBudget, maxSteps, yolo, retryWait, failover,
+    provider, tokenBudget, maxSteps, yolo, retryWait, failover, share,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
 }
@@ -336,6 +347,27 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log(result.text);
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
+    if (opts.share) {
+      const receipt = mixReceiptString(result.usageByModel, opts.provider, opts.model);
+      const shared = writeShareBundle(process.cwd(), {
+        runId: result.runId,
+        model: `${opts.provider}:${opts.model}`,
+        prompt: opts.prompt,
+        resultText: result.text,
+        error: result.error,
+        trace: result.trace,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        usageByModel: result.usageByModel,
+        receipt,
+      });
+      if ("error" in shared) {
+        console.error(`codewhip: ${shared.error}`);
+        process.exitCode = 1;
+      } else {
+        console.log(`share: ${shared.path} (sha256:${shared.hash.slice(0, 16)}…)`);
+      }
+    }
   } finally {
     process.removeListener("SIGINT", onSigint);
   }
