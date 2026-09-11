@@ -76,6 +76,13 @@ describe("metrics", () => {
   it("reports task success unmeasurable without verdicts", () => {
     const s = summarize([rec()], 0, null, NOW);
     strictEqual(s.verdicts, 0);
+    strictEqual(s.successRate, null);
     ok(renderMetrics(s).includes("unmeasurable"));
+  });
+  it("computes accepted-rate once verdicts exist", () => {
+    const s = summarize([rec({ verdict: "accepted" }), rec({ runId: "r2", verdict: "reverted" })], 0, null, NOW);
+    strictEqual(s.verdicts, 2);
+    strictEqual(s.successRate, 0.5);
+    ok(renderMetrics(s).includes("50% accepted"));
   });
 });

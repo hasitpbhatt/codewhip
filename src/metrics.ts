@@ -1,6 +1,7 @@
 import { estimateCost } from "./router.js";
 import { listRules } from "./remember-store.js";
 import { readOutcomeRecords, type OutcomeRecord } from "./outcomes.js";
+import { readVerdictMap } from "./verdict.js";
 import type { ProviderId } from "./provider.js";
 
 export type MetricsSummary = {
@@ -18,8 +19,14 @@ export type MetricsSummary = {
   untrackedRuns: number;
   memoryLines: number;
   memoryPerWeek: number;
-  /** Verdicts are always null until Week-4 instrumentation — reported, not faked. */
+  /** Human verdicts joined from verdicts.jsonl (latest per runId wins). */
   verdicts: number;
+  accepted: number;
+  edited: number;
+  reverted: number;
+  rejected: number;
+  /** accepted / verdicts; null when no verdicts yet. */
+  successRate: number | null;
 };
 
 export function loadOutcomeRecords(cwd: string): OutcomeRecord[] {
@@ -34,7 +41,10 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
   let pricedCost = 0;
   let pricedRuns = 0;
   let untrackedRuns = 0;
-  let verdicts = 0;
+  let accepted = 0;
+  let edited = 0;
+  let reverted = 0;
+  let rejected = 0;
   let periodStart: string | null = null;
   let periodEnd: string | null = null;
   for (const r of records) {
@@ -45,7 +55,12 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
       if (c.decision === "deny") denied += 1;
       else allowed += 1;
     }
-    if (r.verdict !== null && r.verdict !== undefined) verdicts += 1;
+    if (r.verdict !== null && r.verdict !== undefined) {
+      if (r.verdict === "accepted") accepted += 1;
+      else if (r.verdict === "edited") edited += 1;
+      else if (r.verdict === "reverted") reverted += 1;
+      else if (r.verdict === "rejected") rejected += 1;
+    }
     const buckets = r.usageByModel ?? [];
     if (buckets.length === 0) {
       untrackedRuns += 1;
@@ -88,12 +103,25 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
     untrackedRuns,
     memoryLines,
     memoryPerWeek,
-    verdicts,
+    verdicts: accepted + edited + reverted + rejected,
+    accepted,
+    edited,
+    reverted,
+    rejected,
+    successRate: accepted + edited + reverted + rejected === 0 ? null : accepted / (accepted + edited + reverted + rejected),
   };
 }
 
 export function summarizeCwd(cwd: string, nowMs: number = Date.now()): MetricsSummary {
   const records = loadOutcomeRecords(cwd);
+  // Join the verdict sidecar (latest per runId wins) without mutating outcomes v1.
+  const vmap = readVerdictMap(cwd);
+  if (vmap.size > 0) {
+    for (const r of records) {
+      const v = vmap.get(r.runId);
+      if (v !== undefined) r.verdict = v.verdict;
+    }
+  }
   const rules = listRules(cwd);
   const validTs = rules.map((r) => r.ts).filter((t) => Number.isFinite(Date.parse(t))).sort();
   const oldest = validTs.length === 0 ? null : (validTs[0] as string);
@@ -111,9 +139,9 @@ export function renderMetrics(s: MetricsSummary): string {
       ? `  spend: $${s.pricedCost.toFixed(4)} across ${s.pricedRuns} priced runs ($${(s.pricedCost / s.pricedRuns).toFixed(4)}/task) + ${s.untrackedRuns} untracked`
       : `  spend: untracked on all ${s.runs} runs (no priced provider:model in mix)`,
     `  memory: ${s.memoryLines} lines, ${s.memoryPerWeek.toFixed(1)}/week (bar: +3–5 durable lines/repo/week)`,
-    s.verdicts === 0
+    s.verdicts === 0 || s.successRate === null
       ? `  task success: unmeasurable — no verdicts recorded yet (bar: ≥70% polish / ≥50% implement)`
-      : `  task success: ${s.verdicts} verdicts recorded`,
+      : `  task success: ${(s.successRate * 100).toFixed(0)}% accepted (${s.accepted}/${s.verdicts} verdicts: ${s.edited} edited, ${s.reverted} reverted, ${s.rejected} rejected)`,
   ];
   return lines.join("\n");
 }

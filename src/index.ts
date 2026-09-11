@@ -15,6 +15,7 @@ import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
+import { isVerdict, resolveRunPrefix, setVerdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import {
   clearKey,
@@ -59,6 +60,7 @@ function printHelp(): void {
   console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
+  console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
   console.log("  pack                 team policy packs shipped locally (list/pull <name> [--force])");
   console.log("  help                 show this help");
@@ -414,6 +416,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log(result.text);
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
+    console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
     if (routed.taskClass === "polish") {
       const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
       console.log(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
@@ -721,6 +724,35 @@ function cmdPack(args: string[]): void {
   console.log("Usage: codewhip pack [list|pull <name> [--force]]");
 }
 
+function cmdVerdict(args: string[]): void {
+  const cwd = process.cwd();
+  const prefix = args[0] ?? "";
+  const value = args[1] ?? "";
+  if (prefix.length < 4 || !isVerdict(value)) {
+    console.error("usage: codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected>");
+    process.exitCode = 1;
+    return;
+  }
+  const hits = resolveRunPrefix(cwd, prefix);
+  if (hits.length === 0) {
+    console.error(`verdict: no run starts with "${prefix}" (see: codewhip metrics, .codewhip/outcomes.jsonl)`);
+    process.exitCode = 1;
+    return;
+  }
+  if (hits.length > 1) {
+    console.error(`verdict: ambiguous prefix "${prefix}" (${hits.length} runs) — use more chars`);
+    process.exitCode = 1;
+    return;
+  }
+  const runId = hits[0] as string;
+  if (!setVerdict(cwd, runId, value)) {
+    console.error("verdict: failed to write (disk write)");
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`verdict: ${runId.slice(0, 8)} → ${value} (.codewhip/verdicts.jsonl)`);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -764,6 +796,10 @@ async function main(): Promise<void> {
   }
   if (command === "metrics") {
     console.log(renderMetrics(summarizeCwd(process.cwd())));
+    return;
+  }
+  if (command === "verdict") {
+    cmdVerdict(args.slice(1));
     return;
   }
   if (command === "policy") {

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import type { ProviderId } from "./provider.js";
+import type { Verdict } from "./verdict.js";
 
 export type OutcomeToolCall = {
   seq: number;
@@ -41,8 +42,8 @@ export type OutcomeRecord = {
   tool_calls: OutcomeToolCall[];
   usage: { prompt: number; completion: number };
   result_preview_redacted: string;
-  /** Null until Week-4 verdicts (accepted|edited|reverted|rejected). */
-  verdict: null;
+  /** Null until a human records `codewhip verdict` (accepted|edited|reverted|rejected). */
+  verdict: null | Verdict;
   /** Optional since v1-freeze: per-provider usage mix (failover runs). */
   usageByModel?: UsageBucket[];
   /** Optional since v1-freeze: retry/failover trail. Old readers ignore it. */

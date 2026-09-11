@@ -91,6 +91,11 @@ Nothing copied blindly — no TUI/MCP/skills/provider-matrix scope. Kill-list ho
 ## P1 — next, in order, after P0 green
 
 1. Verdict signal (`verdict` enum + `codewhip verdict` CLI; metrics waits).
+   — SHIPPED 2026-09-11 (154/154): `.codewhip/verdicts.jsonl` sidecar
+   (latest-wins per runId), `codewhip verdict <prefix> <accepted|edited|
+   reverted|rejected>`, `runId` printed per run, metrics joins for
+   accepted-rate. `outcomes.jsonl` v1 untouched on disk (still writes
+   `verdict: null`; join is in-memory) — no migration, old readers fine.
 2. Offline wedge demo (`codewhip demo --deny` on the $0 fake port).
 3. Pasteable artifact (`run --share --print` Markdown receipt block).
 4. Passable gate (price sensenova/alibaba/mistral or re-route polish; derive price key from `PROVIDERS`).
