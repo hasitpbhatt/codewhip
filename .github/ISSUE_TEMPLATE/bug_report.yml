@@ -1,0 +1,43 @@
+name: Bug report
+description: A harness behavior that violates its contract (deny/ask/redact/audit)
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the harness should have done
+      description: deny / ask / redact / refuse — cite the README section if you can
+      placeholder: "bash with a chained command should be denied pre-flight (denylist:shell-chaining)"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What it actually did
+      description: Include the command and flags. Redact API keys before pasting.
+      placeholder: "codewhip run \"...\" --provider ..."
+    validations:
+      required: true
+  - type: textarea
+    id: audit
+    attributes:
+      label: Audit tail
+      description: Output of `codewhip audit --last 5` if the run left a trail
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `codewhip -v`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security check
+      description: Trust holes (jail escape, audit forgery, redaction leak) must go to email, not here
+      options:
+        - label: This is NOT a live vulnerability (vulnerabilities → see SECURITY.md)
+          required: true

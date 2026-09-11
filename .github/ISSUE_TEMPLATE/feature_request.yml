@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose something user pain has earned (see the kill list)
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: pain
+    attributes:
+      label: The user pain
+      description: What task fails today, and how often? Pain without frequency is imagination.
+      placeholder: "Every polish run on repo X burns a manual step because..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Smallest change that removes the pain. Note cost-receipt impact if run-affecting.
+    validations:
+      required: true
+  - type: textarea
+    id: kill-list
+    attributes:
+      label: Kill-list check
+      description: docs/roadmap.md lists what never ships in H1 (MCP catalog, vector DB, TUI, hosting...). Which line does this touch, and what evidence reopens it?
