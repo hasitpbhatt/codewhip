@@ -43,6 +43,8 @@ type RunOptions = {
   failover: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
+  /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
+  timeoutMs?: number;
   /** Explicit --class routing override (undefined = auto-classify). */
   taskClass?: TaskClass;
   modelExplicit: boolean;
@@ -56,6 +58,7 @@ function printRunOptions(): void {
   console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
+  console.log("  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; 5000..120000)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
@@ -219,6 +222,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let taskClass: TaskClass | undefined;
   let tokenBudget = 250000;
   let maxSteps = 25;
+  let timeoutMs: number | undefined;
   let yolo = false;
   let retryWait = false;
   let failover = false;
@@ -279,6 +283,12 @@ function parseRunArgs(args: string[]): RunOptions | null {
       const n = Number(args[++i]);
       if (!Number.isInteger(n) || n < 1 || n > 100) return fail("--max-steps must be an integer 1..100");
       maxSteps = n;
+    } else if (a === "--timeout-ms") {
+      const v = args[i + 1];
+      if (v === undefined) return fail("--timeout-ms needs a value in ms");
+      const n = Number(args[++i]);
+      if (!Number.isInteger(n) || n < 5000 || n > 120000) return fail("--timeout-ms must be an integer 5000..120000");
+      timeoutMs = n;
     } else if (a === "--yolo") {
       yolo = true;
     } else if (a === "--retry-wait") {
@@ -298,7 +308,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, share,
-    taskClass,
+    taskClass, timeoutMs,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
 }
@@ -446,6 +456,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
+  if (opts.timeoutMs !== undefined) {
+    console.log(`!! --timeout-ms armed: provider calls abort after ${opts.timeoutMs}ms (provider default ${runCfg.timeoutMs}ms overridden)`);
+  }
   const { key: apiKey, source: keySource } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
@@ -501,7 +514,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
       stdinIsTTY: process.stdin.isTTY === true,
-      port: makePortForConfig(runCfg, apiKey),
+      port: makePortForConfig(runCfg, apiKey, opts.timeoutMs),
       signal: ctrl.signal,
       askUser: promptApproval,
       remembered: listRules(process.cwd()),

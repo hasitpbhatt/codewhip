@@ -93,8 +93,7 @@ describe("provider", () => {
       strictEqual(PROVIDERS[id].timeoutMs, DEFAULT_CHAT_TIMEOUT_MS, id);
     }
   });
-  it("aborted calls report retryable timeout (rotation path, not terminal other)", async () => {
-    const realFetch = globalThis.fetch;
+  it("aborted calls report retryable timeout (rotation path, not terminal other)", async () => {    const realFetch = globalThis.fetch;
     const hangingFetch = (): Promise<Response> =>
       Promise.reject(Object.assign(new Error("timeout"), { name: "AbortError" }));
     globalThis.fetch = hangingFetch as typeof fetch;
@@ -105,6 +104,27 @@ describe("provider", () => {
       if (res.ok) return;
       strictEqual(res.retryable, "timeout");
       ok(res.error.includes("timed out after 120000ms"));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+  it("makePortForConfig honors the per-call timeout override (--timeout-ms plumbing)", async () => {
+    const realFetch = globalThis.fetch;
+    // Hanging but signal-cooperative stub (like real fetch): the port's own
+    // timer must drive the abort, so the stub has to listen for it.
+    globalThis.fetch = ((_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("timeout"), { name: "AbortError" }));
+        });
+      })) as typeof fetch;
+    try {
+      const port = makePortForConfig(PROVIDERS.nvidia, "test-key", 50);
+      const res = await port({ model: "m", messages: [], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      strictEqual(res.retryable, "timeout");
+      ok(res.error.includes("timed out after 50ms"));
     } finally {
       globalThis.fetch = realFetch;
     }
