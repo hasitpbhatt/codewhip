@@ -11,63 +11,20 @@ redacted audit link, metered to <$0.05 on polish work.
 **Horizons:** H1 = OpenCode parity in the terminal, with enforcement-grade
 governance. H2 = credible open alternative to Claude Code's closed trust.
 
-## H1 backlog (ordered, solo-builder sized)
+## Build status
 
-### P0 — the loop that earns
+H1 core shipped. `codewhip run` is live (loop, tools, policy jail, audit chain, outcomes+remembered, init/run/--share, 3-class router mechanism, CI + packs, policy promotion). Launch gate is OPEN: polish <$0.05 proof is pending a real priced polish run with receipts.
 
-- [x] **P0 `agentLoop()`** — `messages+tools → stream → permission check → exec
-  → append → repeat`; Ctrl-C cancels stream + kills tool, keeps transcript;
-  `--max-steps 25` hard stop with partial result + cost; `--token-budget`
-  (default 250000) enforced mid-run. Single async function, no server/worker
-  threads. Headless `run "…"` + stdin REPL first.
-- [x] **P0 six tools (<150 lines each)** — `read` (offset/limit), `search`
-  (glob+grep), `write` (create/overwrite, refuses `.codewhip/**` and
-  `codewhip-policy.yaml`), `edit` (exact + whitespace-insensitive), `bash`
-  (real shell, chaining-deny), git via bash allowlist (`status`, `diff`).
-- [x] **P0 provider interface** — one `LanguageModelV2`-style interface
-  (`openAiPort` ChatPort) over NVIDIA + Mistral; `--model`/`--provider`
-  override; `--models a,b,c` 429-only rotation (each once per run);
-  always-on cost meter (`tokens / model mix / $`); `--token-budget` enforced
-  mid-run (default 250000).
-- [x] **P0 policy jail** — harness-side (0 prompt tokens), fail-closed defaults
-  (`read:allow edit/write/shell:ask`); v1 path jail (realpath, symlink-aware);
-  non-overridable denylist (`rm -rf /`, `push --force`, …); explicit
-  `denylist:shell-chaining` on any statement separator (newlines, `;`, `|`,
-  `&`, `` ` ` ``, `$()`) — a smuggled `git status\nrm -rf .git` is denied, not
-  asked. Ask-default; `--yolo` explicit, logged, bannered; CI `ask ⇒ deny`.
-- [x] **P0 audit chain** — `.codewhip/audit.log`, append-only hash-chained
-  JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`),
-  ed25519-signed with the `init` keypair (`sig: null` when unsigned);
-  hashes-only at write (redaction holds by construction);
-  `audit --verify/--last/--replay`; `--export` signed content-addressed bundle.
-- [x] **P0 memory sidecar (v1 shipped)** — `.codewhip/outcomes.jsonl` written
-  every run (`v:1`; per-tool allow/deny + ruleIds, usageByModel[], failovers[]);
-  ``always allow`` memory in `.codewhip/remembered.jsonl` with provenance
-  (`ts/runId/preview_hash`), curated shapes only, self-protecting.
-  Future: `memory.md` (<100 lines: do/don't/gotchas), `notes/<path>.md`,
-  inject ~400 tokens/run, `memory distill/approve` — all audited tool calls
-  (no provenance, no ship).
-- [x] **P0 entry points** — `codewhip init` (30s: `AGENTS.md` + policy +
-  local ed25519 keygen); `codewhip run` (headless + REPL); `run --share`
-  writes a local redacted bundle (keys/emails/env-values scrubbed, anchored
-  to the audit chain, signed when a key exists — no upload/server in H1).
+## Next (post-H1 polish)
 
-### P1 — trust that spreads
+Ordered from `docs/moat/06-post-h1-verdict.md` P1 items 3–8. All are implementation hygiene, no scope creep.
 
-- [x] **P1 router proof** — 3 classes (implement→nvidia free, polish→sensenova
-  cheap, private→local-refused); keyword classifier + `--class`/`--provider`/
-  `--model` override; priced-route table (`$0` known, rest untracked);
-  polish gate printed per run (`PASS`/`OPEN`). **Gate status: mechanism
-  shipped, live <$0.05 proof still pending a real priced polish run.**
-- [x] **P1 CI + packs** — `.github/workflows/ci.yml` (typecheck/tests/build,
-  Node 22/24); `actions/run/action.yml` runs the agent headless in CI
-  (ask⇒deny, never yolo) and uploads `.codewhip/` as the audit artifact
-  (PR commenting deliberately unwired v1); one starter team pack
-  (`packs/starter/`) + `pack pull` (local copy, no registry — registry is H2).
-- [x] **P1 policy promotion** — 3 consistent declines of a tool:shape →
-  `policy candidates` → `policy approve "<tool:shape>"` appends a `deny`
-  line to committable `policy.md` → denied pre-flight from the next run
-  (rule pointer `policy.md:deny:…`; deny-only file, denylist still wins).
+- [ ] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain.
+- [ ] **Passable gate** — price `sensenova/alibaba/mistral` or re-route polish to a priced <$0.05 route; derive price key from `PROVIDERS` and never fiction-price.
+- [ ] **Truth to model** — reword tool specs so the model does not believe chaining is permitted; fix the search comment that incorrectly claims `read` skips secrets.
+- [ ] **Pack honesty** — make starter pack denies fire on both `edit` and `write`, normalize shapes, or drop phantom claims.
+- [ ] **Reporting honesty** — decision buckets (allow/deny/remembered/policy), untracked spend handling, `--last`/`--replay` parity, empty export failure, `missing===2` clarity.
+- [ ] **Drift + hygiene** — settle tool count wording, single-shot vs REPL labeling, receipt legend for $ tracking, gate OPEN label, dead branches, REPL receipt, remove vacuous assertions.
 
 ## H2 backlog (ordered)
 
@@ -107,12 +64,3 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
 | $/task | metered, by class, printed every run | polish <$0.05; implement <$1.50; blended <$0.50 default budget |
 | Memory accrued/week | promoted `memory.md`/`policy.md` lines surviving 30d | +3–5 durable lines/repo/week; revert-rate on memorized patterns down |
 | Trusted runs/team/week | runs, zero bypasses + shared audit (north-star) | ≥4–5/week for pilot teams |
-
-## Weekly sequencing (solo builder)
-
-- **Week 1:** loop + read/search/bash/edit + permission stub.
-- **Week 2:** provider interface + 3 providers + meter + budget.
-- **Week 3:** policy jail + denylist + audit chain + `init`.
-- **Week 4:** outcomes/memory sidecar + `--share` redactor.
-- **Week 5:** 3-class router + <$0.05 polish proof.
-- **Week 6:** GitHub Action + starter pack + policy promotion. Then H2.
