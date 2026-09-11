@@ -10,6 +10,7 @@ import { freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
+import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
 import { appendOutcome, newRunId, promptHash, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { appendEntry, auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
@@ -139,13 +140,18 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip pack list                — policy packs shipped locally (no registry in H1)");
       console.log("codewhip pack pull <name> [--force] — install a pack (enforced from the next run)");
       return true;
+    case "rollback":
+      console.log("codewhip rollback <runId-prefix> — undo a run: restore every file it edited/wrote to its pre-run content (files the run created are removed).");
+      console.log("codewhip rollback --list         — runs with checkpoints (newest first).");
+      console.log("  Every edit/write is snapshotted automatically (sha256-verified before the restore touches anything).");
+      return true;
     default:
       return false;
   }
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth models free provider audit metrics verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -162,6 +168,7 @@ function printHelp(): void {
   console.log("  models [provider]    list served models with agency tags (default: nvidia)");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
   console.log("  free                 list the free-provider chain (keyless rows first, limits, key consoles)");
+  console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
@@ -600,6 +607,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log(result.text);
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
+    if (result.checkpoints > 0) {
+      console.log(`checkpoints: ${result.checkpoints} file(s) snapshotted — undo: codewhip rollback ${result.runId.slice(0, 8)}`);
+    }
     console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
     if (route.taskClass === "polish") {
       const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
@@ -1068,6 +1078,58 @@ function cmdVerdict(args: string[]): void {
   console.log(`verdict: ${runId.slice(0, 8)} → ${value} (.codewhip/verdicts.jsonl)`);
 }
 
+/** Undo a run's file mutations from its automatic pre-edit/write checkpoints. */
+function cmdRollback(args: string[]): void {
+  const cwd = process.cwd();
+  if (args.includes("--list") || args.length === 0) {
+    const runs = listCheckpointRuns(cwd);
+    if (runs.length === 0) {
+      console.log("rollback: no runs have checkpoints yet (checkpoints land on every edit/write).");
+      return;
+    }
+    console.log(`rollback: ${runs.length} run(s) with checkpoints (newest last):`);
+    for (const r of runs) {
+      console.log(`  ${r.runId.slice(0, 8)}  ${r.files} file(s)`);
+    }
+    return;
+  }
+  const prefix = args[0] ?? "";
+  const resolved = resolveCheckpointRun(cwd, prefix);
+  if (resolved === "ambiguous") {
+    console.error(`rollback: ambiguous prefix "${prefix}" — use more chars (see: codewhip rollback --list)`);
+    process.exitCode = 1;
+    return;
+  }
+  if (resolved === null) {
+    console.error(`rollback: no run with checkpoints starts with "${prefix}" (see: codewhip rollback --list)`);
+    process.exitCode = 1;
+    return;
+  }
+  const runId = resolved;
+  const result = rollbackRun(cwd, runId);
+  if (!result.ok) {
+    console.error(`rollback: ${result.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  for (const f of result.restored) {
+    console.log(`restored: ${f}`);
+  }
+  for (const f of result.removed) {
+    console.log(`removed: ${f} (created by the run)`);
+  }
+  console.log(`rollback: ${result.restored.length + result.removed.length} file(s) back to pre-run state (run ${runId.slice(0, 8)}) — verify with git diff`);
+  // The undo itself lands on the hash-chained trail: attributable, replayable.
+  appendEntry(cwd, {
+    runId,
+    actor: "human",
+    tool: "rollback",
+    args_hash: sha256Hex(prefix),
+    result_hash: sha256Hex(result.restored.concat(result.removed).join("\n")),
+    policy: "allow:rollback",
+  });
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -1128,6 +1190,10 @@ async function main(): Promise<void> {
   }
   if (command === "verdict") {
     cmdVerdict(args.slice(1));
+    return;
+  }
+  if (command === "rollback") {
+    cmdRollback(args.slice(1));
     return;
   }
   if (command === "demo") {

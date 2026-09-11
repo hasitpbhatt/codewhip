@@ -227,6 +227,25 @@ codewhip provider remove my-gateway
 
 Registration is validated (`https://` base, `UPPER_SNAKE` env var, 5s–120s timeout) and stored keyless in `custom-providers.json` next to the key file — `--failover`, `--provider`, and `models` all see customs. Anything not OpenAI-compatible (`/v1/chat/completions` + Bearer) needs an adapter, not a table row.
 
+### Undo anything: automatic checkpoints + `codewhip rollback`
+
+Every `edit`/`write` is snapshotted before it happens (before-image +
+sha256 manifest under `.codewhip/checkpoints/<runId>/` — flat JSONL files,
+self-protecting: harness state is never checkpointed). Runs that touched
+files print `checkpoints: N file(s) snapshotted — undo: codewhip rollback
+<prefix>`, and one command restores the pre-run state:
+
+```sh
+codewhip rollback --list        # runs with checkpoints
+codewhip rollback e029e31f      # restore every file that run touched
+```
+
+Rollback verifies every snapshot hash *before* touching a byte (a tampered
+checkpoint refuses the whole restore, never half-applies), restores
+newest-to-oldest so the earliest content wins, removes files the run
+created, and lands on the hash-chained audit trail like everything else.
+The intern at 2am has an undo.
+
 ### Free models at one place
 
 `codewhip free` lists the free-provider chain read-only (no key, no network):

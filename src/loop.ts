@@ -11,6 +11,7 @@ import { SYSTEM_PROMPT } from "./system.js";
 import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
 import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
+import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import type { ProviderId } from "./provider.js";
 
 export type ApprovalAnswer = "yes" | "always" | "no";
@@ -84,6 +85,8 @@ export type LoopResult = {
   toolCalls: number;
   trace: LoopTraceCall[];
   cancelled: boolean;
+  /** Files snapshotted pre-edit/write this run (undo via codewhip rollback). */
+  checkpoints: number;
 };
 
 function lookupTool(name: string): ToolDef | null {
@@ -185,6 +188,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let completionTokens = 0;
   let steps = 0;
   let seq = 0;
+  /** Successful edit/write calls snapshotted this run (undo trail). */
+  let checkpoints = 0;
   let cancelled = false;
   let text = "";
   let error: string | undefined;
@@ -470,6 +475,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (!proceed) {
         continue;
       }
+      // Checkpoint before-image FIRST: undo needs the pre-edit bytes even
+      // when the exec itself crashes. Saved only on a successful exec, so
+      // failed calls leave no checkpoint trail. Self-protected paths return
+      // null and are never snapshotted.
+      const beforeImage =
+        def.name === "edit" || def.name === "write" ? captureBefore(args.cwd, parsed) : null;
       let result: ToolResult;
       try {
         result = await withTimeout(
@@ -479,6 +490,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         );
       } catch (err) {
         result = { ok: false, output: `tool crashed: ${err instanceof Error ? err.message : "error"}` };
+      }
+      if (result.ok && beforeImage !== null && saveCheckpoint(args.cwd, runId, seq, beforeImage)) {
+        checkpoints += 1;
       }
       const redacted = redactSecrets(result.output);
       const scrubbed = redacted !== result.output;
@@ -520,6 +534,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     failovers: failoverTrail,
     steps,
     toolCalls: calls.length,
+    checkpoints,
     trace,
     cancelled,
   };

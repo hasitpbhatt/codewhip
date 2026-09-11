@@ -17,8 +17,13 @@ H1 core shipped. `codewhip run` is live (loop, tools, policy jail, audit chain, 
 
 ## Next (post-H1 polish)
 
-Ordered from `docs/moat/06-post-h1-verdict.md` P1 items 3–8. All are implementation hygiene, no scope creep.
+Ordered from `docs/moat/06-post-h1-verdict.md` P1 items 3–8 and the
+five-persona committee verdict (`docs/moat/07-committee.md`). All are implementation hygiene, no scope creep.
 
+- [ ] **Undo** — automatic per-run file checkpoints on edit/write (before-image + sha256 manifest, JSONL, self-protecting) + `codewhip rollback <runId-prefix> [--list]`. *(committee ruling 1)*
+- [ ] **Plan mode** — `--plan` denies edit/write/bash run-scoped, above ask and above `--yolo`; the run's output is the plan. *(committee ruling 2)*
+- [ ] **Compaction** — sessions survive the context window with honest receipt lines ("compacted: N tool outputs dropped…"). *(committee ruling 3)*
+- [ ] **REPL slash commands** — `/model`, `/free`; free-chain visibility in-run.
 - [ ] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain.
 - [ ] **Passable gate** — price `sensenova/alibaba/mistral` or re-route polish to a priced <$0.05 route; derive price key from `PROVIDERS` and never fiction-price.
 - [ ] **Truth to model** — reword tool specs so the model does not believe chaining is permitted; fix the search comment that incorrectly claims `read` skips secrets.
