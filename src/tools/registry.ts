@@ -111,28 +111,28 @@ export const TOOLS: Record<ToolName, ToolDef> = {
     name: "read",
     spec: readSpec(),
     timeoutMs: 10000,
-    exec: (ctx, args, signal) =>
+    exec: (ctx, args, _signal) =>
       isReadArgs(args) ? readTool(ctx, args) : Promise.resolve({ ok: false, output: "read: bad args" } as ToolResult),
   },
   search: {
     name: "search",
     spec: searchSpec(),
     timeoutMs: 10000,
-    exec: (ctx, args, signal) =>
+    exec: (ctx, args, _signal) =>
       isSearchArgs(args) ? searchTool(ctx, args) : Promise.resolve({ ok: false, output: "search: bad args" } as ToolResult),
   },
   edit: {
     name: "edit",
     spec: editSpec(),
     timeoutMs: 10000,
-    exec: (ctx, args, signal) =>
+    exec: (ctx, args, _signal) =>
       isEditArgs(args) ? editTool(ctx, args) : Promise.resolve({ ok: false, output: "edit: bad args" } as ToolResult),
   },
   write: {
     name: "write",
     spec: writeSpec(),
     timeoutMs: 10000,
-    exec: (ctx, args, signal) =>
+    exec: (ctx, args, _signal) =>
       isWriteArgs(args) ? writeTool(ctx, args) : Promise.resolve({ ok: false, output: "write: bad args" } as ToolResult),
   },
   bash: {

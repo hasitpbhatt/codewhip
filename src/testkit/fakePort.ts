@@ -1,4 +1,4 @@
-import type { ChatPort, ChatPortResponse, LoopMsg, ToolSpec } from "../provider-port.js";
+import type { ChatPort, ChatPortResponse, LoopMsg } from "../provider-port.js";
 
 /**
  * Scripted ChatPort for $0-quota tests. Each call consumes the next

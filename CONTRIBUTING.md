@@ -53,6 +53,7 @@ One concern per commit. Don't mix a feature with a revamp.
 ## PR checklist
 
 - [ ] `npm run typecheck` passes
+- [ ] `npm run lint` passes
 - [ ] `npm test` passes (note the count if it changed)
 - [ ] `npm run build` passes
 - [ ] Run-affecting changes preserve cost receipts

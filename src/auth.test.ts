@@ -7,7 +7,6 @@ import { clearKey, configDir, resolveKey, saveKey } from "./auth.js";
 import { PROVIDER_IDS } from "./provider.js";
 
 const envKey = "CODEWHIP_CONFIG_DIR";
-const old = process.env[envKey];
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-auth-"));
 
 for (const p of PROVIDER_IDS) {

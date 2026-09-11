@@ -9,6 +9,7 @@ npm install
 npm run dev        # tsx src/index.ts (dev loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit (run before finishing any src/ change)
+npm run lint       # oxlint src --deny-warnings (TS-7-native; typescript-eslint can't run here)
 npm start          # node dist/index.js
 ```
 
@@ -18,7 +19,7 @@ Node >= 18. TypeScript strict, ESM (`"type": "module"`).
 
 - `src/` is the only source root (`rootDir: src`, `outDir: dist`).
 - Small modules, explicit types, no `any` without justification.
-- Every tool the agent loop exposes: <150 lines, JSON I/O, Zod-validated,
+- Every tool the agent loop exposes: <150 lines, JSON I/O, validated inputs,
   timeout-bounded, failure returns a tool-result string — never throws
   the loop over.
 - No new runtime dependency without a one-paragraph justification in the PR:
@@ -36,7 +37,7 @@ Node >= 18. TypeScript strict, ESM (`"type": "module"`).
 
 ## Definition of done
 
-1. `npm run typecheck` passes.
+1. `npm run lint` and `npm run typecheck` pass.
 2. `npm run build` passes.
 3. Every run-affecting change prints or preserves cost receipts
    (`tokens / model mix / $`).

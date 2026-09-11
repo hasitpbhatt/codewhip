@@ -1,5 +1,5 @@
 import { describe, it } from "node:test";
-import { strictEqual, ok } from "node:assert/strict";
+import { strictEqual } from "node:assert/strict";
 import { bashShape, declineShape, isMemorable, isValidStoredShape, shapeOf, targetsSelfProtected, MEMORABLE_SINGLE_HEADS, MEMORABLE_MULTI_HEADS } from "./remember.js";
 
 describe("remember", () => {

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isValidStoredShape, type Shape } from "./remember.js";
+import { isValidStoredShape } from "./remember.js";
 
 export type RememberedRule = {
   tool: "bash" | "edit" | "write";

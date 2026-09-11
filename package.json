@@ -23,6 +23,7 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "lint": "oxlint src --deny-warnings",
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "engines": {
@@ -37,6 +38,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.20.2",
+    "oxlint": "^1.82.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
   }
