@@ -49,6 +49,15 @@ describe("remember", () => {
   it("isMemorable allows edit shapes", () => {
     strictEqual(isMemorable("edit", "x.md"), true);
   });
+  it("webfetch remembers per https origin, never per URL", () => {
+    strictEqual(isMemorable("webfetch", "https://docs.example.com/a?token=1"), true);
+    strictEqual(shapeOf("webfetch", "https://docs.example.com/a?token=1"), "https://docs.example.com");
+    strictEqual(shapeOf("webfetch", "https://docs.example.com/other/path"), "https://docs.example.com");
+    strictEqual(isMemorable("webfetch", "http://docs.example.com/x"), false);
+    strictEqual(shapeOf("webfetch", "http://docs.example.com/x"), null);
+    strictEqual(shapeOf("webfetch", "not a url"), null);
+    strictEqual(declineShape("webfetch", "https://evil.example/x"), "https://evil.example");
+  });
   it("shapeOf returns the bare path for edit", () => {
     strictEqual(shapeOf("edit", "x.md"), "x.md");
     strictEqual(shapeOf("write", "a/b.txt"), "a/b.txt");
@@ -77,5 +86,9 @@ describe("remember", () => {
     strictEqual(isValidStoredShape("edit", "src/a.ts"), true);
     strictEqual(isValidStoredShape("edit", "policy.md"), false);
     strictEqual(isValidStoredShape("read", "x"), false);
+    strictEqual(isValidStoredShape("webfetch", "https://docs.example.com"), true);
+    strictEqual(isValidStoredShape("webfetch", "https://docs.example.com/path"), false);
+    strictEqual(isValidStoredShape("webfetch", "http://docs.example.com"), false);
+    strictEqual(isValidStoredShape("webfetch", "https://docs.example.com *"), false);
   });
 });

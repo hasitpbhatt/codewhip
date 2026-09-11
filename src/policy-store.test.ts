@@ -52,6 +52,14 @@ describe("policy-store", () => {
     strictEqual(matchesPromoted("edit", "src/secret.ts.bak", denies), null);
     strictEqual(matchesPromoted("edit", "src/secret", denies), null);
   });
+  it("matches webfetch origins without over-matching sibling hosts", () => {
+    const g = [{ tool: "webfetch", shape: "https://docs.example.com", line: 1 }];
+    ok(matchesPromoted("webfetch", "https://docs.example.com/guide?a=1", g) !== null);
+    ok(matchesPromoted("webfetch", "https://docs.example.com", g) !== null);
+    strictEqual(matchesPromoted("webfetch", "https://docs.example.com.evil.test/x", g), null);
+    strictEqual(matchesPromoted("webfetch", "https://other.example.com/x", g), null);
+    strictEqual(matchesPromoted("webfetch", "http://docs.example.com/x", g), null);
+  });
   it("matches interior globs without over-matching", () => {
     const g = [{ tool: "edit", shape: ".env.*", line: 1 }];
     ok(matchesPromoted("edit", ".env.local", g) !== null);

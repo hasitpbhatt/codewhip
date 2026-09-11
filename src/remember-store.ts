@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { isValidStoredShape } from "./remember.js";
 
 export type RememberedRule = {
-  tool: "bash" | "edit" | "write";
+  tool: "bash" | "edit" | "write" | "webfetch";
   shape: string;
   /** When the rule was created. */
   ts: string;

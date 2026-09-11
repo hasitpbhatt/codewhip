@@ -111,6 +111,10 @@ describe("policy", () => {
     strictEqual(checkPermission("write", "x.md").decision, "ask");
     strictEqual(checkPermission("write", "x.md").ruleId, "default:write:ask");
   });
+  it("webfetch asks by default (network is the exfil surface — one yes per host)", () => {
+    strictEqual(checkPermission("webfetch", "https://docs.example.com/x").decision, "ask");
+    strictEqual(checkPermission("webfetch", "https://docs.example.com/x").ruleId, "default:webfetch:ask");
+  });
   it("shell asks by default for unlisted commands", () => {
     strictEqual(checkPermission("bash", "echo hi").decision, "ask");
   });

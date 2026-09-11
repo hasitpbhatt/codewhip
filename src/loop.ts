@@ -9,6 +9,7 @@ import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeT
 import { appendEntry, type AuditActor } from "./audit.js";
 import { SYSTEM_PROMPT } from "./system.js";
 import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
+import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
 import type { ProviderId } from "./provider.js";
 
@@ -81,7 +82,7 @@ export type LoopResult = {
 };
 
 function lookupTool(name: string): ToolDef | null {
-  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash") {
+  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash" || name === "webfetch") {
     return TOOLS[name];
   }
   return null;
@@ -92,7 +93,7 @@ function previewForLog(name: string, args: unknown): string {
     return String(args).slice(0, 200);
   }
   const r = args as Record<string, unknown>;
-  const v = r["command"] ?? r["path"] ?? r["query"] ?? args;
+  const v = r["command"] ?? r["path"] ?? r["query"] ?? r["url"] ?? args;
   return String(typeof v === "string" ? v : JSON.stringify(args)).slice(0, 200);
 }
 
@@ -387,13 +388,17 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           const rules = [...(args.remembered ?? [])];
           // Bash shapes are `${head} *`: match the bare head ("ls") or head
           // + args ("ls -la"). Edit/write shapes are bare paths: exact match
-          // only (no prefix over-match into sibling files).
+          // only (no prefix over-match into sibling files). Webfetch shapes
+          // are bare origins: re-derive the subject's origin (normalizes
+          // case/trailing dots) instead of slicing strings, so sibling-host
+          // prefix games can't match and odd spellings fail closed to ask.
           const hit =
             shape === null
               ? undefined
               : rules.find((r) => {
                   if (r.tool !== def.name || r.shape !== shape) return false;
                   if (def.name === "bash") return true;
+                  if (def.name === "webfetch") return webfetchOrigin(subjectForShape) === r.shape;
                   return subjectForShape === shape;
                 });
           if (hit !== undefined) {
@@ -424,7 +429,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
               } else if (targetsSelfProtected(shape)) {
                 emit("policy", `not memorable: self-protected path — approved once, no rule stored`);
               } else {
-                const toolForRule = def.name === "edit" ? "edit" : def.name === "write" ? "write" : "bash";
+                // Edit/write store bare paths, bash stores `head *`, webfetch
+                // stores the bare origin — the tool name rides along so the
+                // matcher never confuses an origin with a path or a head.
+                // Literals (not def.name) so the type stays the stored-rule
+                // union; this branch only runs for ask-verdict tools anyway.
+                const toolForRule = def.name === "webfetch" ? "webfetch" : def.name === "edit" ? "edit" : def.name === "write" ? "write" : "bash";
                 const stored = persistRule(
                   args.cwd,
                   runId,

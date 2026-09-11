@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readOutcomeRecords } from "./outcomes.js";
+import { webfetchOrigin } from "./tools/webfetch.js";
 
 /**
  * Promoted policy: repeated human declines compile into pre-flight denies.
@@ -51,6 +52,12 @@ export function loadPromotedDenies(cwd: string): PromotedDeny[] {
 export function matchesPromoted(tool: string, subject: string, denies: PromotedDeny[]): PromotedDeny | null {
   for (const d of denies) {
     if (d.tool !== tool) continue;
+    // Webfetch shapes are bare origins while subjects are full URLs:
+    // re-derive (normalizes case) so sibling-host prefixes can't match.
+    if (d.tool === "webfetch") {
+      if (webfetchOrigin(subject) === d.shape) return d;
+      continue;
+    }
     if (!d.shape.includes("*")) {
       if (subject === d.shape) return d;
       continue;

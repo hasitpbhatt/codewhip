@@ -886,8 +886,8 @@ function cmdPolicy(args: string[]): void {
       process.exitCode = 1;
       return;
     }
-    if (tool !== "bash" && tool !== "edit" && tool !== "write") {
-      console.error(`policy: tool must be bash|edit|write (got "${tool}")`);
+    if (tool !== "bash" && tool !== "edit" && tool !== "write" && tool !== "webfetch") {
+      console.error(`policy: tool must be bash|edit|write|webfetch (got "${tool}")`);
       process.exitCode = 1;
       return;
     }

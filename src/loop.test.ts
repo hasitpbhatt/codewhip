@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { agentLoop, withTimeout } from "./loop.js";
 import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure } from "./testkit/fakePort.js";
 import { listRules } from "./remember-store.js";
+import type { RememberedRule } from "./remember-store.js";
 import { readAuditLog, verifyChain } from "./audit.js";
 import type { ToolResult } from "./tools/types.js";
 
@@ -226,6 +227,41 @@ describe("loop", () => {
     ok(r.error.includes("--models <a,b>"));
     ok(r.error.includes("--failover"));
     ok(r.error.includes("--timeout-ms"));
+  });
+  it("remembered webfetch host skips approval (one yes covers sibling paths)", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        url: "https://docs.example.com/a",
+        headers: { get: () => null },
+        arrayBuffer: () => Promise.resolve(new TextEncoder().encode("<p>hi</p>").buffer as ArrayBuffer),
+      } as unknown as Response)) as typeof fetch;
+    try {
+      let asked = 0;
+      const neverAsk = (_q: string): Promise<"yes" | "always" | "no"> => {
+        asked += 1;
+        return Promise.resolve("yes");
+      };
+      const remembered: RememberedRule[] = [
+        { tool: "webfetch", shape: "https://docs.example.com", ts: new Date().toISOString(), runId: "r", preview_hash: "h" },
+      ];
+      const { port } = makeFakePort([
+        toolTurn("webfetch", JSON.stringify({ url: "https://docs.example.com/a" })),
+        toolTurn("webfetch", JSON.stringify({ url: "https://docs.example.com/b" })),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+        stdinIsTTY: true, port, askUser: neverAsk, remembered,
+      });
+      strictEqual(r.error, undefined);
+      strictEqual(r.text, "done");
+      strictEqual(asked, 0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
   it("token budget stops the run with a partial receipt", async () => {
     const ev: string[] = [];

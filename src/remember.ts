@@ -1,4 +1,5 @@
 import type { ToolName } from "./tools/types.js";
+import { webfetchOrigin } from "./tools/webfetch.js";
 
 /**
  * "Always allow" memory (v2): the user answers `a` at the approval
@@ -50,6 +51,12 @@ export function isMemorable(tool: ToolName, preview: string): boolean {
   if (tool === "bash") {
     return bashShape(preview) !== null;
   }
+  // Webfetch remembers per https origin ("always allow docs.example.com"),
+  // never per URL — query strings can carry tokens and full-URL rules would
+  // silently stop matching. Unparseable/non-https subjects stay ask-every-time.
+  if (tool === "webfetch") {
+    return webfetchOrigin(preview) !== null;
+  }
   return true; // edit shapes are exact-path, low risk
 }
 
@@ -57,6 +64,9 @@ export function isMemorable(tool: ToolName, preview: string): boolean {
 export function shapeOf(tool: ToolName, preview: string): string | null {
   if (!isMemorable(tool, preview)) return null;
   if (tool === "bash") return bashShape(preview);
+  // Webfetch shapes are bare origins (no tool prefix): the matcher compares
+  // the subject URL's origin, so sibling paths share one human yes.
+  if (tool === "webfetch") return webfetchOrigin(preview);
   // Edit/write shapes are bare paths (no tool prefix): the matcher compares
   // the subject path directly, and decline keys stay promotable as-is.
   const p = preview.trim().slice(0, 120);
@@ -75,6 +85,9 @@ export function declineShape(tool: ToolName, subject: string): string | null {
     const p = subject.trim().slice(0, 120);
     return p.length > 0 ? p : null;
   }
+  // Declined webfetch hosts stay promotable as origins (same shape the
+  // allow path stores, so allow/deny keys never diverge).
+  if (tool === "webfetch") return webfetchOrigin(subject);
   if (tool !== "bash") return null;
   const trimmed = subject.trim();
   if (UNMEMORABLE_RX.test(trimmed)) return null;
@@ -91,10 +104,14 @@ export function declineShape(tool: ToolName, subject: string): string | null {
 
 /** Structural check for a STORED shape (load-time re-validation). */
 export function isValidStoredShape(tool: string, shape: string): boolean {
-  if (tool !== "bash" && tool !== "edit" && tool !== "write") return false;
+  if (tool !== "bash" && tool !== "edit" && tool !== "write" && tool !== "webfetch") return false;
   if (shape.length === 0 || shape.length > 160) return false;
   if (/[\r\n]/.test(shape)) return false;
   if (targetsSelfProtected(shape)) return false;
+  // Webfetch shapes are bare https origins only — no paths, no wildcards,
+  // no whitespace, so a hand-edited rule can't smuggle a broader grant
+  // than the UI offers.
+  if (tool === "webfetch") return /^https:\/\/[^/\s]+$/.test(shape);
   if (tool === "bash") {
     if (!shape.endsWith(" *")) return false;
     const head = shape.slice(0, -2);

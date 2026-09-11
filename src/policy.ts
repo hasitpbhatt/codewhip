@@ -239,9 +239,15 @@ export function checkPermission(tool: ToolName, commandPreview: string, promoted
   if (tool === "edit" || tool === "write") {
     return { decision: "ask", ruleId: `default:${tool}:ask`, reason: `${tool} asks by default` };
   }
+  // Webfetch is ask-by-default, never allow-by-default: the network is the
+  // exfiltration surface, so each host needs one human yes (memorable via
+  // `a`, like shell). The tool itself stays https-only and redacted.
+  if (tool === "webfetch") {
+    return { decision: "ask", ruleId: "default:webfetch:ask", reason: "webfetch asks by default (one yes per host, memorable)" };
+  }
   return { decision: "ask", ruleId: "default:shell:ask", reason: "shell asks by default" };
 }
 
 export function describePolicy(): string {
-  return "defaults read:allow edit:ask write:ask shell:ask (ask-default; bash containment is string-based, file tools use realpath jail)";
+  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; bash containment is string-based, file tools use realpath jail)";
 }

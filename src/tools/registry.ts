@@ -5,6 +5,7 @@ import { isSearchArgs, searchTool } from "./search.js";
 import { isEditArgs, editTool } from "./edit.js";
 import { isWriteArgs, writeTool } from "./write.js";
 import { BASH_TIMEOUT_MS, bashTool, isBashArgs } from "./bash.js";
+import { WEBFETCH_TIMEOUT_MS, isWebfetchArgs, webfetchTool } from "./webfetch.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
 // carries zero runtime deps. Week-1 ships static OpenAI specs + per-tool
@@ -106,8 +107,23 @@ function bashSpec(): ToolSpec {
   };
 }
 
-export const TOOLS: Record<ToolName, ToolDef> = {
-  read: {
+function webfetchSpec(): ToolSpec {
+  return {
+    name: "webfetch",
+    description: "Fetch a page for reading (docs, references, changelogs). Args: url (https only), format (text|html, default text). Ask-gated per host; 30s timeout, 1MB cap, secrets redacted before you see it.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        format: { type: "string" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+  };
+}
+
+export const TOOLS: Record<ToolName, ToolDef> = {  read: {
     name: "read",
     spec: readSpec(),
     timeoutMs: 10000,
@@ -142,8 +158,18 @@ export const TOOLS: Record<ToolName, ToolDef> = {
     exec: (ctx, args, signal) =>
       isBashArgs(args) ? bashTool(ctx, args, signal) : Promise.resolve({ ok: false, output: "bash: bad args" } as ToolResult),
   },
+  webfetch: {
+    name: "webfetch",
+    spec: webfetchSpec(),
+    // Loop-level wall clock sits just above the tool's own 30s abort so the
+    // tool always reports its own timeout message first (bash pairs equal
+    // values the same way).
+    timeoutMs: WEBFETCH_TIMEOUT_MS + 5000,
+    exec: (ctx, args, signal) =>
+      isWebfetchArgs(args) ? webfetchTool(ctx, args, signal) : Promise.resolve({ ok: false, output: "webfetch: bad args" } as ToolResult),
+  },
 };
 
 export function toolSpecs(): ToolSpec[] {
-  return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.edit.spec, TOOLS.write.spec, TOOLS.bash.spec];
+  return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.edit.spec, TOOLS.write.spec, TOOLS.bash.spec, TOOLS.webfetch.spec];
 }

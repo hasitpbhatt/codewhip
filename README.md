@@ -13,7 +13,7 @@ Claude Code optimizes for capability inside a closed box. Neither optimizes
 for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
-(`read/search/edit/write/bash`, policy-checked, metered, replayable);
+(`read/search/edit/write/bash/webfetch`, policy-checked, metered, replayable);
 `init`/`auth`/`models`/`audit` ship; a $0-quota test suite pins the
 policy, jail, memory, audit chain, share redaction, router, metrics, promotion, packs, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
@@ -109,7 +109,7 @@ src/router.ts           3-class task router (implement/polish/private) + polish 
 src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
-src/tools/              read/search/write/edit/bash + jail
+src/tools/              read/search/write/edit/bash/webfetch + jail
 src/testkit/            $0 fake ChatPort for the test suite
 src/auth.ts             provider keys (login/logout/status; env wins, file 0600)
 src/config-dir.ts       global key/config dir (%APPDATA% | ~/.config)
@@ -240,7 +240,7 @@ Both wait and switch are 429-only: auth, 5xx, and timeouts never trigger them. `
 
 ### Approvals that stick ("always allow")
 
-Every `edit`/`write`/`bash` call that policy asks about prompts:
+Every `edit`/`write`/`bash`/`webfetch` call that policy asks about prompts:
 
 ```
 allow bash echo 'x' >> TEST.md? [y/N/a]
@@ -253,7 +253,9 @@ allow bash echo 'x' >> TEST.md? [y/N/a]
   `npm test/run`, `npx tsx/tsc`, `ls`, `cat`, `echo`, …). Redirects, pipes, and
   chains (`;`, `&`, `|`, newlines, `>`, `>>`) are never memorable; a `bash:echo *`
   shape matches `echo x`, never `echo x >> .git/hooks/…`. `edit`/`write` shapes
-  are exact paths. Future calls with a matching shape auto-allow and the audit
+  are exact paths. `webfetch` shapes are bare https origins — one `a` covers
+  every path under the host, never the query string. Future calls with a
+  matching shape auto-allow and the audit
   shows `default:shell:ask+remembered` — visible, attributable, never silent.
 - Targets that the harness must protect (`.codewhip/**`, `codewhip-policy.yaml`,
   `remembered.jsonl` itself) refuse `a` outright — the `write` tool and the
