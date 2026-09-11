@@ -11,6 +11,7 @@ import { listRules } from "./remember-store.js";
 import type { UsageBucket } from "./outcomes.js";
 import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { writeShareBundle } from "./share.js";
+import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import {
   clearKey,
   configDir,
@@ -28,6 +29,7 @@ type RunOptions = {
   /** Ordered rotation candidates, head === model. Empty = no rotation. */
   models: string[];
   provider: ProviderId;
+  providerExplicit: boolean;
   tokenBudget: number;
   maxSteps: number;
   yolo: boolean;
@@ -35,6 +37,8 @@ type RunOptions = {
   failover: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
+  /** Explicit --class routing override (undefined = auto-classify). */
+  taskClass?: TaskClass;
   modelExplicit: boolean;
 };
 
@@ -55,7 +59,8 @@ function printHelp(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
   console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
-  console.log("  --provider <id>      nvidia|mistral|sensenova|alibaba (default: nvidia)");
+  console.log("  --provider <id>      nvidia|mistral|sensenova|alibaba (default: routed by --class)");
+  console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
@@ -116,6 +121,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let modelExplicit = false;
   let modelsArg: string[] | null = null;
   let provider: ProviderId = "nvidia";
+  let providerExplicit = false;
+  let taskClass: TaskClass | undefined;
   let tokenBudget = 250000;
   let maxSteps = 25;
   let yolo = false;
@@ -152,10 +159,18 @@ function parseRunArgs(args: string[]): RunOptions | null {
       const parsed = parseProviderId(v);
       if (parsed === null) return fail("--provider must be nvidia|mistral|sensenova|alibaba");
       provider = parsed;
+      providerExplicit = true;
       i++;
       if (!modelExplicit) {
         model = PROVIDERS[provider].defaultModel;
       }
+    } else if (a === "--class") {
+      const v = args[i + 1];
+      if (v !== "implement" && v !== "polish" && v !== "private") {
+        return fail("--class must be implement|polish|private");
+      }
+      taskClass = v;
+      i++;
     } else if (a === "--token-budget") {
       const v = args[i + 1];
       if (v === undefined) return fail("--token-budget needs a value");
@@ -188,7 +203,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, tokenBudget, maxSteps, yolo, retryWait, failover, share,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, share,
+    taskClass,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
 }
@@ -272,6 +288,22 @@ function promptApproval(question: string): Promise<ApprovalAnswer> {
 }
 
 async function cmdRun(opts: RunOptions): Promise<void> {
+  const routed = resolveRoute({
+    prompt: opts.prompt,
+    taskClass: opts.taskClass,
+    provider: opts.providerExplicit ? opts.provider : undefined,
+    model: opts.modelExplicit ? opts.model : undefined,
+    defaultProvider: "nvidia",
+    defaultModel: PROVIDERS.nvidia.defaultModel,
+  });
+  if ("error" in routed) {
+    console.error(`codewhip: ${routed.error}`);
+    process.exitCode = 1;
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  opts = { ...opts, provider: routed.provider, model: routed.model };
+  console.log(`route: ${routed.taskClass} → ${routed.provider}:${routed.model} (${routed.auto ? "auto" : "manual"}: ${routed.note})`);
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
@@ -347,6 +379,10 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       console.log(result.text);
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
+    if (routed.taskClass === "polish") {
+      const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
+      console.log(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
+    }
     if (opts.share) {
       const receipt = mixReceiptString(result.usageByModel, opts.provider, opts.model);
       const shared = writeShareBundle(process.cwd(), {

@@ -11,8 +11,8 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (101 tests) pins the
-policy, jail, memory, audit chain, share redaction, and loop. The five Naval agents have debated and
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (111 tests) pins the
+policy, jail, memory, audit chain, share redaction, router, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
@@ -81,10 +81,15 @@ receipt anyway.
   tokens/PEMs/emails plus env-assignment values, names kept), anchored to the
   audit chain (`audit_tail`) and signed when a key exists. Local-file v1: no
   upload, no server; the "link" is the bundle path plus its content hash.
-- **Router:** 3 task classes (implement → frontier, polish → cheap Flash-class,
-  private → local), `--token-budget` enforced mid-run (
-  default 250000), same-provider `--models a,b,c` rotation and one-shot
-  `--failover`/`--retry-wait` on 429 only. Target: polish <$0.05, blended <$0.50.
+- **Router:** 3 task classes (implement → nvidia free tier, polish →
+  sensenova cheapest inference, private → local). Auto-classified from the
+  prompt (private signals win, then polish, else implement) with the reason
+  printed; `--class`/`--provider`/`--model` always override. Private prompts
+  refuse cloud routing unless you name a provider explicitly (informed
+  consent). Polish runs print a gate line (`PASS` only on a priced route
+  <$0.05; `OPEN` while costs are untracked). `--token-budget` enforced mid-run
+  (default 250000), same-provider `--models a,b,c` rotation and one-shot
+  `--failover`/`--retry-wait` on 429 only.
 - **Sandbox:** v1 = Node path jail (realpath, symlink-aware) + non-overridable
   denylist; v2 swaps the executor (E2B/Firecracker) behind the frozen
   policy/audit schema.
@@ -95,10 +100,11 @@ receipt anyway.
 src/index.ts            CLI entry (help, run/auth/models/audit)
 src/loop.ts             agentLoop(): stream → permission → exec → append, budget
 src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
+src/router.ts           3-class task router (implement/polish/private) + polish gate
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 101-test suite
+src/testkit/            $0 fake ChatPort for the 111-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -131,7 +137,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (101 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (111 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.

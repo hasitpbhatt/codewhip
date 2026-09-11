@@ -54,9 +54,11 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
 
 ### P1 — trust that spreads
 
-- [ ] **P1 router proof** — 3 classes (implement→frontier Sonnet-class,
-  polish→cheap Flash-class, private→local); 5-line classifier + override;
-  **gate: proven <$0.05 polish receipt before any public launch.**
+- [x] **P1 router proof** — 3 classes (implement→nvidia free, polish→sensenova
+  cheap, private→local-refused); keyword classifier + `--class`/`--provider`/
+  `--model` override; priced-route table (`$0` known, rest untracked);
+  polish gate printed per run (`PASS`/`OPEN`). **Gate status: mechanism
+  shipped, live <$0.05 proof still pending a real priced polish run.**
 - [ ] **P1 CI + packs** — `codewhip-action@v1` (same policy in CI, audit link
   posts to PR); one starter team pack + `pull team/<pack>`.
 - [ ] **P1 policy promotion** — 3 consistent rejections → candidate in

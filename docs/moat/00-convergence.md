@@ -39,7 +39,7 @@ P0 — loop that earns:
 - [x] P0 `codewhip init` (AGENTS.md + policy digest + keygen) + `codewhip run` (headless + stdin REPL) + auth/models/audit CLI + `run --share` (local redacted bundle, chain-anchored, signed; hosted links need a server).
 
 P1 — trust that spreads:
-- [ ] P1 3-class router (implement→Sonnet-class / polish→cheap Flash-class / private→local) + proven <$0.05 polish receipt before any launch.
+- [x] P1 3-class router (implement→nvidia / polish→sensenova / private→local-refused) + classifier + override + polish gate line (live <$0.05 proof pending a real priced run).
 - [ ] P1 `codewhip-action@v1` (same policy in CI, audit link posts to PR) + 1 starter team pack (`pull team/starter-rails`-equivalent).
 - [ ] P1 `policy.md` promotion (3 consistent rejections → candidate → 1-cmd approve) compiling to pre-flight grep/lint blocks.
 
@@ -104,3 +104,12 @@ P1 — trust that spreads:
   `audit.log` via `audit_tail`, signed when a key exists. LoopResult gains
   `runId` + per-call `trace`. The "link" is the bundle path + content hash;
   hosted/public links need a server and stay out of H1. 101/101 tests.
+
+- 2026-09-11 — **3-class router ships (P1 mechanism, gate still OPEN).**
+  `src/router.ts`: keyword classifier (private > polish > implement) with
+  printed reason; `--class`/`--provider`/`--model` always override; private
+  prompts refuse cloud routing without an explicit provider (informed
+  consent). Priced-route table (only nvidia free tier known; the rest
+  untracked, never fiction); polish gate printed per run. The <$0.05 launch
+  gate needs a real priced polish run — mechanism landed, proof pending.
+  111/111 tests.
