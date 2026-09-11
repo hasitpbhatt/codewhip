@@ -14,7 +14,7 @@ npm test           # $0-quota suite: tsx --test, no API key needed
 npm run build      # tsc -> dist/
 ```
 
-Requires Node >= 18. TypeScript strict, ESM (`"type": "module"`).
+Requires Node >= 22. TypeScript strict, ESM (`"type": "module"`).
 
 Tests never touch the network: model calls go through the `$0` fake ChatPort
 in `src/testkit/`. If your change needs a provider key to verify, say so in

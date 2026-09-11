@@ -60,7 +60,7 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
   polish gate printed per run (`PASS`/`OPEN`). **Gate status: mechanism
   shipped, live <$0.05 proof still pending a real priced polish run.**
 - [x] **P1 CI + packs** — `.github/workflows/ci.yml` (typecheck/tests/build,
-  Node 18/20); `actions/run/action.yml` runs the agent headless in CI
+  Node 22/24); `actions/run/action.yml` runs the agent headless in CI
   (ask⇒deny, never yolo) and uploads `.codewhip/` as the audit artifact
   (PR commenting deliberately unwired v1); one starter team pack
   (`packs/starter/`) + `pack pull` (local copy, no registry — registry is H2).

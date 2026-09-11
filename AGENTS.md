@@ -13,7 +13,7 @@ npm run lint       # oxlint src --deny-warnings (TS-7-native; typescript-eslint 
 npm start          # node dist/index.js
 ```
 
-Node >= 18. TypeScript strict, ESM (`"type": "module"`).
+Node >= 22. TypeScript strict, ESM (`"type": "module"`).
 
 ## Repo conventions
 
@@ -26,7 +26,7 @@ Node >= 18. TypeScript strict, ESM (`"type": "module"`).
   prefer Node builtins. (Kill-list rule: infra is earned by user pain.)
 - JSONL + flat markdown for state (`.codewhip/`); no DB clients in H1.
 
-## Safety rules (from naval-governor, binding on agents too)
+## Safety rules (from the governance debate, binding on agents too)
 
 - Never `rm -rf /`, `rm -rf ~`, `push --force`, credential exfil, or secrets
   in logs. Redact `*.env*` and tokens at write time.

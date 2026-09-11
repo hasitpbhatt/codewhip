@@ -19,11 +19,14 @@ describe("jail", () => {
     strictEqual(r?.includes("future.txt"), true);
   });
   it("rejects absolute path escape", () => {
-    const r = jailPath(cwd, "C:\\Windows\\system32\\cmd.exe");
+    // Root-anchored: absolute-outside-the-jail on every platform
+    // (a drive-letter path is relative — and jail-legal — on posix).
+    const r = jailPath(cwd, path.join(path.parse(cwd).root, "codewhip-escape.txt"));
     strictEqual(r, null);
   });
   it("rejects parent-directory escape via ..", () => {
-    const r = jailPath(cwd, "..\\secret.txt");
+    // Forward slash separates on win32 and posix alike.
+    const r = jailPath(cwd, "../secret.txt");
     strictEqual(r, null);
   });
 });

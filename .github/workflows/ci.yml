@@ -5,18 +5,33 @@ on:
   pull_request:
 
 jobs:
+  # Lint runs once on Node 22: oxlint's native binding needs npm 10+
+  # (Node 18's npm 9 hits the optional-deps gap), and lint needs no matrix.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  # Product matrix: Node 22 floor (18/20 are EOL and were never green —
+  # node --test globs need 21+). fail-fast off: one platform's red must
+  # not mask another's signal.
   verify:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            node: "18"
-          - os: ubuntu-latest
-            node: "20"
-          - os: ubuntu-latest
             node: "22"
+          - os: ubuntu-latest
+            node: "24"
           - os: windows-latest
-            node: "20"
+            node: "22"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -25,7 +40,6 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

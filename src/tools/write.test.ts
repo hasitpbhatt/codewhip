@@ -32,7 +32,7 @@ describe("write", () => {
     strictEqual(r.ok, false);
   });
   it("rejects path escaping the jail", async () => {
-    const r = await writeTool({ cwd }, { path: "..\\secret.txt", content: "x" });
+    const r = await writeTool({ cwd }, { path: "../secret.txt", content: "x" });
     strictEqual(r.ok, false);
   });
   it("refusesSelfProtected flags .codewhip and policy files", () => {

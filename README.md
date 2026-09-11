@@ -133,7 +133,6 @@ docs/moat/03-governor.md      policy schema + audit + sandbox
 docs/moat/04-scout.md         wedge defense + terminal-first GTM
 docs/moat/05-h1-audit.md      four-lens H1 gap audit
 docs/moat/06-post-h1-verdict.md   five-lens post-H1 verdict (code, not claims)
-.opencode/agents/naval-*.md   the 5 reusable Naval personas
 AGENTS.md               working agreement for coding agents
 ```
 
@@ -161,7 +160,7 @@ npm run typecheck  # tsc --noEmit
 npm test           # $0-quota suite: tsx --test src/**/*.test.ts
 ```
 
-Requires Node >= 18. TypeScript strict, ESM.
+Requires Node >= 22. TypeScript strict, ESM.
 
 ### Install globally (use `codewhip` from any path)
 
@@ -275,7 +274,7 @@ and the non-overridable denylist still wins over it.
 `codewhip pack list` shows packs shipped with the install;
 `pack pull starter` copies the starter `policy.md` (publishing / infra /
 secret-file denies) into your repo. Local-file v1 — no registry, no network.
-`.github/workflows/ci.yml` pins typecheck + tests + build on Node 18/20;
+`.github/workflows/ci.yml` pins lint (node 22) + typecheck + tests + build on Node 22/24;
 `actions/run/action.yml` runs the agent headless in CI (ask⇒deny by
 construction, never `--yolo`) and uploads `.codewhip/` as the audit artifact.
 PR commenting is deliberately unwired in v1 — review the trail first.
@@ -290,16 +289,12 @@ Remove a rule by deleting its line from `.codewhip/remembered.jsonl`
 (one JSON object per line; the file is gitignored with the rest of
 `.codewhip/`).
 
-## The five Naval agents
+## Strategy notes
 
-This repo ships its strategy team as reusable subagents
-(`.opencode/agents/`, restart opencode after pulling):
-
-- **naval-leverage** — minimal loop + routing economics; kills labor-leverage.
-- **naval-memory** — compounding memory + data flywheel; files-first.
-- **naval-governor** — policy-as-code + audit + sandbox; enforcement, not memos.
-- **naval-scout** — uncopyable wedge + terminal-first GTM; non-clone list.
-- **naval-synthesizer** — stages the debate, rules with no ties, converges.
+The product strategy was debated by five Naval personas and converged in
+`docs/moat/00-convergence.md` — read the rulings before proposing direction
+changes. The personas themselves are local dev tooling (`.opencode/`,
+gitignored), not shipped.
 
 ## Contributing & Security
 
