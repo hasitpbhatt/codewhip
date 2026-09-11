@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { agentLoop, withTimeout } from "./loop.js";
 import { makeFakePort, textTurn, toolTurn, rateLimited } from "./testkit/fakePort.js";
 import { listRules } from "./remember-store.js";
+import { readAuditLog, verifyChain } from "./audit.js";
 import type { ToolResult } from "./tools/types.js";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-"));
@@ -42,6 +43,29 @@ describe("loop", () => {
     });
     ok(ev.some((t) => t.includes("deny")));
     strictEqual(r.error, undefined);
+  });
+  it("appends every tool call to the hash-chained audit log", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-audit-"));
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "rm -rf /" }), { prompt: 10, completion: 0 }),
+      toolTurn("bash", JSON.stringify({ command: "echo hi" }), { prompt: 10, completion: 0 }),
+      textTurn("done"),
+    ]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(runCwd),
+    });
+    strictEqual(r.toolCalls, 2);
+    const { entries } = readAuditLog(runCwd);
+    strictEqual(entries.length, 2);
+    strictEqual(entries[0]?.tool, "bash");
+    strictEqual(entries[0]?.actor, "policy");
+    ok((entries[0]?.policy ?? "").startsWith("deny:"), entries[0]?.policy);
+    strictEqual(entries[1]?.actor, "yolo");
+    ok((entries[1]?.policy ?? "").startsWith("allow:"), entries[1]?.policy);
+    const v = verifyChain(runCwd);
+    strictEqual(v.valid, true);
+    strictEqual(v.total, 2);
   });
   it("remembered shape auto-allows without asking", async () => {
     const ev: string[] = [];

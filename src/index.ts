@@ -8,7 +8,8 @@ import { makePort, parseProviderId, PROVIDERS, PROVIDER_IDS, type ProviderId } f
 import { listModels } from "./models.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
-import { readLastOutcomes, type UsageBucket } from "./outcomes.js";
+import type { UsageBucket } from "./outcomes.js";
+import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import {
   clearKey,
   configDir,
@@ -45,7 +46,7 @@ function printHelp(): void {
   console.log('  run "<prompt>"       run an agent session (headless; no prompt = REPL)');
   console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral|sensenova|alibaba])");
   console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
-  console.log("  audit                inspect the audit chain (--verify, --last N)");
+  console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
@@ -441,28 +442,89 @@ async function cmdModels(args: string[]): Promise<void> {
   }
 }
 
+function renderAuditEntry(e: AuditEntry): string {
+  const sig = e.sig === null ? "unsigned" : "signed";
+  return `#${e.seq} ${e.ts.slice(0, 19)}  ${e.tool.padEnd(8)} ${e.policy.padEnd(28)} actor=${e.actor.padEnd(10)} args=${e.args_hash.slice(0, 16)}… res=${e.result_hash.slice(0, 16)}… [${sig}]`;
+}
+
+function renderAuditTail(cwd: string, n: number): void {
+  const { entries } = readAuditLog(cwd);
+  if (entries.length === 0) {
+    console.log("audit: no entries yet.");
+    return;
+  }
+  console.log(`audit chain (hashes of redacted content, newest last — ${entries.length} total):`);
+  for (const e of readLastAuditEntries(cwd, n)) {
+    console.log(`  ${renderAuditEntry(e)}`);
+  }
+}
+
 function cmdAudit(args: string[]): void {
-  const outcomesPath = path.join(process.cwd(), ".codewhip", "outcomes.jsonl");
+  const cwd = process.cwd();
+  const ap = auditPath(cwd);
   if (args.includes("--verify")) {
-    if (!fs.existsSync(outcomesPath)) {
-      console.log("audit: no chain yet (.codewhip/outcomes.jsonl missing) — nothing to verify.");
+    if (!fs.existsSync(ap)) {
+      console.log("audit: no chain yet (.codewhip/audit.log missing) — nothing to verify.");
       return;
     }
-    console.log("audit --verify: chain check not implemented yet (Week 3).");
+    const v = verifyChain(cwd);
+    console.log(
+      `audit: ${v.total} entries — hash chain ${v.valid ? "INTACT" : "BROKEN"} (${v.signed} signed / ${v.unsigned} unsigned, ${v.keyPresent ? "key present" : "no local key"})`
+    );
+    for (const p of v.problems) {
+      console.log(`  ! ${p}`);
+    }
+    if (!v.valid) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+  const replayIdx = args.indexOf("--replay");
+  if (replayIdx !== -1) {
+    const n = Number(args[replayIdx + 1]);
+    renderAuditTail(cwd, Number.isInteger(n) && n > 0 ? n : 20);
+    return;
+  }
+  const exportIdx = args.indexOf("--export");
+  if (exportIdx !== -1) {
+    const explicit = args[exportIdx + 1];
+    const outPath =
+      explicit !== undefined && !explicit.startsWith("-")
+        ? path.join(process.cwd(), explicit)
+        : path.join(cwd, ".codewhip", "audit-export.json");
+    const result = buildBundle(cwd);
+    if ("error" in result) {
+      console.error(`audit: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    fs.writeFileSync(outPath, result.json + "\n", "utf8");
+    console.log(
+      `audit: exported ${result.bundle.entries.length} entries to ${outPath} (${result.bundle.bundle_sig === null ? "unsigned — run `codewhip init` to sign" : "signed bundle"})`
+    );
     return;
   }
   const lastIdx = args.indexOf("--last");
   if (lastIdx !== -1) {
-    const n = Number(args[lastIdx + 1] ?? "20");
-    const tail = readLastOutcomes(process.cwd(), Number.isInteger(n) && n > 0 ? n : 20);
-    if (tail.length === 0) {
+    const n = Number(args[lastIdx + 1]);
+    if (!Number.isInteger(n) || n <= 0) {
+      console.error("usage: codewhip audit --last N (positive integer)");
+      process.exitCode = 1;
+      return;
+    }
+    const raw = readLastAuditRaw(cwd, n);
+    if (raw.length === 0) {
       console.log("audit: no entries yet.");
       return;
     }
-    console.log(tail);
+    console.log(raw);
     return;
   }
-  console.log("Usage: codewhip audit [--verify] [--last N]");
+  if (args.length === 0) {
+    renderAuditTail(cwd, 20);
+    return;
+  }
+  console.log("Usage: codewhip audit [--verify] [--last N] [--replay N] [--export [path]]");
 }
 
 async function main(): Promise<void> {

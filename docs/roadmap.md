@@ -35,10 +35,11 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
   `denylist:shell-chaining` on any statement separator (newlines, `;`, `|`,
   `&`, `` ` ` ``, `$()`) — a smuggled `git status\nrm -rf .git` is denied, not
   asked. Ask-default; `--yolo` explicit, logged, bannered; CI `ask ⇒ deny`.
-- [ ] **P0 audit chain** — `.codewhip/audit.log`, append-only hash-chained
-  JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`);
-  secret redaction at write; `audit --verify/--last/--replay`; `--export`
-  signed bundle (auditor artifact).
+- [x] **P0 audit chain** — `.codewhip/audit.log`, append-only hash-chained
+  JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`),
+  ed25519-signed with the `init` keypair (`sig: null` when unsigned);
+  hashes-only at write (redaction holds by construction);
+  `audit --verify/--last/--replay`; `--export` signed content-addressed bundle.
 - [x] **P0 memory sidecar (v1 shipped)** — `.codewhip/outcomes.jsonl` written
   every run (`v:1`; per-tool allow/deny + ruleIds, usageByModel[], failovers[]);
   ``always allow`` memory in `.codewhip/remembered.jsonl` with provenance

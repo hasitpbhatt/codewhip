@@ -5,6 +5,7 @@ import { checkPermission, permissionSubject } from "./policy.js";
 import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
+import { appendEntry, type AuditActor, type AuditInput } from "./audit.js";
 import { SYSTEM_PROMPT } from "./system.js";
 import { shapeOf, targetsSelfProtected } from "./remember.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
@@ -161,6 +162,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     { role: "user", content: args.prompt },
   ];
   const calls: OutcomeToolCall[] = [];
+  const auditEntries: AuditInput[] = [];
   let promptTokens = 0;
   let completionTokens = 0;
   let steps = 0;
@@ -306,13 +308,21 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         parsed = null;
       }
       const hash = argsHash(parsed ?? call.argsJson);
-      const record = (decision: string, ruleId: string, resultHash: string): void => {
+      const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor): void => {
         calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId });
+        auditEntries.push({
+          runId,
+          actor,
+          tool: call.name,
+          args_hash: hash,
+          result_hash: resultHash,
+          policy: `${decision}:${ruleId}`,
+        });
       };
       if (def === null || parsed === null) {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
         messages.push({ role: "tool", toolCallId: call.id, content: out });
-        record("deny", "loop:bad-call", sha256Hex(out));
+        record("deny", "loop:bad-call", sha256Hex(out), "policy");
         emit("tool", `deny ${call.name} (loop:bad-call)`);
         continue;
       }
@@ -322,20 +332,22 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (verdict.decision === "deny") {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
-        record("deny", verdict.ruleId, sha256Hex(out));
+        record("deny", verdict.ruleId, sha256Hex(out), "policy");
         emit("tool", `deny ${call.name} ${preview} (${verdict.ruleId})`);
         continue;
       }
       let proceed = verdict.decision === "allow";
+      let grantActor: AuditActor = "policy";
       let ruleId = verdict.ruleId;
       if (verdict.decision === "ask") {
         if (args.yolo) {
           proceed = true;
+          grantActor = "yolo";
           ruleId = `${verdict.ruleId}+yolo`;
         } else if (!args.stdinIsTTY || args.askUser === undefined) {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
-          record("deny", `${verdict.ruleId}+held`, sha256Hex(out));
+          record("deny", `${verdict.ruleId}+held`, sha256Hex(out), "policy");
           emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
           continue;
         } else {
@@ -360,6 +372,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
               : undefined;
           if (hit !== undefined) {
             proceed = true;
+            grantActor = "remembered";
             ruleId = `${verdict.ruleId}+remembered`;
           } else {
             let answer: ApprovalAnswer = "no";
@@ -371,10 +384,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             if (answer === "no") {
               const out = `held for approval (${verdict.ruleId}) — declined`;
               messages.push({ role: "tool", toolCallId: call.id, content: out });
-              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out));
+              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human");
               emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
               continue;
             }
+            grantActor = "human";
             if (answer === "always") {
               if (shape === null || prefix === null) {
                 emit("policy", `not memorable: ${subjectForShape.trim().split(/\s/)[0] ?? ""} — approved once, no rule stored`);
@@ -422,7 +436,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         toolCallId: call.id,
         content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
       });
-      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)));
+      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }
@@ -441,6 +455,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
   });
+  for (const entry of auditEntries) {
+    appendEntry(args.cwd, entry);
+  }
 
   return {
     text,

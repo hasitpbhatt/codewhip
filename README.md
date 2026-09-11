@@ -11,8 +11,8 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (79 tests) pins the
-policy, jail, memory, and loop. The five Naval agents have debated and
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (92 tests) pins the
+policy, jail, memory, audit chain, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
@@ -36,8 +36,10 @@ codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + loc
 codewhip auth login mistral        # optional; every provider needs a key (see "Provider keys")
 codewhip run "fix the failing test"
 codewhip run "refactor auth" --token-budget 250000
-codewhip audit --last 20           # what did it do?
-codewhip audit --verify            # hash-chain check (H1: honest WIP stub)
+codewhip audit --last 20           # tail the hash-chained audit log
+codewhip audit --verify            # re-walk seq/prev_hash + ed25519 signatures
+codewhip audit --replay 20         # readable action replay (newest last)
+codewhip audit --export            # signed content-addressed bundle for an auditor
 ```
 
 Every run prints receipts: `tokens / model mix / $`.
@@ -65,12 +67,14 @@ receipt anyway.
   chains never are, and `.codewhip/**`/`codewhip-policy.yaml` self-protect.
   No vector DB until >500 outcomes prove the pain.
 - **Audit:** `.codewhip/outcomes.jsonl` is written every run
-  (usageByModel, failovers, per-tool allow/deny + ruleIds), and `audit --last N`
-  tails it. Tool output is redacted twice before it can leak: at the model
-  boundary (keys/tokens/PEMs/emails → `[redacted]` in the transcript the
-  provider sees) and at write time. The hash-chained `audit.log` +
-  `--verify/--export` bundle is the Week-3 H1 item — `--verify` already sits
-  in the CLI as an honest stub.
+  (usageByModel, failovers, per-tool allow/deny + ruleIds). Every tool call is
+  also appended to the hash-chained `.codewhip/audit.log`
+  (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`), ed25519-signed
+  with the `init` keypair (`sig: null` in unsigned repos). The log stores hashes
+  only — never raw args or output — so redaction-at-write holds by construction.
+  `audit --verify` re-walks the chain and signatures; `--replay` renders it;
+  `--export` writes a signed content-addressed bundle. Tail tampering is
+  anchored by the bundle's `chain_tail`; non-tail tampering breaks the next link.
 - **Router:** 3 task classes (implement → frontier, polish → cheap Flash-class,
   private → local), `--token-budget` enforced mid-run (
   default 250000), same-provider `--models a,b,c` rotation and one-shot
@@ -88,7 +92,7 @@ src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defau
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 79-test suite
+src/testkit/            $0 fake ChatPort for the 92-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -120,7 +124,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (79 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (92 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.

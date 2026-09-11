@@ -34,7 +34,7 @@ P0 — loop that earns:
 - [x] P0 6 tools (<150 lines each): `read` (offset/limit), `search` (glob+grep merged), `write` (create/overwrite; refuses `.codewhip/**` + `codewhip-policy.yaml`), `edit` (exact + whitespace-insensitive), `bash` (real shell), `git` (status/diff minimal via bash allowlist).
 - [x] P0 Provider interface `LanguageModelV2` (openAiPort) + NVIDIA/Mistral only + `--model`/`--provider` override + `--models a,b,c` 429-only rotation (each once per run) + always-on cost meter (`tokens / mix / $`) + `--token-budget` mid-run stop with partial receipt.
 - [x] P0 policy jail: harness-side (0 prompt tokens), fail-closed defaults (`read:allow edit/write/shell:ask`) + v1 path jail (realpath, no symlink escape) + non-overridable denylist + explicit `denylist:shell-chaining` (newlines/`;`/`|`/`&`/backtick/`$()`).
-- [ ] P0 `.codewhip/audit.log` hash-chained JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`) + `audit --verify/--last/--replay` + secret redaction at write + `--export` signed bundle.
+- [x] P0 `.codewhip/audit.log` hash-chained JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`, ed25519-signed with the `init` key, hashes-only at write) + `audit --verify/--last/--replay` + `--export` signed bundle.
 - [x] P0 `.codewhip/outcomes.jsonl` written every run (allow/deny + ruleIds, usageByModel, failovers) + `always allow` memory in `.codewhip/remembered.jsonl` (v2: curated shapes, provenance {ts/runId/preview_hash}, self-protecting). Future: `memory.md` + `notes/` + inject (~400 tokens) + `memory distill/approve`.
 - [x] P0 `codewhip init` (AGENTS.md + policy digest + keygen) + `codewhip run` (headless + stdin REPL) + auth/models/audit CLI. Future: `--share` redacted link.
 
@@ -88,3 +88,11 @@ P1 — trust that spreads:
 - 2026-09-10 — `outcomes.jsonl` v1 stays frozen: retry/failover lands as
   OPTIONAL `usageByModel[]` + `failovers[]` only (`v:1` literal, all existing
   fields byte-identical). Old readers ignore unknown keys; no migration.
+
+- 2026-09-11 — **Audit chain ships (Week-3 P0 closes).** `src/audit.ts`:
+  every tool call is appended to `.codewhip/audit.log` with
+  `{v,seq,ts,runId,actor,tool,args_hash,result_hash,prev_hash,policy,sig}`,
+  ed25519-signed with the `init` keypair, hashes-only at write (redaction by
+  construction; result hashes match outcomes byte-for-byte). `--verify`
+  re-walks seq/prev_hash/signatures; `--replay` renders; `--export` writes a
+  signed content-addressed bundle (`chain_tail` anchors the tail). 92/92 tests.
