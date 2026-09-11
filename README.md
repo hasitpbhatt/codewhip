@@ -11,7 +11,7 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (57 tests) pins the
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (79 tests) pins the
 policy, jail, memory, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
@@ -33,7 +33,7 @@ uses it doesn't ship in H1.
 ```sh
 npm i -g codewhip
 codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
-codewhip auth login mistral        # optional; nvidia can run keyless on its free tier
+codewhip auth login mistral        # optional; every provider needs a key (see "Provider keys")
 codewhip run "fix the failing test"
 codewhip run "refactor auth" --token-budget 250000
 codewhip audit --last 20           # what did it do?
@@ -48,10 +48,11 @@ receipt anyway.
 ## How it works (design)
 
 - **Loop:** `prompt → stream LLM → permission check → exec → append → repeat`,
-  Ctrl-C safe, `--max-steps 25` hard stop. Six tools: `read`, `search`
+  Ctrl-C safe, `--max-steps 25` hard stop. Five tools: `read`, `search`
   (glob+grep), `write` (create/overwrite, refuses harness state), `edit`,
-  `bash` (real shell), `git-via-bash`. Tool output is capped at transcript
-  push (4000 chars) so one runaway command can't flood the context window.
+  `bash` (real shell); git (`status`/`diff`) rides the bash allowlist rather
+  than a sixth tool. Tool output is capped at transcript push (4000 chars) so
+  one runaway command can't flood the context window.
 - **Policy:** harness-side, never in the prompt (0 tokens for rules).
   Non-overridable denylist + explicit deny on shell chaining
   (newlines, `;`, `|`, `&`, `` ` ` ``, `$()`) — a smuggled
@@ -87,7 +88,7 @@ src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defau
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 57-test suite
+src/testkit/            $0 fake ChatPort for the 79-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -101,7 +102,7 @@ AGENTS.md               working agreement for coding agents
 
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → 6 tools → 3 providers + meter →
+- **H1 (parity + trust):** `agentLoop()` → five tools → 4 providers + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
   (provenanced) → hash-chained audit → `init`/`run`/`--share` →
   3-class router with <$0.05 polish receipt → GitHub Action + 1 starter pack.
@@ -119,7 +120,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (57 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (79 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.
