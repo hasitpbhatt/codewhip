@@ -59,8 +59,11 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
   `--model` override; priced-route table (`$0` known, rest untracked);
   polish gate printed per run (`PASS`/`OPEN`). **Gate status: mechanism
   shipped, live <$0.05 proof still pending a real priced polish run.**
-- [ ] **P1 CI + packs** — `codewhip-action@v1` (same policy in CI, audit link
-  posts to PR); one starter team pack + `pull team/<pack>`.
+- [x] **P1 CI + packs** — `.github/workflows/ci.yml` (typecheck/tests/build,
+  Node 18/20); `actions/run/action.yml` runs the agent headless in CI
+  (ask⇒deny, never yolo) and uploads `.codewhip/` as the audit artifact
+  (PR commenting deliberately unwired v1); one starter team pack
+  (`packs/starter/`) + `pack pull` (local copy, no registry — registry is H2).
 - [x] **P1 policy promotion** — 3 consistent declines of a tool:shape →
   `policy candidates` → `policy approve "<tool:shape>"` appends a `deny`
   line to committable `policy.md` → denied pre-flight from the next run

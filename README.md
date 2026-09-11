@@ -11,8 +11,8 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (127 tests) pins the
-policy, jail, memory, audit chain, share redaction, router, metrics, promotion, and loop. The five Naval agents have debated and
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (133 tests) pins the
+policy, jail, memory, audit chain, share redaction, router, metrics, promotion, packs, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
@@ -101,12 +101,13 @@ src/index.ts            CLI entry (help, run/auth/models/audit)
 src/loop.ts             agentLoop(): stream → permission → exec → append, budget
 src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
 src/policy-store.ts     policy.md promoted denies (declines → candidates → approve)
+src/pack.ts             team policy packs shipped locally (list/pull)
 src/router.ts           3-class task router (implement/polish/private) + polish gate
 src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 127-test suite
+src/testkit/            $0 fake ChatPort for the 133-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -139,7 +140,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (127 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (133 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.
@@ -235,6 +236,16 @@ refused pre-flight (before any token burns) with rule pointer
 `policy.md:deny:<tool>:<shape>`. `policy list` shows what's promoted.
 `policy.md` honors only `deny` lines — promotion can refuse, never permit —
 and the non-overridable denylist still wins over it.
+
+### Team packs + CI
+
+`codewhip pack list` shows packs shipped with the install;
+`pack pull starter` copies the starter `policy.md` (publishing / infra /
+secret-file denies) into your repo. Local-file v1 — no registry, no network.
+`.github/workflows/ci.yml` pins typecheck + tests + build on Node 18/20;
+`actions/run/action.yml` runs the agent headless in CI (ask⇒deny by
+construction, never `--yolo`) and uploads `.codewhip/` as the audit artifact.
+PR commenting is deliberately unwired in v1 — review the trail first.
 
 **Token cost: exactly zero.** Policy is enforced harness-side in
 `src/policy.ts` / `src/remember.ts` — the model never receives the rules, not

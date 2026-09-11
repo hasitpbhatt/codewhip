@@ -40,7 +40,7 @@ P0 — loop that earns:
 
 P1 — trust that spreads:
 - [x] P1 3-class router (implement→nvidia / polish→sensenova / private→local-refused) + classifier + override + polish gate line (live <$0.05 proof pending a real priced run).
-- [ ] P1 `codewhip-action@v1` (same policy in CI, audit link posts to PR) + 1 starter team pack (`pull team/starter-rails`-equivalent).
+- [x] P1 `codewhip-action@v1` (same policy in CI, audit trail as artifact; PR comment unwired v1) + 1 starter team pack (`pack pull`, local).
 - [x] P1 `policy.md` promotion (3 declines → candidate → 1-cmd approve) compiling to pre-flight denies.
 
 ## H2 backlog (ordered)
@@ -127,3 +127,10 @@ P1 — trust that spreads:
   `policy candidates` → `policy approve` appends `deny` to committable
   `policy.md` → denied pre-flight from the next run (`policy.md:deny:…`
   pointer). Deny-only file; denylist still wins. 127/127 tests.
+
+- 2026-09-11 — **CI + packs ship (last H1 box).** `.github/workflows/ci.yml`
+  pins the $0 suite; `actions/run/action.yml` runs the agent headless
+  (ask⇒deny, never yolo) and uploads `.codewhip/` — PR commenting unwired
+  until a team reviews trails first. `packs/starter/` + `pack list/pull`
+  (local copy; registry is H2). Interior-glob matcher added so shipped
+  denies (`.env.*`) actually deny. 133/133 tests. **H1 backlog complete.**

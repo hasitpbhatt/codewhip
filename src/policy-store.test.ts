@@ -52,6 +52,13 @@ describe("policy-store", () => {
     strictEqual(matchesPromoted("edit", "src/secret.ts.bak", denies), null);
     strictEqual(matchesPromoted("edit", "src/secret", denies), null);
   });
+  it("matches interior globs without over-matching", () => {
+    const g = [{ tool: "edit", shape: ".env.*", line: 1 }];
+    ok(matchesPromoted("edit", ".env.local", g) !== null);
+    strictEqual(matchesPromoted("edit", ".env", g), null);
+    // Anchored: "src/.env.local" does not match ".env.*" (documented).
+    strictEqual(matchesPromoted("edit", "src/.env.local", g), null);
+  });
   it("appends idempotently with a header on first write", () => {
     strictEqual(appendPromotedDeny(cwd, "bash", "npm publish *", 3), true);
     strictEqual(appendPromotedDeny(cwd, "bash", "npm publish *", 5), false);

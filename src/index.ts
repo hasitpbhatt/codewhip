@@ -14,6 +14,7 @@ import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
+import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import {
   clearKey,
   configDir,
@@ -58,6 +59,7 @@ function printHelp(): void {
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
+  console.log("  pack                 team policy packs shipped locally (list/pull <name> [--force])");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
@@ -649,6 +651,36 @@ function cmdPolicy(args: string[]): void {
   console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|list]");
 }
 
+function cmdPack(args: string[]): void {
+  const packsDir = defaultPacksDir();
+  const sub = args[0];
+  if (sub === "list") {
+    const packs = listPacks(packsDir);
+    if (packs.length === 0) {
+      console.log("pack: no packs shipped with this install.");
+      return;
+    }
+    console.log(`pack: ${packs.length} pack(s) shipped locally (no registry in H1):`);
+    for (const p of packs) {
+      console.log(`  ${p.name} (v${p.version}) — ${p.description}`);
+    }
+    return;
+  }
+  if (sub === "pull") {
+    const name = args[1] ?? "";
+    const force = args.includes("--force");
+    const result = pullPack(packsDir, process.cwd(), name, force);
+    if ("error" in result) {
+      console.error(`codewhip: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`pack: pulled "${name}" → ${result.path} (enforced from next run; see: codewhip policy list)`);
+    return;
+  }
+  console.log("Usage: codewhip pack [list|pull <name> [--force]]");
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -696,6 +728,10 @@ async function main(): Promise<void> {
   }
   if (command === "policy") {
     cmdPolicy(args.slice(1));
+    return;
+  }
+  if (command === "pack") {
+    cmdPack(args.slice(1));
     return;
   }
   if (command === "models") {

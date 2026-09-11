@@ -1,0 +1,67 @@
+# H1-seeded CI action (v1): run the agent headless, upload the audit trail.
+#
+# Scope: runs against a checkout that CONTAINS the codewhip source (this
+# repo, a fork, or a vendored copy) — it builds from source and runs the
+# local CLI. Cross-repo use (pin codewhip @ref, run it against YOUR repo)
+# is the H2 consumer story, not this file.
+#
+# Same policy in CI by construction: non-interactive runs hold ask-gated
+# calls as denied (loop.ts), --yolo is never passed here, and the denylist
+# applies. PR commenting is intentionally NOT wired in v1 — the audit trail
+# ships as a workflow artifact; review it before acting on it.
+name: "CodeWhip agent run"
+description: "Build codewhip from source, run it headless in CI, and upload .codewhip/ (outcomes, audit chain, share bundle) as an artifact."
+inputs:
+  prompt:
+    description: "Agent task prompt"
+    required: true
+  provider:
+    description: "nvidia|mistral|sensenova|alibaba (default: nvidia)"
+    required: false
+    default: "nvidia"
+  model:
+    description: "Model id (default: provider default)"
+    required: false
+    default: ""
+  task-class:
+    description: "implement|polish|private (default: auto-classify)"
+    required: false
+    default: ""
+  working-directory:
+    description: "Checkout containing the codewhip source"
+    required: false
+    default: "."
+  node-version:
+    description: "Node version for setup-node"
+    required: false
+    default: "20"
+  artifact-name:
+    description: "Artifact name for the .codewhip/ trail"
+    required: false
+    default: "codewhip-audit"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+    - run: npm ci
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+    - run: npm run build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+    - run: node dist/index.js run "${{ inputs.prompt }}" --provider "${{ inputs.provider }}" ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }} ${{ inputs.task-class != '' && format('--class {0}', inputs.task-class) || '' }} --share
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NVIDIA_API_KEY: ${{ env.NVIDIA_API_KEY }}
+        MISTRAL_API_KEY: ${{ env.MISTRAL_API_KEY }}
+        SENSENOVA_API_KEY: ${{ env.SENSENOVA_API_KEY }}
+        ALIBABA_API_KEY: ${{ env.ALIBABA_API_KEY }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.working-directory }}/.codewhip/

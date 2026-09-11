@@ -51,16 +51,28 @@ export function loadPromotedDenies(cwd: string): PromotedDeny[] {
 export function matchesPromoted(tool: string, subject: string, denies: PromotedDeny[]): PromotedDeny | null {
   for (const d of denies) {
     if (d.tool !== tool) continue;
-    if (d.shape.endsWith("*")) {
+    if (!d.shape.includes("*")) {
+      if (subject === d.shape) return d;
+      continue;
+    }
+    if (/^.+\s\*$/.test(d.shape) && d.shape.indexOf("*") === d.shape.length - 1) {
+      // Head form ("echo *"): bare head or head + args. Never over-matches
+      // ("echox" must not hit "echo *").
       const head = d.shape.slice(0, -1).trimEnd();
       if (head.length > 0 && (subject === head || subject.startsWith(head + " "))) {
         return d;
       }
-    } else if (subject === d.shape) {
-      return d;
+      continue;
     }
+    // Interior glob (".env.*", "src/*.generated.ts"): `*` spans anything.
+    const rx = new RegExp(`^${d.shape.split("*").map(escapeRx).join(".*")}$`);
+    if (rx.test(subject)) return d;
   }
   return null;
+}
+
+function escapeRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Append one deny line (idempotent — false when already present or on disk failure). */
