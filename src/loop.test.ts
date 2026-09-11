@@ -60,7 +60,8 @@ describe("loop", () => {
     strictEqual(r.trace[0]?.policy, "deny:denylist:rm -rf /");
     strictEqual(r.trace[1]?.actor, "yolo");
     const { entries } = readAuditLog(runCwd);
-    strictEqual(entries.length, 2);    strictEqual(entries[0]?.tool, "bash");
+    strictEqual(entries.length, 2);
+    strictEqual(entries[0]?.tool, "bash");
     strictEqual(entries[0]?.actor, "policy");
     ok((entries[0]?.policy ?? "").startsWith("deny:"), entries[0]?.policy);
     strictEqual(entries[1]?.actor, "yolo");
@@ -68,6 +69,27 @@ describe("loop", () => {
     const v = verifyChain(runCwd);
     strictEqual(v.valid, true);
     strictEqual(v.total, 2);
+  });
+  it("a declined ask records its shape into outcomes.jsonl", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-decline-"));
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "echo hi" }), { prompt: 10, completion: 0 }),
+      textTurn("done"),
+    ]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: async () => "no", remembered: listRules(runCwd),
+    });
+    strictEqual(r.toolCalls, 1);
+    const raw = fs.readFileSync(path.join(runCwd, ".codewhip", "outcomes.jsonl"), "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+    const last = JSON.parse(lines[lines.length - 1] as string) as {
+      tool_calls: { decision: string; ruleId: string; shape?: string }[];
+    };
+    strictEqual(last.tool_calls.length, 1);
+    strictEqual(last.tool_calls[0]?.decision, "deny");
+    ok((last.tool_calls[0]?.ruleId ?? "").endsWith("+declined"));
+    strictEqual(last.tool_calls[0]?.shape, "echo *");
   });
   it("remembered shape auto-allows without asking", async () => {
     const ev: string[] = [];

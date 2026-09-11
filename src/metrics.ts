@@ -1,8 +1,6 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { estimateCost } from "./router.js";
 import { listRules } from "./remember-store.js";
-import type { OutcomeRecord } from "./outcomes.js";
+import { readOutcomeRecords, type OutcomeRecord } from "./outcomes.js";
 import type { ProviderId } from "./provider.js";
 
 export type MetricsSummary = {
@@ -25,21 +23,7 @@ export type MetricsSummary = {
 };
 
 export function loadOutcomeRecords(cwd: string): OutcomeRecord[] {
-  try {
-    const raw = fs.readFileSync(path.join(cwd, ".codewhip", "outcomes.jsonl"), "utf8");
-    const out: OutcomeRecord[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim().length === 0) continue;
-      try {
-        out.push(JSON.parse(line) as OutcomeRecord);
-      } catch {
-        // Skip malformed lines; audit --verify is the integrity tool.
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
+  return readOutcomeRecords(cwd);
 }
 
 /** Pure aggregation — the unit under test. `nowMs` injects the clock. */

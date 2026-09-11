@@ -2,6 +2,7 @@ import type { ChatPort, LoopMsg } from "./provider-port.js";
 import { TOOLS, toolSpecs, type ToolDef } from "./tools/registry.js";
 import type { ToolResult } from "./tools/types.js";
 import { checkPermission, permissionSubject } from "./policy.js";
+import { loadPromotedDenies } from "./policy-store.js";
 import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
@@ -193,6 +194,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let current = { label: args.label, model: args.model, port: args.port };
   const buckets = new Map<string, UsageBucket>();
   const failoverTrail: FailoverRecord[] = [];
+  /** Promoted policy.md denies, loaded once per run (pre-flight block). */
+  const promoted = loadPromotedDenies(args.cwd);
   let waitedMs = 0;
   let waitedOnce = false;
   let failedOver = false;
@@ -320,8 +323,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         parsed = null;
       }
       const hash = argsHash(parsed ?? call.argsJson);
-      const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string): void => {
-        calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId });
+      const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string, shape?: string): void => {
+        calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId, ...(shape === undefined ? {} : { shape }) });
         auditEntries.push({
           runId,
           actor,
@@ -341,7 +344,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       const preview = previewForLog(call.name, parsed);
       const subject = permissionSubject(def.name, parsed, preview);
-      const verdict = checkPermission(def.name, subject);
+      const verdict = checkPermission(def.name, subject, promoted);
       if (verdict.decision === "deny") {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -397,7 +400,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             if (answer === "no") {
               const out = `held for approval (${verdict.ruleId}) — declined`;
               messages.push({ role: "tool", toolCallId: call.id, content: out });
-              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out);
+              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out, shape ?? undefined);
               emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
               continue;
             }

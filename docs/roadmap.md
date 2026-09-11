@@ -61,9 +61,10 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
   shipped, live <$0.05 proof still pending a real priced polish run.**
 - [ ] **P1 CI + packs** — `codewhip-action@v1` (same policy in CI, audit link
   posts to PR); one starter team pack + `pull team/<pack>`.
-- [ ] **P1 policy promotion** — 3 consistent rejections → candidate in
-  `policy.md` → one-command approve → compiles to pre-flight grep/lint block
-  (generation refused before tokens burn, with rule pointer).
+- [x] **P1 policy promotion** — 3 consistent declines of a tool:shape →
+  `policy candidates` → `policy approve "<tool:shape>"` appends a `deny`
+  line to committable `policy.md` → denied pre-flight from the next run
+  (rule pointer `policy.md:deny:…`; deny-only file, denylist still wins).
 
 ## H2 backlog (ordered)
 

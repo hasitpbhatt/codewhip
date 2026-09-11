@@ -24,6 +24,22 @@ describe("policy", () => {
   it("plain push is not denied", () => {
     strictEqual(checkPermission("bash", "git push origin main").decision, "ask");
   });
+  it("promoted policy.md denies beat the allowlist", () => {
+    const promoted = [{ tool: "bash", shape: "git status *", line: 1 }];
+    const v = checkPermission("bash", "git status", promoted);
+    strictEqual(v.decision, "deny");
+    strictEqual(v.ruleId, "policy.md:deny:bash:git status *");
+  });
+  it("promoted denies never beat the non-overridable denylist", () => {
+    const promoted = [{ tool: "bash", shape: "rm *", line: 1 }];
+    const v = checkPermission("bash", "rm -rf /tmp/x", promoted);
+    strictEqual(v.decision, "deny");
+    strictEqual(v.ruleId, "denylist:rm -rf /");
+  });
+  it("no promoted lines changes nothing", () => {
+    strictEqual(checkPermission("bash", "git status", []).decision, "allow");
+    strictEqual(checkPermission("bash", "echo hi").decision, "ask");
+  });
   it("safe prefixes allow with no chaining", () => {
     strictEqual(checkPermission("bash", "git status").decision, "allow");
     strictEqual(checkPermission("bash", "git diff HEAD").decision, "allow");

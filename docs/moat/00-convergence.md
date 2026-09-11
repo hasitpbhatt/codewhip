@@ -41,7 +41,7 @@ P0 — loop that earns:
 P1 — trust that spreads:
 - [x] P1 3-class router (implement→nvidia / polish→sensenova / private→local-refused) + classifier + override + polish gate line (live <$0.05 proof pending a real priced run).
 - [ ] P1 `codewhip-action@v1` (same policy in CI, audit link posts to PR) + 1 starter team pack (`pull team/starter-rails`-equivalent).
-- [ ] P1 `policy.md` promotion (3 consistent rejections → candidate → 1-cmd approve) compiling to pre-flight grep/lint blocks.
+- [x] P1 `policy.md` promotion (3 declines → candidate → 1-cmd approve) compiling to pre-flight denies.
 
 ## H2 backlog (ordered)
 
@@ -120,3 +120,10 @@ P1 — trust that spreads:
   counted never fiction-priced), memory lines/week. Task success stays
   "unmeasurable" until verdict instrumentation exists — reported, not faked.
   116/116 tests.
+
+- 2026-09-11 — **Policy promotion ships (P1 flywheel seed).**
+  `src/policy-store.ts`: declines persist their shape (optional outcomes
+  field, freeze-compatible); 3+ declines of a tool:shape →
+  `policy candidates` → `policy approve` appends `deny` to committable
+  `policy.md` → denied pre-flight from the next run (`policy.md:deny:…`
+  pointer). Deny-only file; denylist still wins. 127/127 tests.

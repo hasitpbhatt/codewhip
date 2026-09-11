@@ -12,6 +12,8 @@ export type OutcomeToolCall = {
   result_hash: string;
   decision: string;
   ruleId: string;
+  /** Optional since promotion: curated/memory shape (e.g. "echo *"), set on declines. */
+  shape?: string;
 };
 
 export type FailoverRecord = {
@@ -80,5 +82,24 @@ export function readLastOutcomes(cwd: string, n: number): string {
     return lines.slice(-Math.max(1, n)).join("\n");
   } catch {
     return "";
+  }
+}
+
+/** All outcome records, skipping malformed lines (audit --verify is the integrity tool). */
+export function readOutcomeRecords(cwd: string): OutcomeRecord[] {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, ".codewhip", "outcomes.jsonl"), "utf8");
+    const out: OutcomeRecord[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.trim().length === 0) continue;
+      try {
+        out.push(JSON.parse(line) as OutcomeRecord);
+      } catch {
+        // Skip malformed lines.
+      }
+    }
+    return out;
+  } catch {
+    return [];
   }
 }

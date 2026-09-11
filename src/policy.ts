@@ -1,8 +1,9 @@
 import type { Permission, ToolName } from "./tools/types.js";
+import { matchesPromoted, type PromotedDeny } from "./policy-store.js";
 
 export type PermissionDecision = {
   decision: Permission;
-  /** Auditable rule pointer: denylist:<pattern> | allowlist:<prefix> | default:<scope> */
+  /** Auditable rule pointer: denylist:<pattern> | policy.md:deny:<tool>:<shape> | allowlist:<prefix> | default:<scope> */
   ruleId: string;
   reason: string;
 };
@@ -75,7 +76,7 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
 }
 
 export const POLICY_VERSION = "v1-2026-09-10";
-export function checkPermission(tool: ToolName, commandPreview: string): PermissionDecision {
+export function checkPermission(tool: ToolName, commandPreview: string, promoted: PromotedDeny[] = []): PermissionDecision {
   const denied = matchDenylist(commandPreview);
   if (denied !== null) {
     return {
@@ -92,6 +93,17 @@ export function checkPermission(tool: ToolName, commandPreview: string): Permiss
       decision: "deny",
       ruleId: "denylist:shell-chaining",
       reason: "shell chaining/statement separation is denied (newlines, ;, |, &, `, $())",
+    };
+  }
+  // Promoted denies (policy.md, compiled from repeated human declines) beat
+  // the allowlist and ask-defaults — refused before any token burns — but
+  // never the non-overridable denylist above.
+  const hit = matchesPromoted(tool, commandPreview, promoted);
+  if (hit !== null) {
+    return {
+      decision: "deny",
+      ruleId: `policy.md:deny:${hit.tool}:${hit.shape}`,
+      reason: `promoted deny from policy.md line ${hit.line} ("${hit.tool}:${hit.shape}")`,
     };
   }
   if (tool === "read" || tool === "search") {

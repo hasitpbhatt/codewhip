@@ -13,6 +13,7 @@ import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAud
 import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
+import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import {
   clearKey,
   configDir,
@@ -56,6 +57,7 @@ function printHelp(): void {
   console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
+  console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
@@ -597,6 +599,56 @@ function cmdAudit(args: string[]): void {
   console.log("Usage: codewhip audit [--verify] [--last N] [--replay N] [--export [path]]");
 }
 
+function cmdPolicy(args: string[]): void {
+  const cwd = process.cwd();
+  const sub = args[0];
+  if (sub === "list") {
+    const denies = loadPromotedDenies(cwd);
+    if (denies.length === 0) {
+      console.log("policy: no promoted denies (policy.md missing or empty).");
+      return;
+    }
+    console.log(`policy: ${denies.length} promoted denies (${policyMdPath(cwd)}):`);
+    for (const d of denies) {
+      console.log(`  deny ${d.tool}:${d.shape}  (line ${d.line})`);
+    }
+    return;
+  }
+  if (sub === "candidates") {
+    const cands = declineCandidates(cwd);
+    if (cands.length === 0) {
+      console.log("policy: no promotion candidates (need 3+ declines of the same tool:shape).");
+      return;
+    }
+    console.log(`policy: ${cands.length} candidate(s) — approve with: codewhip policy approve "<tool:shape>"`);
+    for (const c of cands) {
+      console.log(`  ${c.tool}:${c.shape}  (${c.count} declines)`);
+    }
+    return;
+  }
+  if (sub === "approve") {
+    const raw = args[1] ?? "";
+    const sep = raw.indexOf(":");
+    const tool = raw.slice(0, sep);
+    const shape = raw.slice(sep + 1);
+    if (sep <= 0 || shape.length === 0) {
+      console.error('usage: codewhip policy approve "<tool:shape>"  (e.g. "bash:npm publish *")');
+      process.exitCode = 1;
+      return;
+    }
+    const cands = declineCandidates(cwd, 1);
+    const known = cands.find((c) => c.tool === tool && c.shape === shape);
+    if (!appendPromotedDeny(cwd, tool, shape, known?.count ?? 0)) {
+      console.error(`policy: "${tool}:${shape}" is already promoted (or the disk failed) — see policy list.`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`policy: approved deny ${tool}:${shape} → ${policyMdPath(cwd)} (pre-flight from next run)`);
+    return;
+  }
+  console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|list]");
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -640,6 +692,10 @@ async function main(): Promise<void> {
   }
   if (command === "metrics") {
     console.log(renderMetrics(summarizeCwd(process.cwd())));
+    return;
+  }
+  if (command === "policy") {
+    cmdPolicy(args.slice(1));
     return;
   }
   if (command === "models") {
