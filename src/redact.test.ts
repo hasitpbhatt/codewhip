@@ -20,6 +20,9 @@ describe("redact", () => {
     strictEqual(redactSecrets("token abcd1234efgh5678ijkl9012 tail"), "token [redacted] tail");
     ok(redactSecrets("key Tx7qW2mZ9 synthetic-fixture-4kD8vN0pL").includes("[redacted]")); // synthetic shape, not a real key
   });
+it("leaves ordinary filenames with two digits visible", () => {
+    strictEqual(redactSecrets("edit top-10-things-learned-late.md"), "edit top-10-things-learned-late.md");
+  });
   it("masks env-assignment values but keeps names", () => {
     strictEqual(redactEnvValues("DATABASE_URL=postgres://u:p@h/db"), "DATABASE_URL= [redacted]");
     strictEqual(redactEnvValues("export AWS_SECRET=abc123"), "export AWS_SECRET= [redacted]");

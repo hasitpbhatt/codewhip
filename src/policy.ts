@@ -146,7 +146,7 @@ export function matchWorktreeEscape(command: string): string | null {
   if (/(^|[/\\\s;"'`(=])\.\.(?=[/\\\s;"'`]|$)/.test(command)) {
     return "parent-directory traversal (..) escapes the worktree";
   }
-  if (/(^|[\s;"'`(=])([a-zA-Z]:[\\/]|\\\\|\/|~(?=[/\\]|$))/.test(command)) {
+  if (/(^|[\s;"'`(=])([a-zA-Z]:[\\/]|\\\\|\/(?![a-zA-Z](?:\s|$))|~(?=[/\\]|$))/.test(command)) {
     return "absolute path escapes the worktree";
   }
   return null;

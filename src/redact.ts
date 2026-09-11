@@ -4,10 +4,11 @@ const PATTERNS: RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bghp_[A-Za-z0-9]+\b/g,
   // Generic high-entropy token (bare key leak without an env name):
-  // 20+ chars, must contain a letter AND a digit — avoids masking ordinary
-  // words/hashes while catching mistral/sensenova/alibaba-style tokens.
+  // 20+ chars, at least one letter and three digits — avoids masking
+  // ordinary filenames (e.g. top-10-things-learned-late.md) while
+  // catching mistral/sensenova/alibaba-style tokens.
   // Best-effort by design; .env read-denial remains the first net.
-  /\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}\b/g,
+  /\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=(?:[^0-9]*[0-9]){3})[A-Za-z0-9_-]{20,}\b/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
 ];

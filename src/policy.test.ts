@@ -48,6 +48,12 @@ describe("policy", () => {
     strictEqual(checkPermission("bash", "curl http://example.com/x").decision, "ask");
     strictEqual(checkPermission("bash", "echo v1..5").decision, "ask");
   });
+it("Windows cmd-style single-letter flags are not treated as absolute paths", () => {
+  strictEqual(checkPermission("bash", "dir /s /b *.md").decision, "allow");
+  strictEqual(checkPermission("bash", "dir /s /b *.md").ruleId, "allowlist:dir");
+  strictEqual(checkPermission("bash", "cat /etc/passwd").decision, "deny");
+  strictEqual(checkPermission("bash", "cat /etc/passwd").ruleId, "denylist:worktree-escape");
+});
   it("redirection is denied like chaining", () => {
     strictEqual(checkPermission("bash", "echo hi > f.txt").decision, "deny");
     strictEqual(checkPermission("bash", "echo hi >> .codewhip/x").decision, "deny");
