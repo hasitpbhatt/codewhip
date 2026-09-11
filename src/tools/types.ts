@@ -1,4 +1,4 @@
-export type ToolName = "read" | "search" | "edit" | "bash";
+export type ToolName = "read" | "search" | "edit" | "write" | "bash";
 
 export type ToolResult = {
   ok: boolean;

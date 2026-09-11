@@ -30,13 +30,13 @@ Claim L: Vercel AI SDK `LanguageModelV2` + models.dev + 3-class router (implemen
 ## H1 backlog (ordered, solo-builder sized)
 
 P0 — loop that earns:
-- [ ] P0 `agentLoop()`: messages+tools → stream → permission check → exec → append; Ctrl-C cancels stream + kills tool, keeps transcript; `--max-steps 25` hard stop + partial + cost.
-- [ ] P0 5 tools (<150 lines each): `read` (offset/limit), `search` (glob+grep merged), `edit` (exact + whitespace-insensitive + fuzzy), `bash` (deny-by-default), `git` (status/diff minimal via bash allowlist).
-- [ ] P0 Provider interface `LanguageModelV2` + Anthropic/OpenAI/Ollama only + `--model` override + always-on cost meter (`tokens / mix / $`) + `--budget $0.50` preflight/mid-run downgrade.
-- [ ] P0 `codewhip-policy.yaml` (LAST-match-wins, fail-closed `read:allow edit:ask shell:ask external:deny`) + v1 path jail (realpath, no symlink escape) + non-overridable denylist (`rm -rf /`, `push --force`, exfil patterns).
+- [x] P0 `agentLoop()`: messages+tools → stream → permission check → exec → append; Ctrl-C cancels stream + kills tool, keeps transcript; `--max-steps 25` hard stop + partial + cost; `--token-budget` (default 250000) enforced mid-run.
+- [x] P0 6 tools (<150 lines each): `read` (offset/limit), `search` (glob+grep merged), `write` (create/overwrite; refuses `.codewhip/**` + `codewhip-policy.yaml`), `edit` (exact + whitespace-insensitive), `bash` (real shell), `git` (status/diff minimal via bash allowlist).
+- [x] P0 Provider interface `LanguageModelV2` (openAiPort) + NVIDIA/Mistral only + `--model`/`--provider` override + `--models a,b,c` 429-only rotation (each once per run) + always-on cost meter (`tokens / mix / $`) + `--token-budget` mid-run stop with partial receipt.
+- [x] P0 policy jail: harness-side (0 prompt tokens), fail-closed defaults (`read:allow edit/write/shell:ask`) + v1 path jail (realpath, no symlink escape) + non-overridable denylist + explicit `denylist:shell-chaining` (newlines/`;`/`|`/`&`/backtick/`$()`).
 - [ ] P0 `.codewhip/audit.log` hash-chained JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`) + `audit --verify/--last/--replay` + secret redaction at write + `--export` signed bundle.
-- [ ] P0 `.codewhip/outcomes.jsonl` (verdict: accepted|edited|reverted|rejected + tests) + `memory.md` (<100 lines, do/don't/gotchas) + per-path `notes/` + inject (~400 tokens) + `memory distill/approve`.
-- [ ] P0 `codewhip init` (30s: AGENTS.md + policy.yaml + keygen) + `codewhip run` (headless + stdin REPL) + `--share` redacted link (env/keys/emails stripped).
+- [x] P0 `.codewhip/outcomes.jsonl` written every run (allow/deny + ruleIds, usageByModel, failovers) + `always allow` memory in `.codewhip/remembered.jsonl` (v2: curated shapes, provenance {ts/runId/preview_hash}, self-protecting). Future: `memory.md` + `notes/` + inject (~400 tokens) + `memory distill/approve`.
+- [x] P0 `codewhip init` (AGENTS.md + policy digest + keygen) + `codewhip run` (headless + stdin REPL) + auth/models/audit CLI. Future: `--share` redacted link.
 
 P1 — trust that spreads:
 - [ ] P1 3-class router (implement→Sonnet-class / polish→cheap Flash-class / private→local) + proven <$0.05 polish receipt before any launch.
@@ -72,6 +72,18 @@ P1 — trust that spreads:
 - **Trusted runs/team/week** (runs with zero bypasses + shared audit): H1 bar ≥4–5/week for pilot teams; north-star for H2 pricing (free → $20 pro → $40 team).
 
 ## Rulings log (additive, newest last)
+
+- 2026-09-10 — **Memory mutation schema change (Ruling 4 compliance).**
+  "Always allow" memory moves out of `codewhip-policy.yaml` into a dedicated
+  append-only `.codewhip/remembered.jsonl`, one rule per line with provenance
+  `{tool, shape, ts, runId, preview_hash}`. Two hardening fixes land with it:
+  (1) shapes are CURATED — only a short allowlist of heads may be remembered,
+  and redirects/pipes/chains are unmemorable, closing the
+  `echo x > .git/hooks/*` over-permit; (2) the harness self-protects — writing
+  `.codewhip/**` or `codewhip-policy.yaml` is refused by both the new `write`
+  tool and the memory path. `codewhip-policy.yaml` keeps deny + defaults only.
+  Ruling 4 (unverifiable memory doesn't ship) is what forces the provenance
+  fields; policy/memory stay harness-side and token-free by construction.
 
 - 2026-09-10 — `outcomes.jsonl` v1 stays frozen: retry/failover lands as
   OPTIONAL `usageByModel[]` + `failovers[]` only (`v:1` literal, all existing

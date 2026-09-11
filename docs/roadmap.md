@@ -15,33 +15,37 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
 
 ### P0 — the loop that earns
 
-- [ ] **P0 `agentLoop()`** — `messages+tools → stream → permission check → exec
+- [x] **P0 `agentLoop()`** — `messages+tools → stream → permission check → exec
   → append → repeat`; Ctrl-C cancels stream + kills tool, keeps transcript;
-  `--max-steps 25` hard stop with partial result + cost. Single async function,
-  no server/worker threads. Headless `run "…"` + stdin REPL first.
-- [ ] **P0 five tools (<150 lines each)** — `read` (offset/limit), `search`
-  (glob+grep merged), `edit` (exact + whitespace-insensitive + fuzzy;
-  3 strategies, not 9), `bash` (deny-by-default), git via bash allowlist
-  (`status`, `diff`).
-- [ ] **P0 provider interface** — one `LanguageModelV2`-style interface
-  (`streamText` + tools); wire Anthropic + OpenAI + Ollama only; `--model`
-  override; always-on cost meter (`tokens / model mix / $`); `--budget $0.50`
-  with preflight estimate + mid-run downgrade-or-stop.
-- [ ] **P0 policy jail** — `codewhip-policy.yaml`, LAST-match-wins,
-  fail-closed defaults (`read:allow edit:ask shell:ask external:deny`);
-  v1 path jail (realpath, no symlink escape); non-overridable denylist
-  (`rm -rf /`, `push --force`, exfil patterns). Ask-default; `--yolo`
-  explicit, logged, bannered; CI `ask ⇒ deny` unless signed `--approve-all`.
+  `--max-steps 25` hard stop with partial result + cost; `--token-budget`
+  (default 250000) enforced mid-run. Single async function, no server/worker
+  threads. Headless `run "…"` + stdin REPL first.
+- [x] **P0 six tools (<150 lines each)** — `read` (offset/limit), `search`
+  (glob+grep), `write` (create/overwrite, refuses `.codewhip/**` and
+  `codewhip-policy.yaml`), `edit` (exact + whitespace-insensitive), `bash`
+  (real shell, chaining-deny), git via bash allowlist (`status`, `diff`).
+- [x] **P0 provider interface** — one `LanguageModelV2`-style interface
+  (`openAiPort` ChatPort) over NVIDIA + Mistral; `--model`/`--provider`
+  override; `--models a,b,c` 429-only rotation (each once per run);
+  always-on cost meter (`tokens / model mix / $`); `--token-budget` enforced
+  mid-run (default 250000).
+- [x] **P0 policy jail** — harness-side (0 prompt tokens), fail-closed defaults
+  (`read:allow edit/write/shell:ask`); v1 path jail (realpath, symlink-aware);
+  non-overridable denylist (`rm -rf /`, `push --force`, …); explicit
+  `denylist:shell-chaining` on any statement separator (newlines, `;`, `|`,
+  `&`, `` ` ` ``, `$()`) — a smuggled `git status\nrm -rf .git` is denied, not
+  asked. Ask-default; `--yolo` explicit, logged, bannered; CI `ask ⇒ deny`.
 - [ ] **P0 audit chain** — `.codewhip/audit.log`, append-only hash-chained
   JSONL (`seq/ts/actor/tool/args_hash/result_hash/prev_hash/policy/sig`);
   secret redaction at write; `audit --verify/--last/--replay`; `--export`
   signed bundle (auditor artifact).
-- [ ] **P0 memory sidecar** — `.codewhip/outcomes.jsonl` (verdict
-  `accepted|edited|reverted|rejected` + tests + model + diff hash);
-  `memory.md` (<100 lines: do / don't / gotchas, evidence-linked);
-  `notes/<path>.md` (≤20 lines each); inject ~400 tokens/run;
-  `memory distill` (≤3 proposals from last 50 outcomes) + `memory approve`.
-  Memory writes are audited tool calls — no provenance, no ship.
+- [x] **P0 memory sidecar (v1 shipped)** — `.codewhip/outcomes.jsonl` written
+  every run (`v:1`; per-tool allow/deny + ruleIds, usageByModel[], failovers[]);
+  ``always allow`` memory in `.codewhip/remembered.jsonl` with provenance
+  (`ts/runId/preview_hash`), curated shapes only, self-protecting.
+  Future: `memory.md` (<100 lines: do/don't/gotchas), `notes/<path>.md`,
+  inject ~400 tokens/run, `memory distill/approve` — all audited tool calls
+  (no provenance, no ship).
 - [ ] **P0 entry points** — `codewhip init` (30s: `AGENTS.md` + policy +
   local ed25519 keygen); `codewhip run` (headless + REPL); `--share`
   redacted link (env values, keys, emails stripped via allowlist regex).

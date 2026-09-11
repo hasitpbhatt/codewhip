@@ -20,7 +20,9 @@ export function isEditArgs(x: unknown): x is EditArgs {
 }
 
 function squash(s: string): string {
-  return s.replace(/[ \t]+/g, " ");
+  // Strip a trailing CR so CRLF files match LF block comparisons; the file's
+  // own line endings are preserved on write (untouched lines keep their \r).
+  return s.replace(/\r$/g, "").replace(/[ \t]+/g, " ");
 }
 
 function writeEdit(safe: string, display: string, updated: string, strategy: string): ToolResult {
@@ -57,7 +59,7 @@ export async function editTool(ctx: ToolContext, args: EditArgs): Promise<ToolRe
     }
     text = fs.readFileSync(safe, "utf8");
   } catch {
-    return { ok: false, output: `edit: not found: ${args.path}` };
+    return { ok: false, output: `edit: not found: ${args.path} (edit only works on existing files — create new files with write)` };
   }
   // Strategy 1: exact (reproducible under audit replay).
   if (text.includes(args.oldString)) {

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
+import type { ProviderId } from "./provider.js";
 
 export type OutcomeToolCall = {
   seq: number;
@@ -22,7 +23,7 @@ export type FailoverRecord = {
 };
 
 export type UsageBucket = {
-  label: string;
+  label: ProviderId;
   model: string;
   prompt: number;
   completion: number;
@@ -68,5 +69,16 @@ export function appendOutcome(cwd: string, record: OutcomeRecord): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Tail of the audit chain (lines are already write-redacted). "" when empty/missing. */
+export function readLastOutcomes(cwd: string, n: number): string {
+  try {
+    const file = path.join(cwd, ".codewhip", "outcomes.jsonl");
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.trim().length > 0);
+    return lines.slice(-Math.max(1, n)).join("\n");
+  } catch {
+    return "";
   }
 }

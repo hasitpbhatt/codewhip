@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ToolContext, ToolResult } from "./types.js";
-import { matchDenylist } from "../policy.js";
+import { CHAIN_RX, matchDenylist } from "../policy.js";
 
 export const BASH_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -20,33 +20,6 @@ export function isBashArgs(x: unknown): x is BashArgs {
   );
 }
 
-/** Minimal argv split (quotes respected). No shell is ever spawned. */
-function splitArgv(command: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  for (const ch of command) {
-    if (quote !== null) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        cur += ch;
-      }
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === " " || ch === "\t") {
-      if (cur.length > 0) {
-        out.push(cur);
-        cur = "";
-      }
-    } else {
-      cur += ch;
-    }
-  }
-  if (cur.length > 0) out.push(cur);
-  return out;
-}
-
 export async function bashTool(
   ctx: ToolContext,
   args: BashArgs,
@@ -63,19 +36,30 @@ export async function bashTool(
   if (denied !== null) {
     return { ok: false, output: `bash: denied by denylist:${denied} (non-overridable)` };
   }
+  // Defense-in-depth: the loop's policy denies chaining before exec, but the
+  // shell is a privileged primitive — refuse separators here too so a future
+  // non-loop caller can't smuggle statements past the prefix allowlist.
+  if (CHAIN_RX.test(command)) {
+    return { ok: false, output: "bash: shell chaining/statement separation is denied (newlines, ;, |, &, `, $())" };
+  }
   const timeout = args.timeoutMs ?? BASH_TIMEOUT_MS;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 120000) {
     return { ok: false, output: "bash: `timeoutMs` must be an integer 1000..120000" };
   }
-  const argv = splitArgv(command);
-  const file = argv[0];
-  if (file === undefined) {
-    return { ok: false, output: "bash: missing required arg `command` (string)" };
-  }
+  // Shell-spawn (post Week-1 evidence): raw execFile without a shell made
+  // ordinary commands (`touch`, `echo x >> f`, `>` redirection) un-runnable —
+  // the model obeyed the old NO-shell prompt and every call failed. The shell
+  // runs jailed at ctx.cwd with timeout kill; the denylist still screens the
+  // raw command string BEFORE spawn and stays non-overridable.
+  const isWin = process.platform === "win32";
+  const shell = isWin ? "powershell.exe" : "/bin/sh";
+  const shellArgs = isWin
+    ? ["-NoProfile", "-NonInteractive", "-Command", command]
+    : ["-c", command];
   return new Promise((resolve) => {
     execFile(
-      file,
-      argv.slice(1),
+      shell,
+      shellArgs,
       { cwd: ctx.cwd, timeout, maxBuffer: 512 * 1024, windowsHide: true, signal },
       (err, stdout, stderr) => {
         let combined = stdout;

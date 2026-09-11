@@ -8,8 +8,10 @@ const PATTERNS: RegExp[] = [
 ];
 
 /**
- * Pure secret scrubber. Call at write boundaries (outcomes/audit/share),
- * never as display plumbing. Keys, tokens, private keys, emails → [redacted].
+ * Pure secret scrubber. Called at the model boundary (loop transcript push)
+ * and at write boundaries (outcomes/audit/share) — never as display plumbing.
+ * Keys, tokens, private keys, emails → [redacted]. Pattern-based, best-effort:
+ * reads that return exotic secret formats still need the .env read-denial net.
  */
 export function redactSecrets(text: string): string {
   let out = text;

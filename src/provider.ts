@@ -7,35 +7,122 @@ import type {
   RetryableKind,
 } from "./provider-port.js";
 
-export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com";
-export const NVIDIA_DEFAULT_MODEL = "moonshotai/kimi-k3";
-export const MISTRAL_BASE_URL = "https://api.mistral.ai";
-export const MISTRAL_DEFAULT_MODEL = "mistral-small-latest";
+/**
+ * Provider registry — adding a provider is ONE table row, nothing else.
+ * The loop only ever sees a ChatPort; openAiPort adapts any config.
+ */
+
+export type ProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba";
+
+export const PROVIDER_IDS: readonly ProviderId[] = [
+  "nvidia",
+  "mistral",
+  "sensenova",
+  "alibaba",
+];
+
+export type ProviderConfig = {
+  id: ProviderId;
+  /** Display/error prefix. */
+  brand: string;
+  /** Origin only — chatPath/modelsPath are appended (fixes mixed /v1 layouts). */
+  baseUrl: string;
+  /** Chat-completions path appended to baseUrl. */
+  chatPath: string;
+  /** Model-listing path appended to baseUrl (`codewhip models`). */
+  modelsPath: string;
+  defaultModel: string;
+  envVar: string;
+  keyUrl: string;
+  timeoutMs: number;
+  /** Optional 429-specific hint (provider quota nuance). */
+  rateLimitedHint?: string;
+};
+
 const NVIDIA_TIMEOUT_MS = 45000;
 const MISTRAL_TIMEOUT_MS = 45000;
+const SENSENOVA_TIMEOUT_MS = 45000;
+const ALIBABA_TIMEOUT_MS = 45000;
 const MAX_BODY_CHARS = 500;
 
-export type ChatRole = "system" | "user";
-
-export type ChatMessage = {
-  role: ChatRole;
-  content: string;
+export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
+  nvidia: {
+    id: "nvidia",
+    brand: "nvidia",
+    baseUrl: "https://integrate.api.nvidia.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "moonshotai/kimi-k3",
+    envVar: "NVIDIA_API_KEY",
+    keyUrl: "https://build.nvidia.com/settings/api-keys",
+    timeoutMs: NVIDIA_TIMEOUT_MS,
+    rateLimitedHint: "free tier ~40 req/min — wait and retry",
+  },
+  mistral: {
+    id: "mistral",
+    brand: "mistral",
+    baseUrl: "https://api.mistral.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "mistral-small-latest",
+    envVar: "MISTRAL_API_KEY",
+    keyUrl: "https://console.mistral.ai",
+    timeoutMs: MISTRAL_TIMEOUT_MS,
+    rateLimitedHint:
+      "free mode caps RPS + tokens/min + tokens/month — see Limits in console.mistral.ai",
+  },
+  sensenova: {
+    id: "sensenova",
+    brand: "sensenova",
+    baseUrl: "https://token.sensenova.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "sensenova-6.8-flash-lite",
+    envVar: "SENSENOVA_API_KEY",
+    keyUrl: "https://token.sensenova.ai",
+    timeoutMs: SENSENOVA_TIMEOUT_MS,
+  },
+  alibaba: {
+    id: "alibaba",
+    brand: "alibaba",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "qwen-plus",
+    envVar: "ALIBABA_API_KEY",
+    keyUrl: "https://dashscope-intl.aliyun.com",
+    timeoutMs: ALIBABA_TIMEOUT_MS,
+  },
 };
 
-export type ProviderSuccess = {
-  ok: true;
-  text: string;
-  promptTokens: number;
-  completionTokens: number;
-  model: string;
-};
+export function parseProviderId(value: string | undefined): ProviderId | null {
+  return (PROVIDER_IDS as readonly string[]).includes(value ?? "")
+    ? (value as ProviderId)
+    : null;
+}
 
-export type ProviderFailure = {
-  ok: false;
-  error: string;
-};
+export function chatUrlFor(cfg: ProviderConfig): string {
+  return `${cfg.baseUrl}${cfg.chatPath}`;
+}
 
-export type ProviderResult = ProviderSuccess | ProviderFailure;
+export function modelsUrlFor(cfg: ProviderConfig): string {
+  return `${cfg.baseUrl}${cfg.modelsPath}`;
+}
+
+function genericHint(cfg: ProviderConfig): (status: number, body: string) => string {
+  return (status, body) => {
+    if (status === 401 || status === 403) {
+      return `invalid or missing ${cfg.envVar} (get one at ${cfg.keyUrl})`;
+    }
+    if (status === 404 || status === 410) {
+      return `unknown or retired model (list live ones via "codewhip models ${cfg.id}"). ${body}`;
+    }
+    if (status === 429) {
+      return `rate limited on ${cfg.brand}${cfg.rateLimitedHint !== undefined ? ` — ${cfg.rateLimitedHint}` : ""}`;
+    }
+    return `${cfg.brand} api error ${status}. ${body}`;
+  };
+}
 
 type NvidiaToolCallMsg = {
   id?: unknown;
@@ -53,91 +140,6 @@ function toCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0;
-}
-
-function statusHint(status: number, body: string): string {
-  if (status === 401 || status === 403) {
-    return "invalid or missing NVIDIA_API_KEY (get one at https://build.nvidia.com/settings/api-keys)";
-  }
-  if (status === 404 || status === 410) {
-    return `unknown or retired model (list live ones via GET ${NVIDIA_BASE_URL}/v1/models). ${body}`;
-  }
-  if (status === 429) {
-    return "rate limited (free tier ~40 req/min) — wait and retry";
-  }
-  return `nvidia api error ${status}. ${body}`;
-}
-
-export async function chatNvidia(args: {
-  apiKey: string;
-  model: string;
-  messages: ChatMessage[];
-  maxTokens?: number;
-  timeoutMs?: number;
-}): Promise<ProviderResult> {
-  if (args.apiKey.length === 0) {
-    return { ok: false, error: "missing api key" };
-  }
-  if (args.model.length === 0 || args.model.length > 200) {
-    return { ok: false, error: "bad model id (empty or >200 chars)" };
-  }
-  if (args.messages.length === 0) {
-    return { ok: false, error: "no messages to send" };
-  }
-  const maxTokens = args.maxTokens ?? 1024;
-  if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 8192) {
-    return { ok: false, error: "maxTokens must be an integer 1..8192" };
-  }
-  let res: Response;
-  try {
-    res = await fetch(`${NVIDIA_BASE_URL}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${args.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: args.model,
-        messages: args.messages,
-        max_tokens: maxTokens,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(args.timeoutMs ?? NVIDIA_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const name = err instanceof Error ? err.name : "";
-    if (name === "TimeoutError" || name === "AbortError") {
-      return { ok: false, error: `nvidia api timed out after ${args.timeoutMs ?? NVIDIA_TIMEOUT_MS}ms` };
-    }
-    return { ok: false, error: `network error: ${err instanceof Error ? err.message : "fetch failed"}` };
-  }
-  if (!res.ok) {
-    let body = "";
-    try {
-      body = (await res.text()).slice(0, MAX_BODY_CHARS);
-    } catch {
-      body = "";
-    }
-    return { ok: false, error: statusHint(res.status, body) };
-  }
-  let data: NvidiaChatResponse;
-  try {
-    data = (await res.json()) as NvidiaChatResponse;
-  } catch {
-    return { ok: false, error: "nvidia api returned invalid JSON" };
-  }
-  const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
-  const content = first?.message?.content;
-  if (typeof content !== "string" || content.length === 0) {
-    return { ok: false, error: "nvidia api returned no text" };
-  }
-  return {
-    ok: true,
-    text: content,
-    promptTokens: toCount(data.usage?.prompt_tokens),
-    completionTokens: toCount(data.usage?.completion_tokens),
-    model: args.model,
-  };
 }
 
 function toWireMessages(messages: LoopMsg[]): Array<Record<string, unknown>> {
@@ -172,19 +174,6 @@ function toLoopToolCalls(raw: Array<NvidiaToolCallMsg> | undefined): LoopToolCal
     }
   }
   return out;
-}
-
-function mistralStatusHint(status: number, body: string): string {
-  if (status === 401 || status === 403) {
-    return "invalid MISTRAL_API_KEY (create one at console.mistral.ai)";
-  }
-  if (status === 404 || status === 410) {
-    return `unknown or retired mistral model. ${body}`;
-  }
-  if (status === 429) {
-    return "mistral rate limited (free mode caps RPS + tokens/min + tokens/month — see Limits in console.mistral.ai)";
-  }
-  return `mistral api error ${status}. ${body}`;
 }
 
 /**
@@ -232,14 +221,11 @@ function httpFailure(
   return failure;
 }
 
-function openAiPort(args: {
-  baseUrl: string;
-  brand: string;
-  apiKey: string;
-  hint: (status: number, body: string) => string;
-  timeoutMs: number;
-}): ChatPort {
-  const { baseUrl, brand, apiKey, hint, timeoutMs: limit } = args;
+function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): ChatPort {
+  const baseUrl = chatUrlFor(cfg);
+  const brand = cfg.brand;
+  const hint = genericHint(cfg);
+  const limit = timeoutMs ?? cfg.timeoutMs;
   return async ({ model, messages, tools, signal }): Promise<ChatPortResponse> => {
     if (apiKey.length === 0) {
       return { ok: false, error: "missing api key", retryable: "other" };
@@ -257,7 +243,7 @@ function openAiPort(args: {
         }
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const res = await fetch(baseUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -318,24 +304,7 @@ function openAiPort(args: {
   };
 }
 
-/** Tool-calling adapter implementing the loop's ChatPort over NVIDIA. */
-export function makeNvidiaPort(apiKey: string, timeoutMs?: number): ChatPort {
-  return openAiPort({
-    baseUrl: NVIDIA_BASE_URL,
-    brand: "nvidia",
-    apiKey,
-    hint: statusHint,
-    timeoutMs: timeoutMs ?? NVIDIA_TIMEOUT_MS,
-  });
-}
-
-/** Mistral adapter implementing the loop's ChatPort (OpenAI-compatible). */
-export function makeMistralPort(apiKey: string, timeoutMs?: number): ChatPort {
-  return openAiPort({
-    baseUrl: MISTRAL_BASE_URL,
-    brand: "mistral",
-    apiKey,
-    hint: mistralStatusHint,
-    timeoutMs: timeoutMs ?? MISTRAL_TIMEOUT_MS,
-  });
+/** Tool-calling adapter implementing the loop's ChatPort for any registered provider. */
+export function makePort(provider: ProviderId, apiKey: string, timeoutMs?: number): ChatPort {
+  return openAiPort(PROVIDERS[provider], apiKey, timeoutMs);
 }

@@ -9,9 +9,12 @@ leave open: **Governance + Trust**. OpenCode optimizes for freedom;
 Claude Code optimizes for capability inside a closed box. Neither optimizes
 for *delegatability*. CodeWhip does.
 
-**Status: pre-implementation.** The CLI skeleton ships; `codewhip run` is a
-stub. The five Naval agents have debated and converged on the full strategy
-(`docs/moat/`), and the build order is fixed (`docs/roadmap.md`).
+**Status: MVP loop live.** `codewhip run` runs a real agent loop
+(`read/search/edit/write/bash`, policy-checked, metered, replayable);
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (57 tests) pins the
+policy, jail, memory, and loop. The five Naval agents have debated and
+converged on the full strategy (`docs/moat/`), and the build order is fixed
+(`docs/roadmap.md`).
 
 ## Why CodeWhip
 
@@ -25,47 +28,66 @@ The moat ranking we build by: **memory > governance > execution >>
 connectors**. Anything that doesn't get more valuable the longer a customer
 uses it doesn't ship in H1.
 
-## Quickstart (target UX — not yet implemented)
+## Quickstart
 
 ```sh
 npm i -g codewhip
-codewhip init        # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
+codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
+codewhip auth login mistral        # optional; nvidia can run keyless on its free tier
 codewhip run "fix the failing test"
-codewhip run "refactor auth" --budget 1.00
-codewhip audit --last 20        # what did it do?
-codewhip audit --verify         # prove the chain is intact
-codewhip run "migrate db" --share   # redacted audit link for the PR
+codewhip run "refactor auth" --token-budget 250000
+codewhip audit --last 20           # what did it do?
+codewhip audit --verify            # hash-chain check (H1: honest WIP stub)
 ```
 
 Every run prints receipts: `tokens / model mix / $`.
+The token budget is **enforced mid-run**, not a preflight fiction — when the
+run crosses it, CodeWhip stops, keeps the partial transcript, and prints the
+receipt anyway.
 
 ## How it works (design)
 
 - **Loop:** `prompt → stream LLM → permission check → exec → append → repeat`,
-  Ctrl-C safe, `--max-steps 25` hard stop. Five tools only: `read`, `search`
-  (glob+grep), `edit`, `bash`, `git-via-bash`.
-- **Policy:** `codewhip-policy.yaml`, LAST-match-wins, fail-closed
-  (`read:allow edit:ask shell:ask external:deny`). The harness enforces —
-  the model can beg, the harness says no.
-- **Audit:** append-only hash-chained JSONL (`.codewhip/audit.log`) with
-  secret redaction at write time; `--verify / --replay / --export` produce
-  the auditor's bundle (SOC2 CC7/CC8 evidence as files, verifiable offline).
-- **Memory:** files-first and git-native — `memory.md` (<100 lines),
-  `notes/<path>.md`, `outcomes.jsonl` (accept/edit/revert/reject + tests),
-  `policy.md` promoted from 3 consistent rejections. No vector DB until
-  >500 outcomes prove the pain.
-- **Router:** 3 task classes (implement → frontier, polish → cheap Flash-class
-  at ~$0.01–0.04/task, private → local Ollama), `--budget` preflight +
-  mid-run downgrade. Target: polish <$0.05, blended <$0.50.
-- **Sandbox:** v1 = Node path jail + non-overridable denylist
-  (`rm -rf /`, `push --force`, exfil patterns); `--yolo` escapes explicitly,
-  logged and bannered. v2 swaps the executor (E2B/Firecracker) behind the
-  frozen policy/audit schema.
+  Ctrl-C safe, `--max-steps 25` hard stop. Six tools: `read`, `search`
+  (glob+grep), `write` (create/overwrite, refuses harness state), `edit`,
+  `bash` (real shell), `git-via-bash`. Tool output is capped at transcript
+  push (4000 chars) so one runaway command can't flood the context window.
+- **Policy:** harness-side, never in the prompt (0 tokens for rules).
+  Non-overridable denylist + explicit deny on shell chaining
+  (newlines, `;`, `|`, `&`, `` ` ` ``, `$()`) — a smuggled
+  `git status\nrm -rf .git` is denied, never allowed. Defaults: read allow,
+  edit/write/shell ask, external denied. `--yolo` bypasses ask — never the
+  denylist.
+- **Memory:** files-first and git-native. "Always allow" (`a` at the prompt)
+  stores a **curated shape** in `.codewhip/remembered.jsonl` with provenance
+  (`ts/runId/preview_hash`) — only safe heads are memorable, redirects and
+  chains never are, and `.codewhip/**`/`codewhip-policy.yaml` self-protect.
+  No vector DB until >500 outcomes prove the pain.
+- **Audit:** `.codewhip/outcomes.jsonl` is written every run
+  (usageByModel, failovers, per-tool allow/deny + ruleIds), and `audit --last N`
+  tails it. Tool output is redacted twice before it can leak: at the model
+  boundary (keys/tokens/PEMs/emails → `[redacted]` in the transcript the
+  provider sees) and at write time. The hash-chained `audit.log` +
+  `--verify/--export` bundle is the Week-3 H1 item — `--verify` already sits
+  in the CLI as an honest stub.
+- **Router:** 3 task classes (implement → frontier, polish → cheap Flash-class,
+  private → local), `--token-budget` enforced mid-run (
+  default 250000), same-provider `--models a,b,c` rotation and one-shot
+  `--failover`/`--retry-wait` on 429 only. Target: polish <$0.05, blended <$0.50.
+- **Sandbox:** v1 = Node path jail (realpath, symlink-aware) + non-overridable
+  denylist; v2 swaps the executor (E2B/Firecracker) behind the frozen
+  policy/audit schema.
 
 ## Repo map
 
 ```
-src/index.ts            CLI entry (help works, run = stub)
+src/index.ts            CLI entry (help, run/auth/models/audit)
+src/loop.ts             agentLoop(): stream → permission → exec → append, budget
+src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
+src/remember.ts         curated memorable shapes (no redirects/chains)
+src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
+src/tools/              read/search/write/edit/bash + jail
+src/testkit/            $0 fake ChatPort for the 57-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -79,10 +101,10 @@ AGENTS.md               working agreement for coding agents
 
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → 5 tools → 3 providers + meter →
-  policy jail + denylist → hash-chained audit → outcomes/memory sidecar →
-  `init`/`run`/`--share` → 3-class router with <$0.05 polish receipt →
-  GitHub Action + 1 starter pack.
+- **H1 (parity + trust):** `agentLoop()` → 6 tools → 3 providers + meter →
+  policy jail + denylist + chaining-deny → curated remembered-shape memory
+  (provenanced) → hash-chained audit → `init`/`run`/`--share` →
+  3-class router with <$0.05 polish receipt → GitHub Action + 1 starter pack.
 - **H2 (past Claude):** sandbox profiles, pack registry + SSO/retention (paid),
   graph memory on proven pain, full provider matrix, auditor bundle v2,
   TUI/desktop/IDE only after terminal trust compounds.
@@ -97,6 +119,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (57 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.
@@ -138,23 +161,60 @@ Alternative without watch mode: `npm run build` manually after each change, or s
 
 ```sh
 codewhip auth login            # nvidia: hidden prompt, paste once; stored 0600 outside the repo
-codewhip auth login mistral    # same for mistral (devstral default)
+codewhip auth login mistral    # same for mistral (no default stored; key only)
 codewhip auth status           # per provider: set (source: env|file) or missing — never prints keys
 codewhip auth logout mistral   # deletes the stored key (re-run login to rotate)
 codewhip run "Say OK"                              # nvidia default (kimi-k3, free tier $0)
-codewhip run "Say OK" --provider mistral           # mistral default (devstral-small-latest)
+codewhip run "Say OK" --provider mistral           # mistral default (mistral-small-latest)
+codewhip run "Say OK" --provider sensenova         # sensenova default (sensenova-6.8-flash-lite)
+codewhip run "Say OK" --provider alibaba           # alibaba default (qwen-plus)
 ```
 
-Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; mistral cost is untracked (see console usage). The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`. Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
 
 ### Surviving rate limits (opt-in, off by default)
 
 ```sh
 codewhip run "..." --retry-wait   # one Retry-After wait (<=60s) on 429 per run; avoid in CI
-codewhip run "..." --failover     # one switch to the other provider on 429 per run
+codewhip run "..." --failover     # one switch to the next provider with a stored key on 429 per run
+codewhip run "..." --provider mistral --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest
+                                  # walk models in order on 429, each once per run (order: wait, rotate, failover)
 ```
 
-Both need the other provider's key up front (`--failover` aborts otherwise — it never runs keyless). `--failover` uses per-provider default models (drop `--model` when armed) and banners because it may bill pay-go. 429s from anywhere else (auth, 5xx, timeouts) never wait or switch. Receipts show the per-model mix when a run crosses providers.
+Both wait and switch are 429-only: auth, 5xx, and timeouts never trigger them. `--failover` needs the other provider's key up front (aborts otherwise — it never runs keyless), starts from the provider default (drop `--model`, or lead `--models` with it), and banners because it may bill pay-go. Keep completion-refusers like `codestral-latest` out of agent chains: it answers but won't call tools for file work. Receipts show the per-model mix whenever a run crosses models or providers.
+
+### Approvals that stick ("always allow")
+
+Every `edit`/`write`/`bash` call that policy asks about prompts:
+
+```
+allow bash echo 'x' >> TEST.md? [y/N/a]
+```
+
+- `y` — allow once. `N` (or anything else) — deny once, model gets told.
+- `a` — allow once **and remember the shape** in `.codewhip/remembered.jsonl`
+  with provenance (`ts`, `runId`, `preview_hash`). Shapes are **curated**:
+  only a short allowlist of heads is memorable (`git status/diff/log/branch`,
+  `npm test/run`, `npx tsx/tsc`, `ls`, `cat`, `echo`, …). Redirects, pipes, and
+  chains (`;`, `&`, `|`, newlines, `>`, `>>`) are never memorable; a `bash:echo *`
+  shape matches `echo x`, never `echo x >> .git/hooks/…`. `edit`/`write` shapes
+  are exact paths. Future calls with a matching shape auto-allow and the audit
+  shows `default:shell:ask+remembered` — visible, attributable, never silent.
+- Targets that the harness must protect (`.codewhip/**`, `codewhip-policy.yaml`,
+  `remembered.jsonl` itself) refuse `a` outright — the `write` tool and the
+  memory both self-protect.
+- The denylist and the chaining-deny win over every remembered rule.
+  `--yolo` bypasses ask but never the denylist.
+
+**Token cost: exactly zero.** Policy is enforced harness-side in
+`src/policy.ts` / `src/remember.ts` — the model never receives the rules, not
+even a summary; the system prompt only tells it "the harness blocks destructive
+commands". Policy can grow without touching prompt tokens, and the model can't
+talk its way around rules it has never seen.
+
+Remove a rule by deleting its line from `.codewhip/remembered.jsonl`
+(one JSON object per line; the file is gitignored with the rest of
+`.codewhip/`).
 
 ## The five Naval agents
 

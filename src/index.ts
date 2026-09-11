@@ -4,19 +4,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { makeMistralPort, makeNvidiaPort, NVIDIA_DEFAULT_MODEL, MISTRAL_DEFAULT_MODEL } from "./provider.js";
-import { agentLoop, type FailoverTarget } from "./loop.js";
-import type { UsageBucket } from "./outcomes.js";
+import { makePort, parseProviderId, PROVIDERS, PROVIDER_IDS, type ProviderId } from "./provider.js";
+import { listModels } from "./models.js";
+import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
+import { listRules } from "./remember-store.js";
+import { readLastOutcomes, type UsageBucket } from "./outcomes.js";
 import {
   clearKey,
   configDir,
-  envVarFor,
-  keyUrlFor,
-  parseProviderId,
   promptHidden,
   resolveKey,
   saveKey,
-  type ProviderId,
 } from "./auth.js";
 
 const require = createRequire(import.meta.url);
@@ -25,8 +23,10 @@ const pkg: { version: string } = require("../package.json");
 type RunOptions = {
   prompt: string;
   model: string;
+  /** Ordered rotation candidates, head === model. Empty = no rotation. */
+  models: string[];
   provider: ProviderId;
-  budget: number;
+  tokenBudget: number;
   maxSteps: number;
   yolo: boolean;
   retryWait: boolean;
@@ -43,32 +43,34 @@ function printHelp(): void {
   console.log("Commands:");
   console.log("  init                 scaffold AGENTS.md + policy + local key (30s)");
   console.log('  run "<prompt>"       run an agent session (headless; no prompt = REPL)');
-  console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral])");
+  console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral|sensenova|alibaba])");
+  console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
   console.log("  audit                inspect the audit chain (--verify, --last N)");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
-  console.log("  --provider <id>      nvidia|mistral (default: nvidia)");
-  console.log("  --budget <dollars>   max spend, preflight check (default: 0.50)");
+  console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
+  console.log("  --provider <id>      nvidia|mistral|sensenova|alibaba (default: nvidia)");
+  console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
-  console.log("  --failover           one switch to the other provider on 429 per run (default: off; may bill pay-go)");
+  console.log("  --failover           one switch to the next provider with a stored key on 429 per run (default: off; may bill pay-go)");
   console.log("  -v, --version        print version");
   console.log("");
-  console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY env wins when set; else `codewhip auth login <provider>`.");
-  console.log("  (nvidia free key: build.nvidia.com/settings/api-keys; mistral key: console.mistral.ai)");
+  console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY / SENSENOVA_API_KEY / ALIBABA_API_KEY env wins when set; else `codewhip auth login <provider>`.");
+  console.log("  key consoles: build.nvidia.com/settings/api-keys · console.mistral.ai · token.sensenova.ai · dashscope-intl.aliyun.com");
   console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; mistral cost untracked).");
-  console.log("Status: agentLoop() live (read/search/edit/bash) — policy-checked, metered.");
+  console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);
 }
 
 function costNote(provider: ProviderId): string {
-  // Honest meter: only NVIDIA's free tier is known-$0. Mistral free mode is
-  // $0 but pay-go bills — point at their console instead of printing fiction.
+  // Honest meter: only NVIDIA's free tier is known-$0. Other providers bill
+  // or cap in provider-specific ways — point at their console, not fiction.
   return provider === "nvidia"
     ? "$0.0000 (nvidia free tier)"
-    : "cost untracked (see console.mistral.ai usage)";
+    : `cost untracked (see ${PROVIDERS[provider].keyUrl})`;
 }
 
 function printReceipt(model: string, promptTokens: number, completionTokens: number, cost: string): void {
@@ -90,7 +92,7 @@ function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: st
     p += b.prompt;
     c += b.completion;
     parts.push(`${b.label}:${b.model} ${b.prompt}+${b.completion}`);
-    costs.push(costNote(b.label === "mistral" ? "mistral" : "nvidia"));
+    costs.push(costNote(b.label));
   }
   console.log("");
   console.log(`receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`);
@@ -101,10 +103,11 @@ function printStubReceipt(model: string, provider: ProviderId): void {
 }
 
 function parseRunArgs(args: string[]): RunOptions | null {
-  let model = NVIDIA_DEFAULT_MODEL;
+  let model = PROVIDERS.nvidia.defaultModel;
   let modelExplicit = false;
+  let modelsArg: string[] | null = null;
   let provider: ProviderId = "nvidia";
-  let budget = 0.5;
+  let tokenBudget = 250000;
   let maxSteps = 25;
   let yolo = false;
   let retryWait = false;
@@ -122,23 +125,35 @@ function parseRunArgs(args: string[]): RunOptions | null {
     if (a === "--model") {
       const v = args[i + 1];
       if (v === undefined || v.startsWith("-")) return fail("--model needs a value");
+      if (modelsArg !== null) return fail("use --model or --models, not both");
       model = args[++i] as string;
       modelExplicit = true;
+    } else if (a === "--models") {
+      const v = args[i + 1];
+      if (v === undefined || v.startsWith("-")) return fail("--models needs a comma-separated value");
+      const list = [...new Set(v.split(",").map((s) => s.trim()).filter((s) => s.length > 0))];
+      if (list.length === 0) return fail("--models needs at least one model id");
+      if (list.length > 8) return fail("--models accepts at most 8 models");
+      if (modelExplicit) return fail("use --model or --models, not both");
+      modelsArg = list;
+      i++;
     } else if (a === "--provider") {
       const v = args[i + 1];
       const parsed = parseProviderId(v);
-      if (parsed === null) return fail("--provider must be nvidia|mistral");
+      if (parsed === null) return fail("--provider must be nvidia|mistral|sensenova|alibaba");
       provider = parsed;
       i++;
       if (!modelExplicit) {
-        model = provider === "mistral" ? MISTRAL_DEFAULT_MODEL : NVIDIA_DEFAULT_MODEL;
+        model = PROVIDERS[provider].defaultModel;
       }
-    } else if (a === "--budget") {
+    } else if (a === "--token-budget") {
       const v = args[i + 1];
-      if (v === undefined) return fail("--budget needs a value");
+      if (v === undefined) return fail("--token-budget needs a value");
       const n = Number(args[++i]);
-      if (!Number.isFinite(n) || n <= 0 || n > 5) return fail("--budget must be a number 0 < b <= 5");
-      budget = n;
+      if (!Number.isInteger(n) || n < 1000 || n > 5000000) {
+        return fail("--token-budget must be an integer 1000..5000000");
+      }
+      tokenBudget = n;
     } else if (a === "--max-steps") {
       const v = args[i + 1];
       if (v === undefined) return fail("--max-steps needs a value");
@@ -157,7 +172,13 @@ function parseRunArgs(args: string[]): RunOptions | null {
       return fail(`unknown flag: ${a}`);
     }
   }
-  return { prompt: positional.join(" "), model, provider, budget, maxSteps, yolo, retryWait, failover, modelExplicit };
+  return {
+    prompt: positional.join(" "),
+    model: modelsArg?.[0] ?? model,
+    models: modelsArg ?? [],
+    provider, tokenBudget, maxSteps, yolo, retryWait, failover,
+    modelExplicit: modelExplicit || modelsArg !== null,
+  };
 }
 
 function cmdInit(): void {
@@ -217,20 +238,23 @@ function cmdInit(): void {
 }
 
 function missingKeyHelp(provider: ProviderId): void {
-  console.error(`codewhip: ${envVarFor(provider)} is not set and no stored ${provider} key found (the key is never printed or logged).`);
+  const cfg = PROVIDERS[provider];
+  console.error(`codewhip: ${cfg.envVar} is not set and no stored ${provider} key found (the key is never printed or logged).`);
   console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, 0600 file; env still wins)`);
-  console.error(`  Or per terminal, PowerShell: $env:${envVarFor(provider)} = "..."`);
-  console.error(`  Get a key at ${keyUrlFor(provider)}`);
+  console.error(`  Or per terminal, PowerShell: $env:${cfg.envVar} = "..."`);
+  console.error(`  Get a key at ${cfg.keyUrl}`);
   process.exitCode = 1;
 }
 
-function promptApproval(question: string): Promise<boolean> {
+function promptApproval(question: string): Promise<ApprovalAnswer> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer: string) => {
       rl.close();
       const a = answer.trim().toLowerCase();
-      resolve(a === "y" || a === "yes");
+      if (a === "a" || a === "always") resolve("always");
+      else if (a === "y" || a === "yes") resolve("yes");
+      else resolve("no");
     });
   });
 }
@@ -243,6 +267,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     console.log("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
   }
   console.log(`model: ${opts.provider}:${opts.model}`);
+  if (opts.models.length > 1) {
+    console.log(`!! rotation armed: on 429 walk ${opts.models.join(" -> ")} (each once per run, 429-only)`);
+  }
   const { key: apiKey } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
@@ -251,26 +278,26 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   }
   let failoverTarget: FailoverTarget | undefined;
   if (opts.failover) {
-    const other: ProviderId = opts.provider === "nvidia" ? "mistral" : "nvidia";
-    if (opts.modelExplicit) {
-      console.error("codewhip: --failover needs the default model (drop --model; per-provider defaults apply)");
+    const defaultModel = PROVIDERS[opts.provider].defaultModel;
+    if (opts.model !== defaultModel) {
+      console.error("codewhip: --failover needs the default model first (drop --model/--models, or lead the chain with it)");
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
       return;
     }
-    const target = resolveKey(other);
-    if (target.key.length === 0) {
-      console.error(`codewhip: --failover needs a ${other} key (${envVarFor(other)} or: codewhip auth login ${other})`);
+    const next = PROVIDER_IDS.find((id) => id !== opts.provider && resolveKey(id).key.length > 0);
+    if (next === undefined) {
+      console.error("codewhip: --failover needs a key for some other provider (env var or: codewhip auth login <other>)");
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
       return;
     }
-    const targetModel = other === "mistral" ? MISTRAL_DEFAULT_MODEL : NVIDIA_DEFAULT_MODEL;
-    console.log(`!! --failover armed: one switch to ${other}:${targetModel} on 429. May bill ${other} pay-go.`);
+    const targetModel = PROVIDERS[next].defaultModel;
+    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on 429. May bill ${next} pay-go.`);
     failoverTarget = {
-      label: other,
+      label: next,
       model: targetModel,
-      port: other === "mistral" ? makeMistralPort(target.key) : makeNvidiaPort(target.key),
+      port: makePort(next, resolveKey(next).key),
     };
   }
   const ctrl = new AbortController();
@@ -287,12 +314,15 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
       stdinIsTTY: process.stdin.isTTY === true,
-      port: opts.provider === "mistral" ? makeMistralPort(apiKey) : makeNvidiaPort(apiKey),
+      port: makePort(opts.provider, apiKey),
       signal: ctrl.signal,
       askUser: promptApproval,
+      remembered: listRules(process.cwd()),
       retryWait: opts.retryWait,
       failover: failoverTarget,
-      onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : "◆"} ${e.text}`),
+      models: opts.models,
+      tokenBudget: opts.tokenBudget,
+      onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`),
     });
     if (result.cancelled) {
       console.log("cancelled — partial transcript kept.");
@@ -337,7 +367,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   if (sub === "login" || sub === "logout") {
     const provider = parseProviderId(args[1]) ?? "nvidia";
     if (args[1] !== undefined && parseProviderId(args[1]) === null) {
-      console.error("usage: codewhip auth login|logout [nvidia|mistral]");
+      console.error("usage: codewhip auth login|logout [nvidia|mistral|sensenova|alibaba]");
       process.exitCode = 1;
       return;
     }
@@ -362,7 +392,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   }
   if (sub === "status") {
     let missing = 0;
-    for (const provider of ["nvidia", "mistral"] as ProviderId[]) {
+    for (const provider of PROVIDER_IDS) {
       const { source } = resolveKey(provider);
       if (source === "none") {
         console.log(`auth: ${provider} missing (no env, no file)`);
@@ -376,15 +406,46 @@ async function cmdAuth(args: string[]): Promise<void> {
     }
     return;
   }
-  console.error("usage: codewhip auth [login|logout|status] [nvidia|mistral]");
+  console.error("usage: codewhip auth [login|logout|status] [nvidia|mistral|sensenova|alibaba]");
   process.exitCode = 1;
 }
 
+async function cmdModels(args: string[]): Promise<void> {
+  const raw = args[0];
+  const provider: ProviderId = raw === undefined ? "nvidia" : parseProviderId(raw) ?? "nvidia";
+  if (raw !== undefined && parseProviderId(raw) === null) {
+    console.error("usage: codewhip models [nvidia|mistral|sensenova|alibaba]");
+    process.exitCode = 1;
+    return;
+  }
+  const { key: apiKey } = resolveKey(provider);
+  if (apiKey.length === 0) {
+    missingKeyHelp(provider);
+    return;
+  }
+  const result = await listModels(provider, apiKey);
+  if (!result.ok) {
+    console.error(`codewhip: ${result.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`${provider} models (${result.models.length} served):`);
+  for (const m of result.models) {
+    console.log(`  ${m.isDefault ? "*" : " "} ${m.id}  [${m.tag}]${m.note.length > 0 ? ` — ${m.note}` : ""}`);
+  }
+  console.log("legend: * = codewhip default. agent = ran the tool loop in testing;");
+  console.log("  completion-only = serves but refuses file work; non-chat = embed/ocr/audio/moderation;");
+  console.log("  untested = served, agency unknown (probe before chaining).");
+  if (provider === "mistral") {
+    console.log("chain: --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest");
+  }
+}
+
 function cmdAudit(args: string[]): void {
-  const logPath = path.join(process.cwd(), ".codewhip", "audit.log");
+  const outcomesPath = path.join(process.cwd(), ".codewhip", "outcomes.jsonl");
   if (args.includes("--verify")) {
-    if (!fs.existsSync(logPath)) {
-      console.log("audit: no chain yet (.codewhip/audit.log missing) — nothing to verify.");
+    if (!fs.existsSync(outcomesPath)) {
+      console.log("audit: no chain yet (.codewhip/outcomes.jsonl missing) — nothing to verify.");
       return;
     }
     console.log("audit --verify: chain check not implemented yet (Week 3).");
@@ -393,12 +454,12 @@ function cmdAudit(args: string[]): void {
   const lastIdx = args.indexOf("--last");
   if (lastIdx !== -1) {
     const n = Number(args[lastIdx + 1] ?? "20");
-    if (!fs.existsSync(logPath)) {
+    const tail = readLastOutcomes(process.cwd(), Number.isInteger(n) && n > 0 ? n : 20);
+    if (tail.length === 0) {
       console.log("audit: no entries yet.");
       return;
     }
-    const lines = fs.readFileSync(logPath, "utf8").trim().split("\n");
-    console.log(lines.slice(-n).join("\n"));
+    console.log(tail);
     return;
   }
   console.log("Usage: codewhip audit [--verify] [--last N]");
@@ -430,7 +491,7 @@ async function main(): Promise<void> {
         cmdRepl(opts);
         return;
       }
-      console.error('usage: codewhip run "<prompt>" [--model id] [--budget 0.50] [--max-steps 25]');
+      console.error('usage: codewhip run "<prompt>" [--model id] [--token-budget 250000] [--max-steps 25]');
       process.exitCode = 1;
       return;
     }
@@ -443,6 +504,10 @@ async function main(): Promise<void> {
   }
   if (command === "audit") {
     cmdAudit(args.slice(1));
+    return;
+  }
+  if (command === "models") {
+    await cmdModels(args.slice(1));
     return;
   }
   console.error(`unknown command: ${command}`);

@@ -1,21 +1,25 @@
 import type { ChatPort, LoopMsg } from "./provider-port.js";
 import { TOOLS, toolSpecs, type ToolDef } from "./tools/registry.js";
 import type { ToolResult } from "./tools/types.js";
-import { checkPermission } from "./policy.js";
+import { checkPermission, permissionSubject } from "./policy.js";
 import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
 import { SYSTEM_PROMPT } from "./system.js";
+import { shapeOf, targetsSelfProtected } from "./remember.js";
+import { persistRule, type RememberedRule } from "./remember-store.js";
+import type { ProviderId } from "./provider.js";
 
-export type AskUser = (question: string) => Promise<boolean>;
+export type ApprovalAnswer = "yes" | "always" | "no";
+export type AskUser = (question: string) => Promise<ApprovalAnswer>;
 
 export type LoopEvent = {
-  kind: "tool" | "retry" | "failover";
+  kind: "tool" | "retry" | "failover" | "policy";
   text: string;
 };
 
 export type FailoverTarget = {
-  label: string;
+  label: ProviderId;
   model: string;
   port: ChatPort;
 };
@@ -24,7 +28,7 @@ export type LoopArgs = {
   prompt: string;
   model: string;
   /** Primary provider label for receipts (e.g. "nvidia"). */
-  label: string;
+  label: ProviderId;
   cwd: string;
   maxSteps: number;
   yolo: boolean;
@@ -36,6 +40,16 @@ export type LoopArgs = {
   retryWait?: boolean;
   /** One cross-provider switch per run on 429 only (off unless armed). */
   failover?: FailoverTarget;
+  /**
+   * Ordered same-provider model candidates, head first (head === model).
+   * Empty by default (no rotation). Each candidate is tried at most once
+   * per run, on rate-limited turns only — never on auth/other failures.
+   */
+  models?: string[];
+  /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
+  tokenBudget?: number;
+  /** Bootstrap list of remembered rules (index.ts loads once; loop appends on `a`). */
+  remembered?: RememberedRule[];
   /** Progress listener (index.ts prints). Never throws into the loop. */
   onEvent?: (event: LoopEvent) => void;
 };
@@ -54,7 +68,7 @@ export type LoopResult = {
 };
 
 function lookupTool(name: string): ToolDef | null {
-  if (name === "read" || name === "search" || name === "edit" || name === "bash") {
+  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash") {
     return TOOLS[name];
   }
   return null;
@@ -69,17 +83,43 @@ function previewForLog(name: string, args: unknown): string {
   return String(typeof v === "string" ? v : JSON.stringify(args)).slice(0, 200);
 }
 
-function withTimeout(p: Promise<ToolResult>, ms: number): Promise<ToolResult> {
+/**
+ * Promise-level wall clock for a tool call with PROCESS-level teeth: when
+ * `ms` elapses (or `outer` aborts) the run receives an aborted AbortSignal
+ * so self-bounded tools (bash via execFile `signal`) actually kill their
+ * child instead of racing silently. Never interrupts main-thread sync work
+ * (read/search crawl a big tree in one tick — bounded by their own caps).
+ */
+export async function withTimeout(
+  run: (signal: AbortSignal) => Promise<ToolResult>,
+  ms: number,
+  outer?: AbortSignal
+): Promise<ToolResult> {
+  const controller = new AbortController();
+  const onOuterAbort = (): void => controller.abort();
+  if (outer?.aborted === true) {
+    controller.abort();
+  } else if (outer !== undefined) {
+    outer.addEventListener("abort", onOuterAbort, { once: true });
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const onTimeout = new Promise<ToolResult>((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, output: `tool: timed out after ${ms}ms` }), ms);
+  let timedOut = false;
+  const fallback: ToolResult = { ok: false, output: `tool: timed out after ${ms}ms` };
+  const timed = new Promise<ToolResult>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      resolve(fallback);
+    }, ms);
   });
-  return Promise.race([
-    p.finally(() => {
-      if (timer !== undefined) clearTimeout(timer);
-    }),
-    onTimeout,
-  ]);
+  try {
+    const result = await Promise.race([run(controller.signal), timed]);
+    // Timeout wins when the tool settles on the same tick as the clock.
+    return timedOut ? fallback : result;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (outer !== undefined) outer.removeEventListener("abort", onOuterAbort);
+  }
 }
 
 /** Abortable sleep: true when fully slept, false when cancelled (instant). */
@@ -99,6 +139,14 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<boolean> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Central tool-output cap at transcript push time (read lists, bash dumps). */
+const TOOL_OUTPUT_CAP = 4000;
+
+function capOutput(text: string): string {
+  if (text.length <= TOOL_OUTPUT_CAP) return text;
+  return text.slice(0, TOOL_OUTPUT_CAP) + `\n...[truncated ${text.length} chars]`;
 }
 
 /**
@@ -134,6 +182,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let waitedMs = 0;
   let waitedOnce = false;
   let failedOver = false;
+  /** Same-provider models already attempted (head first). Bounds rotation: no cycles. */
+  const tried = new Set<string>([args.model]);
   const addUsage = (p: number, c: number): void => {
     promptTokens += p;
     completionTokens += c;
@@ -199,6 +249,20 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         waitedMs += wait;
         continue;
       }
+      // Same-provider model rotation: each candidate once per run, 429-only.
+      // Ordered after the single retry-wait and before cross-provider
+      // failover (same-provider moves are cheaper than provider switches).
+      // Transcript carries over: same provider, same tool specs.
+      const next = (args.models ?? []).find((m) => !tried.has(m));
+      if (next !== undefined) {
+        tried.add(next);
+        const from = `${current.label}:${current.model}`;
+        const to = `${current.label}:${next}`;
+        failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
+        emit("failover", `rate limited on ${current.model} — rotating to ${next}`);
+        current = { ...current, model: next };
+        continue;
+      }
       if (args.failover !== undefined && !failedOver) {
         failedOver = true;
         const from = `${current.label}:${current.model}`;
@@ -208,8 +272,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         current = { label: args.failover.label, model: args.failover.model, port: args.failover.port };
         continue;
       }
-      error = failedOver
-        ? `rate limited on ${args.label} and ${current.label} (waited ${waitedMs}ms) — partial transcript kept`
+      const triedList = [...tried].map((m) => `${args.label}:${m}`).join(", ");
+      error = failedOver || tried.size > 1
+        ? `rate limited (tried ${triedList}${failedOver ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — partial transcript kept`
         : attempt.error;
       break;
     }
@@ -217,6 +282,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       break;
     }
     addUsage(turn.promptTokens, turn.completionTokens);
+    if (args.tokenBudget !== undefined && promptTokens + completionTokens > args.tokenBudget) {
+      error = `token budget exhausted (${promptTokens + completionTokens}/${args.tokenBudget}) — partial transcript kept`;
+      emit("policy", `token budget exhausted — stopping (partial transcript kept, receipt follows)`);
+      break;
+    }
     messages.push({
       role: "assistant",
       content: turn.text ?? "",
@@ -247,7 +317,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       const preview = previewForLog(call.name, parsed);
-      const verdict = checkPermission(def.name, preview);
+      const subject = permissionSubject(def.name, parsed, preview);
+      const verdict = checkPermission(def.name, subject);
       if (verdict.decision === "deny") {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -268,20 +339,65 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
           continue;
         } else {
-          let approved = false;
-          try {
-            approved = await args.askUser(`allow ${call.name} ${preview}? [y/N] `);
-          } catch {
-            approved = false;
+          // Remembered-shape shortcut: a prior `a` answer stored this
+          // shape in .codewhip/remembered.jsonl, with provenance
+          // (ts/runId/preview_hash). Policy lives in the harness,
+          // never in the prompt — matches here cost 0 tokens.
+          const subjectForShape = subject;
+          const shape = shapeOf(def.name, subjectForShape);
+          const rules = [...(args.remembered ?? [])];
+          const prefix = shape === null ? null : shape.replace(/\*$/, "");
+          // Match the remembered head: bare head ("ls") or head + args
+          // ("ls -la"). Stored shapes are always `${head} *`, so the head
+          // is the prefix minus its trailing space.
+          const hit =
+            prefix !== null
+              ? rules.find(
+                  (r) =>
+                    r.tool === def.name &&
+                    (subjectForShape === prefix.trim() || subjectForShape.startsWith(prefix))
+                )
+              : undefined;
+          if (hit !== undefined) {
+            proceed = true;
+            ruleId = `${verdict.ruleId}+remembered`;
+          } else {
+            let answer: ApprovalAnswer = "no";
+            try {
+              answer = await args.askUser(`allow ${call.name} ${preview}? [y/N/a] `);
+            } catch {
+              answer = "no";
+            }
+            if (answer === "no") {
+              const out = `held for approval (${verdict.ruleId}) — declined`;
+              messages.push({ role: "tool", toolCallId: call.id, content: out });
+              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out));
+              emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
+              continue;
+            }
+            if (answer === "always") {
+              if (shape === null || prefix === null) {
+                emit("policy", `not memorable: ${subjectForShape.trim().split(/\s/)[0] ?? ""} — approved once, no rule stored`);
+              } else if (targetsSelfProtected(shape)) {
+                emit("policy", `not memorable: self-protected path — approved once, no rule stored`);
+              } else {
+                const toolForRule = def.name === "edit" ? "edit" : def.name === "write" ? "write" : "bash";
+                const stored = persistRule(
+                  args.cwd,
+                  runId,
+                  { tool: toolForRule, shape, ts: new Date().toISOString(), runId, preview_hash: sha256Hex(preview) },
+                );
+                if (stored === "error") {
+                  emit("policy", `remember failed (disk write) — approved once for ${shape}`);
+                } else {
+                  rules.push({ tool: toolForRule, shape, ts: new Date().toISOString(), runId, preview_hash: sha256Hex(preview) });
+                  emit("policy", `remembered: ${def.name}:${shape} (.codewhip/remembered.jsonl)`);
+                }
+                ruleId = `${verdict.ruleId}+always`;
+              }
+            }
+            proceed = true;
           }
-          if (!approved) {
-            const out = `held for approval (${verdict.ruleId}) — declined`;
-            messages.push({ role: "tool", toolCallId: call.id, content: out });
-            record("deny", `${verdict.ruleId}+declined`, sha256Hex(out));
-            emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
-            continue;
-          }
-          proceed = true;
         }
       }
       if (!proceed) {
@@ -290,14 +406,23 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       let result: ToolResult;
       try {
         result = await withTimeout(
-          def.exec({ cwd: args.cwd }, parsed, args.signal),
-          def.timeoutMs
+          (signal) => def.exec({ cwd: args.cwd }, parsed, signal),
+          def.timeoutMs,
+          args.signal
         );
       } catch (err) {
         result = { ok: false, output: `tool crashed: ${err instanceof Error ? err.message : "error"}` };
       }
-      messages.push({ role: "tool", toolCallId: call.id, content: result.output });
-      record("allow", ruleId, sha256Hex(redactSecrets(result.output).slice(0, 2000)));
+      const redacted = redactSecrets(result.output);
+      const scrubbed = redacted !== result.output;
+      // Redact BEFORE the cap slice so a secret straddling the boundary is
+      // still masked; the note tells the model the data it saw was scrubbed.
+      messages.push({
+        role: "tool",
+        toolCallId: call.id,
+        content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
+      });
+      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)));
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }

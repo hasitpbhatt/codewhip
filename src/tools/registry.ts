@@ -3,6 +3,7 @@ import type { ToolSpec } from "../provider-port.js";
 import { isReadArgs, readTool } from "./read.js";
 import { isSearchArgs, searchTool } from "./search.js";
 import { isEditArgs, editTool } from "./edit.js";
+import { isWriteArgs, writeTool } from "./write.js";
 import { BASH_TIMEOUT_MS, bashTool, isBashArgs } from "./bash.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
@@ -73,10 +74,26 @@ function editSpec(): ToolSpec {
   };
 }
 
+function writeSpec(): ToolSpec {
+  return {
+    name: "write",
+    description: "Create or fully overwrite a workspace file. Args: path, content (string written verbatim; parent dirs created). Refuses .codewhip/** and codewhip-policy.yaml. Ask-gated in policy.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" },
+      },
+      required: ["path", "content"],
+      additionalProperties: false,
+    },
+  };
+}
+
 function bashSpec(): ToolSpec {
   return {
     name: "bash",
-    description: "Run a command with NO shell (argv-split, timeout-killed). Destructive commands are denied, never ask. Args: command, timeoutMs.",
+    description: "Run a command via the system shell (PowerShell on Windows, sh elsewhere), cwd-jailed, timeout-killed. Redirection and chaining work. Destructive commands are denied, never ask. Args: command, timeoutMs.",
     parameters: {
       type: "object",
       properties: {
@@ -111,6 +128,13 @@ export const TOOLS: Record<ToolName, ToolDef> = {
     exec: (ctx, args, signal) =>
       isEditArgs(args) ? editTool(ctx, args) : Promise.resolve({ ok: false, output: "edit: bad args" } as ToolResult),
   },
+  write: {
+    name: "write",
+    spec: writeSpec(),
+    timeoutMs: 10000,
+    exec: (ctx, args, signal) =>
+      isWriteArgs(args) ? writeTool(ctx, args) : Promise.resolve({ ok: false, output: "write: bad args" } as ToolResult),
+  },
   bash: {
     name: "bash",
     spec: bashSpec(),
@@ -121,5 +145,5 @@ export const TOOLS: Record<ToolName, ToolDef> = {
 };
 
 export function toolSpecs(): ToolSpec[] {
-  return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.edit.spec, TOOLS.bash.spec];
+  return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.edit.spec, TOOLS.write.spec, TOOLS.bash.spec];
 }
