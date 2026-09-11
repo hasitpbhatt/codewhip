@@ -81,8 +81,12 @@ function printHelp(): void {
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
   console.log("");
-  console.log("Keys: env wins when set (NVIDIA_API_KEY/MISTRAL_API_KEY/SENSENOVA_API_KEY/ALIBABA_API_KEY/LLM7_API_KEY/TOKENHARBOR_API_KEY/<custom>); else `codewhip auth login <provider>`.");
-  console.log("  key consoles: build.nvidia.com/settings/api-keys · console.mistral.ai · token.sensenova.ai · dashscope-intl.aliyun.com · dash.llm7.io · tokenharbor.ai/dashboard/api-keys");
+  // Key help derives from the registry (builtins + customs) — adding a
+  // provider stays one table row, never a help-text edit. Consoles show
+  // bare domains (the registry holds full URLs for error messages).
+  const cfgs = listAllProviderConfigs();
+  console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
+  console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
   console.log("  llm7 works with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
   console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; other providers print cost untracked).");
   console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);

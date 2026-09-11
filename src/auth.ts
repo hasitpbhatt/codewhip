@@ -14,6 +14,8 @@ type StoredCreds = {
   alibabaApiKey?: unknown;
   llm7ApiKey?: unknown;
   tokenharborApiKey?: unknown;
+  baiApiKey?: unknown;
+  fabrykaApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -25,6 +27,8 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   alibaba: "alibabaApiKey",
   llm7: "llm7ApiKey",
   tokenharbor: "tokenharborApiKey",
+  bai: "baiApiKey",
+  fabryka: "fabrykaApiKey",
 };
 
 function customFieldFor(provider: string): string {

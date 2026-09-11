@@ -14,8 +14,8 @@ import type {
  * The loop only ever sees a ChatPort; openAiPort adapts any config.
  */
 
-/** Builtins shipped with the install (llm7 + tokenharbor: gateway tiers). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor";
+/** Builtins shipped with the install (llm7 + tokenharbor + bai + fabryka: gateway tiers). */
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -27,6 +27,8 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "alibaba",
   "llm7",
   "tokenharbor",
+  "bai",
+  "fabryka",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -62,6 +64,8 @@ const SENSENOVA_TIMEOUT_MS = 45000;
 const ALIBABA_TIMEOUT_MS = 45000;
 const LLM7_TIMEOUT_MS = 45000;
 const TOKENHARBOR_TIMEOUT_MS = 45000;
+const BAI_TIMEOUT_MS = 45000;
+const FABRYKA_TIMEOUT_MS = 45000;
 const MAX_BODY_CHARS = 500;
 
 export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
@@ -135,6 +139,31 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     envVar: "TOKENHARBOR_API_KEY",
     keyUrl: "https://tokenharbor.ai/dashboard/api-keys",
     timeoutMs: TOKENHARBOR_TIMEOUT_MS,
+  },
+  bai: {
+    id: "bai",
+    brand: "bai",
+    baseUrl: "https://api.b.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    // Pricing-table pick (cheapest stable input); exact API slugs sit
+    // behind login — tagged untested until a live probe clears it.
+    defaultModel: "GPT-5 Nano",
+    envVar: "BAI_API_KEY",
+    keyUrl: "https://chat.b.ai/chat",
+    timeoutMs: BAI_TIMEOUT_MS,
+  },
+  fabryka: {
+    id: "fabryka",
+    brand: "fabryka",
+    baseUrl: "https://router.fabryka.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "qwen3.6-35b-a3b",
+    envVar: "FABRYKA_API_KEY",
+    keyUrl: "https://router.fabryka.ai",
+    timeoutMs: FABRYKA_TIMEOUT_MS,
+    rateLimitedHint: "single-GPU backend: keep concurrency at 1, concurrent requests fail",
   },
 };
 

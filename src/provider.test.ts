@@ -35,12 +35,19 @@ describe("provider", () => {
     strictEqual(PROVIDERS.llm7.envVar, "LLM7_API_KEY");
     strictEqual(PROVIDERS.llm7.anonymousKey, "unused");
   });
-  it("tokenharbor rides the documented gateway endpoint (key required)", () => {
-    strictEqual(chatUrlFor(PROVIDERS.tokenharbor), "https://tokenharbor.ai/v1/chat/completions");
-    strictEqual(modelsUrlFor(PROVIDERS.tokenharbor), "https://tokenharbor.ai/v1/models");
-    strictEqual(PROVIDERS.tokenharbor.defaultModel, "th-orchestra");
-    strictEqual(PROVIDERS.tokenharbor.envVar, "TOKENHARBOR_API_KEY");
-    strictEqual(PROVIDERS.tokenharbor.anonymousKey, undefined);
+  it("bai rides the documented gateway endpoint (key required)", () => {
+    strictEqual(chatUrlFor(PROVIDERS.bai), "https://api.b.ai/v1/chat/completions");
+    strictEqual(modelsUrlFor(PROVIDERS.bai), "https://api.b.ai/v1/models");
+    strictEqual(PROVIDERS.bai.defaultModel, "GPT-5 Nano");
+    strictEqual(PROVIDERS.bai.envVar, "BAI_API_KEY");
+    strictEqual(PROVIDERS.bai.anonymousKey, undefined);
+  });
+  it("fabryka rides the documented router endpoint (key required)", () => {
+    strictEqual(chatUrlFor(PROVIDERS.fabryka), "https://router.fabryka.ai/v1/chat/completions");
+    strictEqual(modelsUrlFor(PROVIDERS.fabryka), "https://router.fabryka.ai/v1/models");
+    strictEqual(PROVIDERS.fabryka.defaultModel, "qwen3.6-35b-a3b");
+    strictEqual(PROVIDERS.fabryka.envVar, "FABRYKA_API_KEY");
+    strictEqual(PROVIDERS.fabryka.anonymousKey, undefined);
   });
   it("makePortForConfig adapts any config; makePort refuses unknown ids without throwing", async () => {
     const port = makePortForConfig({ ...PROVIDERS.llm7, id: "llm7-clone" }, "test-key");
@@ -70,11 +77,13 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 6);
+    strictEqual(PROVIDER_IDS.length, 8);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");
     strictEqual(parseProviderId("tokenharbor"), "tokenharbor");
+    strictEqual(parseProviderId("bai"), "bai");
+    strictEqual(parseProviderId("fabryka"), "fabryka");
     strictEqual(parseProviderId("bogus"), null);
     strictEqual(parseProviderId(undefined), null);
   });

@@ -138,7 +138,7 @@ AGENTS.md               working agreement for coding agents
 
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → five tools → 6 providers + custom registration + meter →
+- **H1 (parity + trust):** `agentLoop()` → five tools → 8 providers + custom registration + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
   (provenanced) → hash-chained audit → `init`/`run`/`--share` (local redacted
   bundles; hosted links need a server) →
@@ -208,9 +208,11 @@ codewhip run "Say OK" --provider sensenova         # sensenova default (sensenov
 codewhip run "Say OK" --provider alibaba           # alibaba default (qwen-plus)
 codewhip run "Say OK" --provider llm7              # llm7 gateway default (works with no key: anonymous, rate-limited)
 codewhip run "Say OK" --provider tokenharbor       # tokenharbor orchestrator (needs a key: free account works)
+codewhip run "Say OK" --provider bai               # bai gateway default (needs a key: credit billing, paid)
+codewhip run "Say OK" --provider fabryka           # fabryka router default (needs a key: free key, reasoning model)
 ```
 
-Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`); bai keys at `https://chat.b.ai/chat` (log in, top up credits — paid, metered per model); fabryka keys at `https://router.fabryka.ai` (free key, then $0.20/$0.60 per 1M in/out — single `qwen3.6-35b-a3b` reasoning model, keep concurrency at 1). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`/`BAI_API_KEY`/`FABRYKA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
 
 ### Custom providers (any OpenAI-compatible endpoint)
 

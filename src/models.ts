@@ -59,6 +59,22 @@ export function annotateModel(provider: string, id: string): { tag: AgencyTag; n
         : "served via tokenharbor gateway; agency unknown",
     };
   }
+  if (provider === "bai") {
+    return {
+      tag: "untested",
+      note: id === def
+        ? "bai gateway default (pricing-table pick; OpenAI-compatible, no live probe yet)"
+        : "served via bai gateway; agency unknown",
+    };
+  }
+  if (provider === "fabryka") {
+    return {
+      tag: "untested",
+      note: id === def
+        ? "fabryka router default (qwen reasoning model; no live probe yet)"
+        : "served via fabryka router; agency unknown",
+    };
+  }
   if (id.includes("embed")) return { tag: "non-chat", note: "embeddings only" };
   if (id.startsWith("mistral-ocr")) return { tag: "non-chat", note: "ocr only" };
   if (id.startsWith("mistral-moderation")) return { tag: "non-chat", note: "moderation only" };

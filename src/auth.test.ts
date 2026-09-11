@@ -15,8 +15,8 @@ for (const p of PROVIDER_IDS) {
 process.env[envKey] = dir;
 
 describe("auth", () => {
-  it("registry supports all six builtin providers", () => {
-    strictEqual(PROVIDER_IDS.length, 6);
+  it("registry supports all eight builtin providers", () => {
+    strictEqual(PROVIDER_IDS.length, 8);
   });
   it("resolves no key when nothing is stored", () => {
     strictEqual(resolveKey("nvidia").source, "none");
@@ -50,6 +50,10 @@ describe("auth", () => {
   });
   it("tokenharbor needs a key (no anonymous fallback)", () => {
     strictEqual(resolveKey("tokenharbor").source, "none");
+  });
+  it("bai and fabryka need keys (no anonymous fallback)", () => {
+    strictEqual(resolveKey("bai").source, "none");
+    strictEqual(resolveKey("fabryka").source, "none");
   });
   it("custom provider keys persist without dropping builtins", () => {
     saveKey("my-custom", "k-custom");
