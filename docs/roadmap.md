@@ -36,7 +36,8 @@ Ordered from `docs/moat/06-post-h1-verdict.md` P1 items 3–8. All are implement
   queries): edges derived from `outcomes.jsonl`; Mem0/Zep/Letta evaluated
   then; flat files never replaced.
 - [ ] Full provider matrix + auto-fallback + latency optimization; local-model
-  parity path.
+  parity path (free-tier slice shipped 2026-09-11: 8 free gateways — 4 keyless
+  (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain).
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

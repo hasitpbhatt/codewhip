@@ -69,6 +69,27 @@ describe("router", () => {
     strictEqual(estimateCost("nvidia", "moonshotai/kimi-k3", 10000, 5000), 0);
     strictEqual(estimateCost("sensenova", "sensenova-6.8-flash-lite", 10000, 5000), null);
   });
+  it("prices every free-chain default $0 (not null)", () => {
+    const pairs: Array<[string, string]> = [
+      ["groq", "openai/gpt-oss-120b"],
+      ["opencode", "mimo-v2.5-free"],
+      ["kilo", "cohere/north-mini-code:free"],
+      ["openrouter", "nvidia/nemotron-3-super-120b-a12b:free"],
+      ["gemini", "gemini-2.5-flash"],
+      ["cerebras", "qwen-3-coder-480b"],
+      ["zai", "glm-5.3-flash"],
+      ["empero", "glm-5.3-flash"],
+    ];
+    for (const [provider, model] of pairs) {
+      strictEqual(estimateCost(provider, model, 1000, 1000), 0, `${provider}:${model}`);
+    }
+  });
+  it("polish gate passes on a $0 free-chain route; unpriced pairs stay null", () => {
+    const cost = estimateCost("groq", "openai/gpt-oss-120b", 1000, 1000);
+    strictEqual(cost, 0);
+    ok(polishGate(cost).pass);
+    strictEqual(estimateCost("groq", "some-paid-model", 1000, 1000), null);
+  });
   it("polish gate passes only on priced <$0.05", () => {
     ok(polishGate(0).pass);
     ok(!polishGate(null).pass);

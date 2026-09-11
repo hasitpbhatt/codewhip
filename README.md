@@ -227,6 +227,47 @@ codewhip provider remove my-gateway
 
 Registration is validated (`https://` base, `UPPER_SNAKE` env var, 5s–120s timeout) and stored keyless in `custom-providers.json` next to the key file — `--failover`, `--provider`, and `models` all see customs. Anything not OpenAI-compatible (`/v1/chat/completions` + Bearer) needs an adapter, not a table row.
 
+### Free models at one place
+
+`codewhip free` lists the free-provider chain read-only (no key, no network):
+what each gateway offers, whether it needs a key, its limits as verified on
+2026-09-11, and where to get the key. Keyless rows print first.
+
+`codewhip run "..." --free` arms the whole chain on one run: on a
+rate-limit/timeout the loop hops down the chain in order (same semantics as
+`--failover`, each provider at most once per run), it only walks free
+providers it can authenticate, and it **never bills pay-go**. The head is
+your explicit `--provider` (must be a free-catalog id) or the first free
+candidate with a usable key; the keyless tiers lead the chain, keyless `llm7`
+is the floor, so a run still moves when every stored key is gone. `--free`
+and `--failover` are mutually exclusive, and naming a non-free provider is
+refused: `--free runs the free chain only`.
+
+The 8 free gateways added to the builtin registry — 4 of them run with **no
+key at all**:
+
+| Provider | Keyless? | Env var | Key URL |
+|---|---|---|---|
+| kilo | yes — `:free` models are fully anonymous | `KILO_API_KEY` (optional) | https://kilo.ai |
+| opencode | yes — Zen's anonymous `public` key + identity headers, handled by codewhip | `OPENCODE_API_KEY` (optional) | https://opencode.ai/zen |
+| empero | yes — openly free endpoint (`free` placeholder key) | `EMPERO_API_KEY` (optional) | https://free.empero.org |
+| groq | free key required | `GROQ_API_KEY` | https://console.groq.com/keys |
+| cerebras | free key required | `CEREBRAS_API_KEY` | https://cloud.cerebras.ai |
+| openrouter | free key required | `OPENROUTER_API_KEY` | https://openrouter.ai/keys |
+| gemini | free key required | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+| zai | free key required | `ZAI_API_KEY` | https://z.ai |
+
+Every free-tier default is priced `$0` on the receipt — never fiction-priced,
+and non-free models on the same gateway print `cost untracked`.
+
+Honest notes: free tiers are **rate-limited** (openrouter: 50 req/day without
+credits; groq: ~30 req/min per model; opencode zen: small per-IP anonymous
+quota). Free-model status can be **time-limited** (zai's `glm-5.3-flash` is a
+promo — expect quota errors when it ends) and endpoints can vanish (empero
+was in maintenance at the 2026-09-11 probe). Free tiers may use your data for
+**provider-side model improvement** — never send private or production code
+on free tiers.
+
 ### Surviving rate limits (opt-in, off by default)
 
 ```sh

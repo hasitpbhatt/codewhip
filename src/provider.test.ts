@@ -66,6 +66,35 @@ describe("provider", () => {
     strictEqual(chatUrlFor(PROVIDERS.nvidia), "https://integrate.api.nvidia.com/v1/chat/completions");
     strictEqual(chatUrlFor(PROVIDERS.mistral), "https://api.mistral.ai/v1/chat/completions");
   });
+  it("free aggregators ride their verified endpoints (origin + path shape)", () => {
+    const expected: Array<[string, string, string]> = [
+      ["opencode", "https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/zen/v1/models"],
+      ["kilo", "https://api.kilo.ai/api/gateway/v1/chat/completions", "https://api.kilo.ai/api/gateway/v1/models"],
+      ["groq", "https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai/v1/models"],
+      ["cerebras", "https://api.cerebras.ai/v1/chat/completions", "https://api.cerebras.ai/v1/models"],
+      ["openrouter", "https://openrouter.ai/api/v1/chat/completions", "https://openrouter.ai/api/v1/models"],
+      ["gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "https://generativelanguage.googleapis.com/v1beta/openai/models"],
+      ["zai", "https://api.z.ai/api/paas/v4/chat/completions", "https://api.z.ai/api/paas/v4/models"],
+      ["empero", "https://free.empero.org/v1/chat/completions", "https://free.empero.org/v1/models"],
+    ];
+    for (const [id, chat, models] of expected) {
+      strictEqual(chatUrlFor(PROVIDERS[id as keyof typeof PROVIDERS]), chat, id);
+      strictEqual(modelsUrlFor(PROVIDERS[id as keyof typeof PROVIDERS]), models, id);
+    }
+  });
+  it("keyless free tiers carry their verified anonymous keys; opencode carries its identity headers", () => {
+    strictEqual(PROVIDERS.kilo.anonymousKey, "anonymous");
+    strictEqual(PROVIDERS.opencode.anonymousKey, "public");
+    strictEqual(PROVIDERS.empero.anonymousKey, "free");
+    ok(PROVIDERS.opencode.headers?.["x-opencode-session"]?.startsWith("ses-"), "session header present");
+    strictEqual(PROVIDERS.opencode.headers?.["User-Agent"], "opencode/1.0.0");
+    // The keyed free tiers must not fake keyless access.
+    strictEqual(PROVIDERS.groq.anonymousKey, undefined);
+    strictEqual(PROVIDERS.cerebras.anonymousKey, undefined);
+    strictEqual(PROVIDERS.openrouter.anonymousKey, undefined);
+    strictEqual(PROVIDERS.gemini.anonymousKey, undefined);
+    strictEqual(PROVIDERS.zai.anonymousKey, undefined);
+  });
   it("every registered provider builds a valid port and config", () => {
     for (const id of PROVIDER_IDS) {
       const cfg = PROVIDERS[id];
@@ -77,7 +106,7 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 8);
+    strictEqual(PROVIDER_IDS.length, 16);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");

@@ -14,8 +14,8 @@ import type {
  * The loop only ever sees a ChatPort; openAiPort adapts any config.
  */
 
-/** Builtins shipped with the install (llm7 + tokenharbor + bai + fabryka: gateway tiers). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka";
+/** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -29,6 +29,14 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "tokenharbor",
   "bai",
   "fabryka",
+  "opencode",
+  "kilo",
+  "groq",
+  "cerebras",
+  "openrouter",
+  "gemini",
+  "zai",
+  "empero",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -56,6 +64,13 @@ export type ProviderConfig = {
    * Runs still work keyless; `auth login` upgrades to higher limits.
    */
   anonymousKey?: string;
+  /**
+   * Per-provider static headers merged into every chat/models call
+   * (opencode zen's free tier is identity-header gated: requests without
+   * x-opencode-session are refused with MissingSessionID — verified
+   * 2026-09-11 with a presence-only check, dummy value passes).
+   */
+  headers?: Record<string, string>;
 };
 
 /**
@@ -163,6 +178,123 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://router.fabryka.ai",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "single-GPU backend: keep concurrency at 1, concurrent requests fail",
+  },
+  // Free aggregators (endpoint facts live-verified 2026-09-11). Free-chain
+  // ordering + honest quota lines live in free-providers.ts.
+  opencode: {
+    id: "opencode",
+    brand: "opencode",
+    baseUrl: "https://opencode.ai",
+    chatPath: "/zen/v1/chat/completions",
+    modelsPath: "/zen/v1/models",
+    // defaultModel: deepseek-v4-flash-free was the catalog pick but its
+    // upstream 400'd "Model is unavailable" on both 2026-09-11 probes;
+    // mimo-v2.5-free answered keyless end-to-end via codewhip the same day.
+    defaultModel: "mimo-v2.5-free",
+    envVar: "OPENCODE_API_KEY",
+    keyUrl: "https://opencode.ai/zen",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free-model quotas unpublished — wait and retry",
+    // Free-tier mechanism verified 2026-09-11: with no key the Zen client
+    // sends literally "public" as the bearer plus its identity headers; the
+    // server presence-checks the session header (dummy value passes) and
+    // enforces a small per-IP anonymous quota (FreeUsageLimitError on 429).
+    anonymousKey: "public",
+    headers: {
+      "x-opencode-session": "ses-codewhip-free",
+      "User-Agent": "opencode/1.0.0",
+    },
+  },
+  kilo: {
+    id: "kilo",
+    brand: "kilo",
+    baseUrl: "https://api.kilo.ai",
+    chatPath: "/api/gateway/v1/chat/completions",
+    modelsPath: "/api/gateway/v1/models",
+    defaultModel: "cohere/north-mini-code:free",
+    envVar: "KILO_API_KEY",
+    keyUrl: "https://kilo.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free-model daily caps unpublished — wait and retry",
+    // ':free' models are fully anonymous (verified 2026-09-11: chat works
+    // with no Authorization header at all; paid models 401 without a key).
+    // The placeholder only clears the port's empty-key guard.
+    anonymousKey: "anonymous",
+  },
+  groq: {
+    id: "groq",
+    brand: "groq",
+    baseUrl: "https://api.groq.com",
+    chatPath: "/openai/v1/chat/completions",
+    modelsPath: "/openai/v1/models",
+    defaultModel: "openai/gpt-oss-120b",
+    envVar: "GROQ_API_KEY",
+    keyUrl: "https://console.groq.com/keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier ~30 req/min per model, ~14.4k req/day",
+  },
+  cerebras: {
+    id: "cerebras",
+    brand: "cerebras",
+    baseUrl: "https://api.cerebras.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "qwen-3-coder-480b",
+    envVar: "CEREBRAS_API_KEY",
+    keyUrl: "https://cloud.cerebras.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free-tier numbers unpublished — wait and retry",
+  },
+  openrouter: {
+    id: "openrouter",
+    brand: "openrouter",
+    baseUrl: "https://openrouter.ai",
+    chatPath: "/api/v1/chat/completions",
+    modelsPath: "/api/v1/models",
+    defaultModel: "nvidia/nemotron-3-super-120b-a12b:free",
+    envVar: "OPENROUTER_API_KEY",
+    keyUrl: "https://openrouter.ai/keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free models: 50 req/day without credits, 1000/day after a $10 credit purchase",
+  },
+  gemini: {
+    id: "gemini",
+    brand: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    chatPath: "/v1beta/openai/chat/completions",
+    modelsPath: "/v1beta/openai/models",
+    defaultModel: "gemini-2.5-flash",
+    envVar: "GEMINI_API_KEY",
+    keyUrl: "https://aistudio.google.com/apikey",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier is small in 2026 (tens of req/day) — wait and retry",
+  },
+  zai: {
+    id: "zai",
+    brand: "zai",
+    baseUrl: "https://api.z.ai",
+    chatPath: "/api/paas/v4/chat/completions",
+    modelsPath: "/api/paas/v4/models",
+    defaultModel: "glm-5.3-flash",
+    envVar: "ZAI_API_KEY",
+    keyUrl: "https://z.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "GLM flash free status is limited-time — expect quota errors when the promo ends",
+  },
+  empero: {
+    id: "empero",
+    brand: "empero",
+    baseUrl: "https://free.empero.org",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "glm-5.3-flash",
+    envVar: "EMPERO_API_KEY",
+    keyUrl: "https://free.empero.org",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free endpoint, limits unpublished — wait and retry (prompts may be logged: never send private code)",
+    // Openly free: no signup, "free" is the documented placeholder key for
+    // clients that require one. In maintenance (503) at the 2026-09-11 probe.
+    anonymousKey: "free",
   },
 };
 
@@ -314,12 +446,16 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
         }
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      const res = await fetch(baseUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+    const wireHeaders: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    };
+    if (cfg.headers !== undefined) {
+      Object.assign(wireHeaders, cfg.headers);
+    }
+    const res = await fetch(baseUrl, {
+      method: "POST",
+      headers: wireHeaders,
         body: JSON.stringify({
           model,
           messages: toWireMessages(messages),

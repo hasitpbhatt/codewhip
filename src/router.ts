@@ -87,6 +87,16 @@ export function resolveRoute(opts: {
 /** Known per-1K-token prices in USD. Missing = untracked (never fiction). */
 const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> = {
   "nvidia:moonshotai/kimi-k3": { input: 0, output: 0 },
+  // Free-chain routes (verified 2026-09-11): the free tier/default free
+  // models are real $0 prices. Never price anything off this list.
+  "opencode:mimo-v2.5-free": { input: 0, output: 0 },
+  "kilo:cohere/north-mini-code:free": { input: 0, output: 0 },
+  "openrouter:nvidia/nemotron-3-super-120b-a12b:free": { input: 0, output: 0 },
+  "gemini:gemini-2.5-flash": { input: 0, output: 0 },
+  "groq:openai/gpt-oss-120b": { input: 0, output: 0 },
+  "cerebras:qwen-3-coder-480b": { input: 0, output: 0 },
+  "zai:glm-5.3-flash": { input: 0, output: 0 },
+  "empero:glm-5.3-flash": { input: 0, output: 0 },
 };
 
 export function estimateCost(provider: ProviderId, model: string, prompt: number, completion: number): number | null {

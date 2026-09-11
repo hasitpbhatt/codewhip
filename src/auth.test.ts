@@ -15,8 +15,16 @@ for (const p of PROVIDER_IDS) {
 process.env[envKey] = dir;
 
 describe("auth", () => {
-  it("registry supports all eight builtin providers", () => {
-    strictEqual(PROVIDER_IDS.length, 8);
+  it("registry supports all sixteen builtin providers", () => {
+    strictEqual(PROVIDER_IDS.length, 16);
+  });
+  it("keyless free tiers fall back to their verified anonymous keys", () => {
+    strictEqual(resolveKey("kilo").source, "anonymous");
+    strictEqual(resolveKey("kilo").key, "anonymous");
+    strictEqual(resolveKey("opencode").source, "anonymous");
+    strictEqual(resolveKey("opencode").key, "public");
+    strictEqual(resolveKey("empero").source, "anonymous");
+    strictEqual(resolveKey("empero").key, "free");
   });
   it("resolves no key when nothing is stored", () => {
     strictEqual(resolveKey("nvidia").source, "none");
@@ -66,5 +74,31 @@ describe("auth", () => {
   });
   it("unknown provider ids resolve to no key", () => {
     strictEqual(resolveKey("nope-not-a-provider").source, "none");
+  });
+  it("groq keys save/resolve/clear under their own field, preserving other providers", () => {
+    const groqDir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-auth-groq-"));
+    const prev = process.env[envKey];
+    process.env[envKey] = groqDir;
+    try {
+      saveKey("groq", "k");
+      saveKey("mistral", "k-mistral-kept");
+      const r = resolveKey("groq");
+      strictEqual(r.key, "k");
+      strictEqual(r.source, "file");
+      const stored = JSON.parse(
+        fs.readFileSync(path.join(configDir(), "credentials.json"), "utf8")
+      ) as Record<string, unknown>;
+      strictEqual(stored["groqApiKey"], "k");
+      strictEqual(clearKey("groq"), true);
+      strictEqual(resolveKey("groq").source, "none");
+      strictEqual(resolveKey("mistral").key, "k-mistral-kept");
+      strictEqual(clearKey("groq"), false);
+    } finally {
+      if (prev === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = prev;
+      }
+    }
   });
 });

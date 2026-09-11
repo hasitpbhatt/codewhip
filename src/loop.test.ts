@@ -3,8 +3,8 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentLoop, withTimeout } from "./loop.js";
-import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure } from "./testkit/fakePort.js";
+import { agentLoop, withTimeout, type LoopEvent } from "./loop.js";
+import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure, authFailure } from "./testkit/fakePort.js";
 import { listRules } from "./remember-store.js";
 import type { RememberedRule } from "./remember-store.js";
 import { readAuditLog, verifyChain } from "./audit.js";
@@ -274,5 +274,123 @@ describe("loop", () => {
     });
     ok(r.error !== undefined && r.error.includes("token budget exhausted"));
     ok(ev.some((t) => t.includes("budget")));
+  });
+  it("chain hops in order: primary → target1 → target2, one failover event per hop", async () => {
+    const ev: LoopEvent[] = [];
+    const primary = makeFakePort([rateLimited()]);
+    const t1 = makeFakePort([rateLimited()]);
+    const t2 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [
+        { label: "groq", model: "m1", port: t1.port },
+        { label: "cerebras", model: "m2", port: t2.port },
+      ],
+      onEvent: (e) => ev.push(e), remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.error, undefined);
+    strictEqual(r.failovers.length, 2);
+    strictEqual(r.failovers[0]?.from, "nvidia:m");
+    strictEqual(r.failovers[0]?.to, "groq:m1");
+    strictEqual(r.failovers[1]?.from, "groq:m1");
+    strictEqual(r.failovers[1]?.to, "cerebras:m2");
+    const hops = ev.filter((e) => e.kind === "failover");
+    strictEqual(hops.length, 2);
+    ok(hops[0]?.text.includes("failing over to groq:m1"), hops[0]?.text);
+    ok(hops[1]?.text.includes("failing over to cerebras:m2"), hops[1]?.text);
+  });
+  it("each target at most once: an exhausted chain ends with the remedy error", async () => {
+    const primary = makeFakePort([rateLimited()]);
+    const t1 = makeFakePort([rateLimited()]);
+    const t2 = makeFakePort([rateLimited()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [
+        { label: "groq", model: "m1", port: t1.port },
+        { label: "cerebras", model: "m2", port: t2.port },
+      ],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined);
+    ok(r.error.includes("retry list exhausted"), r.error);
+    ok(r.error.includes("--retry-wait"));
+    ok(r.error.includes("--models/--failover"));
+    strictEqual(primary.record.length, 1);
+    strictEqual(t1.record.length, 1);
+    strictEqual(t2.record.length, 1);
+  });
+  it("auth failure on the primary never hops (chain stays untouched)", async () => {
+    const primary = makeFakePort([authFailure()]);
+    const t1 = makeFakePort([rateLimited()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "groq", model: "m1", port: t1.port }],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined && r.error.includes("invalid key"), r.error);
+    strictEqual(r.failovers.length, 0);
+    strictEqual(primary.record.length, 1);
+    strictEqual(t1.record.length, 0);
+  });
+  it("rotation candidates are head-provider only: consumed before the hop, never after", async () => {
+    const ev: LoopEvent[] = [];
+    const primary = makeFakePort([rateLimited()]);
+    const t1 = makeFakePort([rateLimited()]);
+    const t2 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", models: ["a", "b"], label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [
+        { label: "groq", model: "m1", port: t1.port },
+        { label: "cerebras", model: "m2", port: t2.port },
+      ],
+      onEvent: (e) => ev.push(e), remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    // Trail: rotate a→b (head, exhausted first), then hop, then hop.
+    strictEqual(r.failovers.length, 3);
+    strictEqual(r.failovers[0]?.from, "nvidia:a");
+    strictEqual(r.failovers[0]?.to, "nvidia:b");
+    strictEqual(r.failovers[1]?.from, "nvidia:b");
+    strictEqual(r.failovers[1]?.to, "groq:m1");
+    strictEqual(r.failovers[2]?.from, "groq:m1");
+    strictEqual(r.failovers[2]?.to, "cerebras:m2");
+    // Target ports only ever saw their own model — head models never replay.
+    strictEqual(primary.record.map((c) => c.model).join(","), "a,b");
+    strictEqual(t1.record.map((c) => c.model).join(","), "m1");
+    strictEqual(t2.record.map((c) => c.model).join(","), "m2");
+  });
+  it("a 1-element chain is the old single --failover: one hop max", async () => {
+    const primary = makeFakePort([rateLimited()]);
+    const t1 = makeFakePort([rateLimited()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "groq", model: "m1", port: t1.port }],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined && r.error.includes("retry list exhausted"), r.error);
+    strictEqual(r.failovers.length, 1);
+    strictEqual(r.failovers[0]?.to, "groq:m1");
+    strictEqual(primary.record.length, 1);
+    strictEqual(t1.record.length, 1);
+  });
+  it("a 1-element chain still succeeds on its single hop", async () => {
+    const primary = makeFakePort([rateLimited()]);
+    const t1 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "groq", model: "m1", port: t1.port }],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.error, undefined);
+    strictEqual(r.failovers.length, 1);
+    strictEqual(r.failovers[0]?.to, "groq:m1");
   });
 });

@@ -6,6 +6,7 @@ import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
+import { freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
@@ -41,6 +42,8 @@ type RunOptions = {
   yolo: boolean;
   retryWait: boolean;
   failover: boolean;
+  /** Arm the free-provider chain (mutually exclusive with --failover). */
+  free: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
   /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
@@ -62,6 +65,7 @@ function printRunOptions(): void {
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
+  console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
 }
@@ -73,7 +77,7 @@ function printKeysHelp(): void {
   const cfgs = listAllProviderConfigs();
   console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
   console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
-  console.log("  llm7 works with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+  console.log("  keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited — see: codewhip free). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
 }
 
 /** One-command topics for `codewhip help <command>` / `codewhip <command> --help`. Returns false for unknown topics. */
@@ -106,6 +110,10 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip provider remove <id>     — forget a custom provider (builtins stay)");
       console.log("codewhip provider show <id>       — base URLs, default model, env var, key console");
       return true;
+    case "free":
+      console.log("codewhip free — list the free-provider chain (read-only: no key, no network).");
+      console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
+      return true;
     case "audit":
       console.log("codewhip audit [--verify|--last <n>|--replay <runId>|--export <file>] — inspect the hash-chained log.");
       console.log("  --verify proves the chain (needs .codewhip/key); hashes cover redacted content only.");
@@ -137,7 +145,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth models provider audit metrics verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth models free provider audit metrics verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -153,6 +161,7 @@ function printHelp(): void {
   console.log("  auth                 store provider keys (login/logout/status [provider])");
   console.log("  models [provider]    list served models with agency tags (default: nvidia)");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
+  console.log("  free                 list the free-provider chain (keyless rows first, limits, key consoles)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
@@ -164,15 +173,29 @@ function printHelp(): void {
   printRunOptions();
   console.log("");
   printKeysHelp();
-  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; other providers print cost untracked).");
+  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia + the free chain = $0; other providers print cost untracked).");
   console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);
 }
 
-function costNote(provider: string): string {
-  // Honest meter: only NVIDIA's free tier is known-$0. Other providers bill
-  // or cap in provider-specific ways — point at their console, not fiction.
-  if (provider === "nvidia") {
-    return "$0.0000 (nvidia free tier)";
+function costNote(provider: string, model?: string): string {
+  // Honest meter: only known-$0 routes print $0 — nvidia's free tier and
+  // the free-chain providers verified 2026-09-11 (kilo/openrouter/opencode
+  // are $0 only on their free-suffixed models; empero's endpoint is openly
+  // free but logs prompts). Everything else bills or caps in provider-
+  // specific ways — point at their console, not fiction.
+  if (provider === "nvidia" || provider === "groq" || provider === "cerebras" || provider === "gemini" || provider === "zai") {
+    return `$0.0000 (${provider} free tier)`;
+  }
+  if (provider === "empero") {
+    return "$0.0000 (empero free endpoint)";
+  }
+  const m = model ?? "";
+  if (provider === "kilo" || provider === "openrouter") {
+    if (m.endsWith(":free")) {
+      return "$0.0000 (:free model)";
+    }
+  } else if (provider === "opencode" && m.endsWith("-free")) {
+    return "$0.0000 (free model)";
   }
   const keyUrl = getProviderConfig(provider)?.keyUrl;
   return keyUrl !== undefined && keyUrl.length > 0
@@ -199,7 +222,7 @@ function mixReceiptString(buckets: UsageBucket[], provider: ProviderId, model: s
     p += b.prompt;
     c += b.completion;
     parts.push(`${b.label}:${b.model} ${b.prompt}+${b.completion}`);
-    costs.push(costNote(b.label));
+    costs.push(costNote(b.label, b.model));
   }
   return `receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`;
 }
@@ -210,7 +233,7 @@ function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: st
 }
 
 function printStubReceipt(model: string, provider: ProviderId): void {
-  printReceipt(model, 0, 0, costNote(provider));
+  printReceipt(model, 0, 0, costNote(provider, model));
 }
 
 function parseRunArgs(args: string[]): RunOptions | null {
@@ -226,6 +249,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let yolo = false;
   let retryWait = false;
   let failover = false;
+  let free = false;
   let share = false;
   const positional: string[] = [];
 
@@ -294,7 +318,11 @@ function parseRunArgs(args: string[]): RunOptions | null {
     } else if (a === "--retry-wait") {
       retryWait = true;
     } else if (a === "--failover") {
+      if (free) return fail("use --free or --failover, not both");
       failover = true;
+    } else if (a === "--free") {
+      if (failover) return fail("use --free or --failover, not both");
+      free = true;
     } else if (a === "--share") {
       share = true;
     } else if (!a.startsWith("-")) {
@@ -307,7 +335,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, share,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, share,
     taskClass, timeoutMs,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
@@ -422,11 +450,38 @@ function promptApproval(question: string): Promise<ApprovalAnswer> {
 }
 
 async function cmdRun(opts: RunOptions): Promise<void> {
+  // --free arms the free chain: head = the explicit --provider (must be a
+  // free-catalog id) or the first free candidate with a usable key (env,
+  // stored file, or the row's anonymousKey — kilo/opencode/empero/llm7 are
+  // keyless). Chain = the remaining keyed candidates, catalog order.
+  let freeChain: FailoverTarget[] = [];
+  if (opts.free) {
+    const candidates = freeChainIds();
+    const head = opts.providerExplicit ? opts.provider : candidates.find((id) => resolveKey(id).key.length > 0);
+    if (head === undefined || !candidates.some((c) => c === head)) {
+      console.error(
+        opts.providerExplicit
+          ? `codewhip: --free runs the free chain only — "${opts.provider}" is not in it (see: codewhip free)`
+          : "codewhip: --free found no runnable free provider (no keys set and no keyless candidate) — see: codewhip free"
+      );
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const headModel = opts.modelExplicit ? opts.model : getProviderConfig(head)?.defaultModel ?? opts.model;
+    freeChain = candidates
+      .filter((id) => id !== head && resolveKey(id).key.length > 0)
+      .flatMap((id) => {
+        const cfg = getProviderConfig(id);
+        return cfg === null ? [] : [{ label: cfg.id, model: cfg.defaultModel, port: makePortForConfig(cfg, resolveKey(id).key) }];
+      });
+    opts = { ...opts, provider: head, model: headModel };
+  }
   const routed = resolveRoute({
     prompt: opts.prompt,
     taskClass: opts.taskClass,
-    provider: opts.providerExplicit ? opts.provider : undefined,
-    model: opts.modelExplicit ? opts.model : undefined,
+    provider: opts.providerExplicit || opts.free ? opts.provider : undefined,
+    model: opts.modelExplicit || opts.free ? opts.model : undefined,
     defaultProvider: "nvidia",
     defaultModel: PROVIDERS.nvidia.defaultModel,
   });
@@ -437,8 +492,11 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
-  opts = { ...opts, provider: routed.provider, model: routed.model };
-  console.log(`route: ${routed.taskClass} → ${routed.provider}:${routed.model} (${routed.auto ? "auto" : "manual"}: ${routed.note})`);
+  const route = opts.free && !opts.providerExplicit
+    ? { ...routed, note: "--free chain head (first free candidate with a usable key)" }
+    : routed;
+  opts = { ...opts, provider: route.provider, model: route.model };
+  console.log(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
@@ -469,8 +527,15 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if (keySource === "anonymous") {
     console.log(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
   }
-  let failoverTarget: FailoverTarget | undefined;
-  if (opts.failover) {
+  let failoverTargets: FailoverTarget[] = [];
+  if (opts.free) {
+    failoverTargets = freeChain;
+    if (failoverTargets.length > 0) {
+      console.log(`!! --free armed: on rate-limit/timeout walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
+    } else {
+      console.log("!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
+    }
+  } else if (opts.failover) {
     const defaultModel = runCfg.defaultModel;
     if (opts.model !== defaultModel) {
       console.error("codewhip: --failover needs the default model first (drop --model/--models, or lead the chain with it)");
@@ -494,11 +559,11 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     }
     const targetModel = nextCfg.defaultModel;
     console.log(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout. May bill ${next} pay-go.`);
-    failoverTarget = {
+    failoverTargets = [{
       label: next,
       model: targetModel,
       port: makePortForConfig(nextCfg, resolveKey(next).key),
-    };
+    }];
   }
   const ctrl = new AbortController();
   const onSigint = (): void => {
@@ -519,7 +584,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       askUser: promptApproval,
       remembered: listRules(process.cwd()),
       retryWait: opts.retryWait,
-      failover: failoverTarget,
+      failovers: failoverTargets,
       models: opts.models,
       tokenBudget: opts.tokenBudget,
       onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`),
@@ -536,7 +601,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
     console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
-    if (routed.taskClass === "polish") {
+    if (route.taskClass === "polish") {
       const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
       console.log(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
     }
@@ -668,6 +733,22 @@ async function cmdModels(args: string[]): Promise<void> {
   console.log("  untested = served, agency unknown (probe before chaining).");
   if (provider === "mistral") {
     console.log("chain: --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest");
+  }
+}
+
+/** Read-only free-catalog listing (no key, no network). Keyless rows first. */
+function cmdFree(): void {
+  const rows = listFreeProviders();
+  const ordered = [...rows.filter((r) => r.keyNeeded === "no"), ...rows.filter((r) => r.keyNeeded === "free-key")];
+  console.log(`free providers (${rows.length}, verified 2026-09-11, keyless first — arm on a run: codewhip run "<prompt>" --free):`);
+  for (const r of ordered) {
+    console.log(`  ${r.id.padEnd(11)} [${r.keyNeeded === "no" ? "keyless" : "free-key"}] ${r.freeOffer}`);
+    if (r.keyNeeded === "no") {
+      console.log(`    no key needed — optional: $env:${r.envVar} = "…" or: codewhip auth login ${r.id} · ${r.keyUrl}`);
+    } else {
+      console.log(`    key: $env:${r.envVar} = "…" or: codewhip auth login ${r.id} · ${r.keyUrl}`);
+    }
+    console.log(`    limits: ${r.limits}`);
   }
 }
 
@@ -1078,6 +1159,10 @@ async function main(): Promise<void> {
   }
   if (command === "provider") {
     cmdProvider(args.slice(1));
+    return;
+  }
+  if (command === "free") {
+    cmdFree();
     return;
   }
   console.error(`unknown command: ${command}`);

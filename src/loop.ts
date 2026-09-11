@@ -41,8 +41,13 @@ export type LoopArgs = {
   askUser?: AskUser;
   /** One bounded Retry-After wait per run (off unless explicitly armed). */
   retryWait?: boolean;
-  /** One cross-provider switch per run on rate-limit/timeout (off unless armed). */
-  failover?: FailoverTarget;
+  /**
+   * Ordered cross-provider failover chain (off unless armed). On
+   * rate-limited/timeout turns, after same-provider rotation is exhausted,
+   * the loop hops to the NEXT unused target; each target at most once per
+   * run, transcript carries over. Auth/other failures never hop.
+   */
+  failovers?: FailoverTarget[];
   /**
    * Ordered same-provider model candidates, head first (head === model).
    * Empty by default (no rotation). Each candidate is tried at most once
@@ -198,7 +203,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const promoted = loadPromotedDenies(args.cwd);
   let waitedMs = 0;
   let waitedOnce = false;
-  let failedOver = false;
+  /** Chain hops consumed so far (0 = still on the head provider). */
+  let failedOver = 0;
+  /** Next unconsumed cross-provider target — each target: at most one hop. */
+  let nextTarget = 0;
   /** Same-provider models already attempted (head first). Bounds rotation: no cycles. */
   const tried = new Set<string>([args.model]);
   const addUsage = (p: number, c: number): void => {
@@ -220,7 +228,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       break;
     }
     steps = step;
-    // One turn: at most one bounded wait and one failover per RUN.
+    // One turn: at most one bounded wait per RUN; each rate-limited/timeout
+    // retry consumes at most one rotation candidate or one chain target.
     // Retries never consume maxSteps; a failed turn leaves no message behind.
     let turn: Awaited<ReturnType<ChatPort>> | null = null;
     for (;;) {
@@ -257,7 +266,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         !timedOut &&
         args.retryWait === true &&
         !waitedOnce &&
-        !failedOver &&
+        failedOver === 0 &&
         attempt.retryAfterMs !== undefined &&
         attempt.retryAfterMs > 0
       ) {
@@ -276,8 +285,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // rate-limit or timeout. Ordered after the single retry-wait and
       // before cross-provider failover (same-provider moves are cheaper
       // than provider switches). Transcript carries over: same provider,
-      // same tool specs.
-      const next = (args.models ?? []).find((m) => !tried.has(m));
+      // same tool specs. Candidates belong to the head provider — once the
+      // chain has hopped they stop applying (wrong ids on the new port).
+      const next = failedOver === 0 ? (args.models ?? []).find((m) => !tried.has(m)) : undefined;
       if (next !== undefined) {
         tried.add(next);
         const from = `${current.label}:${current.model}`;
@@ -287,20 +297,24 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         current = { ...current, model: next };
         continue;
       }
-      if (args.failover !== undefined && !failedOver) {
-        failedOver = true;
+      // Cross-provider chain: hops in armed order, one target per
+      // rate-limited/timeout turn, each target at most once per run.
+      const target = args.failovers?.[nextTarget];
+      if (target !== undefined) {
+        nextTarget += 1;
+        failedOver += 1;
         const from = `${current.label}:${current.model}`;
-        const to = `${args.failover.label}:${args.failover.model}`;
+        const to = `${target.label}:${target.model}`;
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
         emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
-        current = { label: args.failover.label, model: args.failover.model, port: args.failover.port };
+        current = { label: target.label, model: target.model, port: target.port };
         continue;
       }
       const triedList = [...tried].map((m) => `${args.label}:${m}`).join(", ");
-      error = timedOut && !failedOver && tried.size === 1
+      error = timedOut && failedOver === 0 && tried.size === 1
         ? `${attempt.error} — retry with --models <a,b> to rotate, --failover to switch provider, or --timeout-ms to allow longer calls`
-        : failedOver || tried.size > 1
-          ? `${cause} (tried ${triedList}${failedOver ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — partial transcript kept`
+        : failedOver > 0 || tried.size > 1
+          ? `${cause} (tried ${triedList}${failedOver > 0 ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — retry list exhausted: wait out the quota, add --retry-wait, or widen the chain with --models/--failover — partial transcript kept`
           : attempt.error;
       break;
     }

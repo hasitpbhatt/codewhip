@@ -75,6 +75,29 @@ export function annotateModel(provider: string, id: string): { tag: AgencyTag; n
         : "served via fabryka router; agency unknown",
     };
   }
+  if (provider === "kilo") {
+    return {
+      tag: "untested",
+      note: id === def
+        ? "codewhip default; ':free' models anonymous; a tool-call round verified 2026-09-11, no full agent-loop probe"
+        : "served; ':free' models anonymous; listing verified live 2026-09-11; agency unknown",
+    };
+  }
+  if (provider === "opencode") {
+    return {
+      tag: "untested",
+      note: "zen free tier verified keyless 2026-09-11 (identity-header gated, small per-IP quota); no tool-loop probe yet",
+    };
+  }
+  if (provider === "groq" || provider === "zai" || provider === "openrouter") {
+    return { tag: "untested", note: "listing verified live 2026-09-11; no tool-loop probe yet" };
+  }
+  if (provider === "cerebras" || provider === "gemini") {
+    return { tag: "untested", note: "docs-verified; no live probe" };
+  }
+  if (provider === "empero") {
+    return { tag: "untested", note: "free endpoint; in maintenance (http 503) at the 2026-09-11 probe; untested" };
+  }
   if (id.includes("embed")) return { tag: "non-chat", note: "embeddings only" };
   if (id.startsWith("mistral-ocr")) return { tag: "non-chat", note: "ocr only" };
   if (id.startsWith("mistral-moderation")) return { tag: "non-chat", note: "moderation only" };
