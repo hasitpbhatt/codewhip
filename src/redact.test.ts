@@ -18,7 +18,7 @@ describe("redact", () => {
   });
   it("masks generic high-entropy bare tokens (provider-agnostic)", () => {
     strictEqual(redactSecrets("token abcd1234efgh5678ijkl9012 tail"), "token [redacted] tail");
-    ok(redactSecrets("key 90k5TVFLvKOZwFWzZEEl8wPQsLvOzKOC9xYz12").includes("[redacted]"));
+    ok(redactSecrets("key Tx7qW2mZ9 synthetic-fixture-4kD8vN0pL").includes("[redacted]")); // synthetic shape, not a real key
   });
   it("masks env-assignment values but keeps names", () => {
     strictEqual(redactEnvValues("DATABASE_URL=postgres://u:p@h/db"), "DATABASE_URL= [redacted]");
