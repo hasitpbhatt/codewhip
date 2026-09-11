@@ -1,4 +1,5 @@
 import { PROVIDERS, type ProviderId } from "./provider.js";
+import { getProviderConfig } from "./custom-providers.js";
 
 export type TaskClass = "implement" | "polish" | "private";
 
@@ -60,9 +61,10 @@ export function resolveRoute(opts: {
   defaultModel: string;
 }): RouteResolution {
   if (opts.provider !== undefined || opts.model !== undefined) {
+    const pid = opts.provider ?? opts.defaultProvider;
     return {
-      provider: opts.provider ?? opts.defaultProvider,
-      model: opts.model ?? PROVIDERS[opts.provider ?? opts.defaultProvider].defaultModel,
+      provider: pid,
+      model: opts.model ?? getProviderConfig(pid)?.defaultModel ?? opts.defaultModel,
       taskClass: opts.taskClass ?? classify(opts.prompt).taskClass,
       auto: false,
       note: "explicit --provider/--model override",

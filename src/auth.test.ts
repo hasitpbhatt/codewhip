@@ -16,8 +16,8 @@ for (const p of PROVIDER_IDS) {
 process.env[envKey] = dir;
 
 describe("auth", () => {
-  it("registry supports all four providers", () => {
-    strictEqual(PROVIDER_IDS.length, 4);
+  it("registry supports all six builtin providers", () => {
+    strictEqual(PROVIDER_IDS.length, 6);
   });
   it("resolves no key when nothing is stored", () => {
     strictEqual(resolveKey("nvidia").source, "none");
@@ -43,5 +43,25 @@ describe("auth", () => {
     strictEqual(resolveKey("alibaba").key, "k-alibaba");
     strictEqual(resolveKey("sensenova").key, "k-sensenova");
     strictEqual(clearKey("nvidia"), false);
+  });
+  it("llm7 falls back to anonymous access when no key is stored", () => {
+    const r = resolveKey("llm7");
+    strictEqual(r.source, "anonymous");
+    strictEqual(r.key, "unused");
+  });
+  it("tokenharbor needs a key (no anonymous fallback)", () => {
+    strictEqual(resolveKey("tokenharbor").source, "none");
+  });
+  it("custom provider keys persist without dropping builtins", () => {
+    saveKey("my-custom", "k-custom");
+    const read = fs.readFileSync(path.join(configDir(), "credentials.json"), "utf8");
+    strictEqual(read.includes("k-custom"), true);
+    strictEqual(read.includes("k-alibaba"), true);
+    strictEqual(resolveKey("my-custom").source, "none");
+    strictEqual(clearKey("my-custom"), true);
+    strictEqual(clearKey("my-custom"), false);
+  });
+  it("unknown provider ids resolve to no key", () => {
+    strictEqual(resolveKey("nope-not-a-provider").source, "none");
   });
 });

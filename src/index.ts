@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { makePort, parseProviderId, PROVIDERS, PROVIDER_IDS, type ProviderId } from "./provider.js";
+import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
+import { addCustomProvider, getProviderConfig, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { listModels } from "./models.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
@@ -56,8 +57,9 @@ function printHelp(): void {
   console.log("Commands:");
   console.log("  init                 scaffold AGENTS.md + policy + local key (30s)");
   console.log('  run "<prompt>"       run an agent session (headless; no prompt = REPL)');
-  console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral|sensenova|alibaba])");
-  console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
+  console.log("  auth                 store provider keys (login/logout/status [provider])");
+  console.log("  models [provider]    list served models with agency tags (default: nvidia)");
+  console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
@@ -69,7 +71,7 @@ function printHelp(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
   console.log(`  --models <a,b,c>     rotate models in order on 429, each once per run (default: off)`);
-  console.log("  --provider <id>      nvidia|mistral|sensenova|alibaba (default: routed by --class)");
+  console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
   console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
@@ -79,18 +81,23 @@ function printHelp(): void {
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
   console.log("");
-  console.log("Keys: NVIDIA_API_KEY / MISTRAL_API_KEY / SENSENOVA_API_KEY / ALIBABA_API_KEY env wins when set; else `codewhip auth login <provider>`.");
-  console.log("  key consoles: build.nvidia.com/settings/api-keys · console.mistral.ai · token.sensenova.ai · dashscope-intl.aliyun.com");
-  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; mistral cost untracked).");
+  console.log("Keys: env wins when set (NVIDIA_API_KEY/MISTRAL_API_KEY/SENSENOVA_API_KEY/ALIBABA_API_KEY/LLM7_API_KEY/TOKENHARBOR_API_KEY/<custom>); else `codewhip auth login <provider>`.");
+  console.log("  key consoles: build.nvidia.com/settings/api-keys · console.mistral.ai · token.sensenova.ai · dashscope-intl.aliyun.com · dash.llm7.io · tokenharbor.ai/dashboard/api-keys");
+  console.log("  llm7 works with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia free tier = $0; other providers print cost untracked).");
   console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);
 }
 
-function costNote(provider: ProviderId): string {
+function costNote(provider: string): string {
   // Honest meter: only NVIDIA's free tier is known-$0. Other providers bill
   // or cap in provider-specific ways — point at their console, not fiction.
-  return provider === "nvidia"
-    ? "$0.0000 (nvidia free tier)"
-    : `cost untracked (see ${PROVIDERS[provider].keyUrl})`;
+  if (provider === "nvidia") {
+    return "$0.0000 (nvidia free tier)";
+  }
+  const keyUrl = getProviderConfig(provider)?.keyUrl;
+  return keyUrl !== undefined && keyUrl.length > 0
+    ? `cost untracked (see ${keyUrl})`
+    : "cost untracked (see provider console)";
 }
 
 function printReceipt(model: string, promptTokens: number, completionTokens: number, cost: string): void {
@@ -166,13 +173,13 @@ function parseRunArgs(args: string[]): RunOptions | null {
       i++;
     } else if (a === "--provider") {
       const v = args[i + 1];
-      const parsed = parseProviderId(v);
-      if (parsed === null) return fail("--provider must be nvidia|mistral|sensenova|alibaba");
-      provider = parsed;
+      const cfg = v === undefined ? null : getProviderConfig(v);
+      if (cfg === null) return fail(`unknown provider "${v ?? ""}" (see: codewhip provider list)`);
+      provider = cfg.id;
       providerExplicit = true;
       i++;
       if (!modelExplicit) {
-        model = PROVIDERS[provider].defaultModel;
+        model = cfg.defaultModel;
       }
     } else if (a === "--class") {
       const v = args[i + 1];
@@ -275,12 +282,14 @@ function cmdInit(): void {
   console.log('done. try: codewhip run "fix the failing test"');
 }
 
-function missingKeyHelp(provider: ProviderId): void {
-  const cfg = PROVIDERS[provider];
-  console.error(`codewhip: ${cfg.envVar} is not set and no stored ${provider} key found (the key is never printed or logged).`);
+function missingKeyHelp(provider: string): void {
+  const cfg = getProviderConfig(provider);
+  const envVar = cfg?.envVar ?? `${provider.toUpperCase()}_API_KEY`;
+  const keyUrl = cfg?.keyUrl ?? "the provider console";
+  console.error(`codewhip: ${envVar} is not set and no stored ${provider} key found (the key is never printed or logged).`);
   console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, 0600 file; env still wins)`);
-  console.error(`  Or per terminal, PowerShell: $env:${cfg.envVar} = "..."`);
-  console.error(`  Get a key at ${cfg.keyUrl}`);
+  console.error(`  Or per terminal, PowerShell: $env:${envVar} = "..."`);
+  console.error(`  Get a key at ${keyUrl}`);
   process.exitCode = 1;
 }
 
@@ -351,35 +360,52 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if (opts.models.length > 1) {
     console.log(`!! rotation armed: on 429 walk ${opts.models.join(" -> ")} (each once per run, 429-only)`);
   }
-  const { key: apiKey } = resolveKey(opts.provider);
+  const runCfg = getProviderConfig(opts.provider);
+  if (runCfg === null) {
+    console.error(`codewhip: unknown provider "${opts.provider}" (see: codewhip provider list)`);
+    process.exitCode = 1;
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  const { key: apiKey, source: keySource } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
     logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:missing-key", `missing ${opts.provider} key`);
     printStubReceipt(opts.model, opts.provider);
     return;
   }
+  if (keySource === "anonymous") {
+    console.log(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
+  }
   let failoverTarget: FailoverTarget | undefined;
   if (opts.failover) {
-    const defaultModel = PROVIDERS[opts.provider].defaultModel;
+    const defaultModel = runCfg.defaultModel;
     if (opts.model !== defaultModel) {
       console.error("codewhip: --failover needs the default model first (drop --model/--models, or lead the chain with it)");
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
       return;
     }
-    const next = PROVIDER_IDS.find((id) => id !== opts.provider && resolveKey(id).key.length > 0);
+    const next = listAllProviderConfigs().map((c) => c.id).find((id) => id !== opts.provider && resolveKey(id).key.length > 0);
     if (next === undefined) {
       console.error("codewhip: --failover needs a key for some other provider (env var or: codewhip auth login <other>)");
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
       return;
     }
-    const targetModel = PROVIDERS[next].defaultModel;
+    const nextCfg = getProviderConfig(next);
+    if (nextCfg === null) {
+      console.error(`codewhip: failover target "${next}" is no longer registered`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const targetModel = nextCfg.defaultModel;
     console.log(`!! --failover armed: one switch to ${next}:${targetModel} on 429. May bill ${next} pay-go.`);
     failoverTarget = {
       label: next,
       model: targetModel,
-      port: makePort(next, resolveKey(next).key),
+      port: makePortForConfig(nextCfg, resolveKey(next).key),
     };
   }
   const ctrl = new AbortController();
@@ -396,7 +422,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
       stdinIsTTY: process.stdin.isTTY === true,
-      port: makePort(opts.provider, apiKey),
+      port: makePortForConfig(runCfg, apiKey),
       signal: ctrl.signal,
       askUser: promptApproval,
       remembered: listRules(process.cwd()),
@@ -473,9 +499,10 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
 async function cmdAuth(args: string[]): Promise<void> {
   const sub = args[0] ?? "status";
   if (sub === "login" || sub === "logout") {
-    const provider = parseProviderId(args[1]) ?? "nvidia";
-    if (args[1] !== undefined && parseProviderId(args[1]) === null) {
-      console.error("usage: codewhip auth login|logout [nvidia|mistral|sensenova|alibaba]");
+    const provider = args[1] ?? "nvidia";
+    const cfg = getProviderConfig(provider);
+    if (cfg === null) {
+      console.error(`unknown provider "${provider}" (see: codewhip provider list)`);
       process.exitCode = 1;
       return;
     }
@@ -499,30 +526,33 @@ async function cmdAuth(args: string[]): Promise<void> {
     return;
   }
   if (sub === "status") {
+    const all = listAllProviderConfigs();
     let missing = 0;
-    for (const provider of PROVIDER_IDS) {
+    for (const { id: provider } of all) {
       const { source } = resolveKey(provider);
       if (source === "none") {
         console.log(`auth: ${provider} missing (no env, no file)`);
         missing++;
+      } else if (source === "anonymous") {
+        console.log(`auth: ${provider} anonymous (no key stored, gateway default; login for higher limits)`);
       } else {
         console.log(`auth: ${provider} set (source: ${source})`);
       }
     }
-    if (missing === 2) {
+    if (missing === all.length) {
       process.exitCode = 1;
     }
     return;
   }
-  console.error("usage: codewhip auth [login|logout|status] [nvidia|mistral|sensenova|alibaba]");
+  console.error("usage: codewhip auth [login|logout|status] [provider] (see: codewhip provider list)");
   process.exitCode = 1;
 }
 
 async function cmdModels(args: string[]): Promise<void> {
   const raw = args[0];
-  const provider: ProviderId = raw === undefined ? "nvidia" : parseProviderId(raw) ?? "nvidia";
-  if (raw !== undefined && parseProviderId(raw) === null) {
-    console.error("usage: codewhip models [nvidia|mistral|sensenova|alibaba]");
+  const provider = raw === undefined ? "nvidia" : raw;
+  if (getProviderConfig(provider) === null) {
+    console.error(`unknown provider "${provider}" (see: codewhip provider list)`);
     process.exitCode = 1;
     return;
   }
@@ -547,6 +577,110 @@ async function cmdModels(args: string[]): Promise<void> {
   if (provider === "mistral") {
     console.log("chain: --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest");
   }
+}
+
+function cmdProvider(args: string[]): void {
+  const sub = args[0] ?? "list";
+  if (sub === "list") {
+    const all = listAllProviderConfigs();
+    const nCustom = all.filter((c) => !isBuiltinProviderId(c.id)).length;
+    console.log(`provider: ${all.length} known (${all.length - nCustom} builtin + ${nCustom} custom):`);
+    for (const c of all) {
+      const { source } = resolveKey(c.id);
+      const tag = isBuiltinProviderId(c.id) ? "builtin" : "custom";
+      const key = source === "none" ? "no key" : source;
+      console.log(`  ${c.id} [${tag}] ${c.baseUrl} default=${c.defaultModel} env=${c.envVar} key=${key}`);
+    }
+    return;
+  }
+  if (sub === "show") {
+    const id = args[1] ?? "";
+    const cfg = getProviderConfig(id);
+    if (cfg === null) {
+      console.error(`unknown provider "${id}" (see: codewhip provider list)`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`provider: ${cfg.id} [${isBuiltinProviderId(cfg.id) ? "builtin" : "custom"}]`);
+    console.log(`  base: ${cfg.baseUrl}${cfg.chatPath} (models: ${cfg.baseUrl}${cfg.modelsPath})`);
+    console.log(`  default model: ${cfg.defaultModel} · env: ${cfg.envVar} · key: ${cfg.keyUrl.length > 0 ? cfg.keyUrl : "(none)"}`);
+    return;
+  }
+  if (sub === "add") {
+    const id = args[1] ?? "";
+    const rest = args.slice(2);
+    const usage = 'usage: codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY [--chat-path /…] [--models-path /…] [--key-url https://…] [--brand <name>] [--timeout-ms 45000]';
+    if (id.length === 0) {
+      console.error(usage);
+      process.exitCode = 1;
+      return;
+    }
+    const flag = (name: string): string | undefined => {
+      const i = rest.indexOf(name);
+      return i !== -1 ? rest[i + 1] : undefined;
+    };
+    for (const a of rest) {
+      if (a.startsWith("--") && !["--base-url", "--model", "--env-var", "--brand", "--chat-path", "--models-path", "--key-url", "--timeout-ms", "--rate-hint"].includes(a)) {
+        console.error(`provider: unknown flag ${a}`);
+        console.error(usage);
+        process.exitCode = 1;
+        return;
+      }
+    }
+    const timeoutRaw = flag("--timeout-ms");
+    const timeoutMs = timeoutRaw === undefined ? undefined : Number(timeoutRaw);
+    if (timeoutRaw !== undefined && (!Number.isInteger(timeoutMs) || (timeoutMs as number) < 5000 || (timeoutMs as number) > 120000)) {
+      console.error("provider: --timeout-ms must be an integer 5000..120000");
+      process.exitCode = 1;
+      return;
+    }
+    const baseUrl = flag("--base-url") ?? "";
+    const model = flag("--model") ?? "";
+    const envVar = flag("--env-var") ?? "";
+    if (baseUrl.length === 0 || model.length === 0 || envVar.length === 0) {
+      console.error("provider: --base-url, --model and --env-var are required");
+      console.error(usage);
+      process.exitCode = 1;
+      return;
+    }
+    const result = addCustomProvider({
+      id,
+      baseUrl,
+      defaultModel: model,
+      envVar,
+      brand: flag("--brand"),
+      chatPath: flag("--chat-path"),
+      modelsPath: flag("--models-path"),
+      keyUrl: flag("--key-url"),
+      timeoutMs,
+      rateLimitedHint: flag("--rate-hint"),
+    });
+    if (!result.ok) {
+      console.error(`provider: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`provider: added "${result.id}" (${baseUrl}, default ${model})`);
+    console.log(`  next: set a key via $env:${envVar} = "…" or: codewhip auth login ${result.id}`);
+    return;
+  }
+  if (sub === "remove") {
+    const id = args[1] ?? "";
+    if (id.length === 0) {
+      console.error("usage: codewhip provider remove <id>");
+      process.exitCode = 1;
+      return;
+    }
+    const result = removeCustomProvider(id);
+    if (!result.ok) {
+      console.error(`provider: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`provider: removed "${id}" (stored key, if any, left in place — clear with: codewhip auth logout ${id})`);
+    return;
+  }
+  console.log("Usage: codewhip provider [list|show <id>|add <id> --base-url …|remove <id>]");
 }
 
 function renderAuditEntry(e: AuditEntry): string {
@@ -828,6 +962,10 @@ async function main(): Promise<void> {
   }
   if (command === "models") {
     await cmdModels(args.slice(1));
+    return;
+  }
+  if (command === "provider") {
+    cmdProvider(args.slice(1));
     return;
   }
   console.error(`unknown command: ${command}`);

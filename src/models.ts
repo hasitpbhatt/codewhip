@@ -1,4 +1,5 @@
-import { modelsUrlFor, PROVIDERS, type ProviderId } from "./provider.js";
+import { modelsUrlFor } from "./provider.js";
+import { getProviderConfig } from "./custom-providers.js";
 
 const MODELS_TIMEOUT_MS = 15000;
 
@@ -15,9 +16,10 @@ export type AnnotatedModel = {
 /** Prefix rules distilled from docs + live probes. Evidence dates are set
  *  only when a probe actually exercised the tool loop; everything else says
  *  "untested" honestly (a listing endpoint cannot prove agency). */
-export function annotateModel(provider: ProviderId, id: string): { tag: AgencyTag; note: string } {
+export function annotateModel(provider: string, id: string): { tag: AgencyTag; note: string } {
+  const def = getProviderConfig(provider)?.defaultModel;
   if (provider === "nvidia") {
-    if (id === PROVIDERS.nvidia.defaultModel) {
+    if (id === def) {
       return { tag: "agent", note: "codewhip default; ran the tool loop in testing (2026-09-08)" };
     }
     return { tag: "untested", note: "served; agency unknown" };
@@ -26,7 +28,7 @@ export function annotateModel(provider: ProviderId, id: string): { tag: AgencyTa
     if (id.startsWith("qwen")) {
       return {
         tag: "untested",
-        note: id === PROVIDERS.alibaba.defaultModel
+        note: id === def
           ? "codewhip default; documented tool-caller, no live probe yet"
           : "documented tool-caller, no live probe yet",
       };
@@ -36,9 +38,25 @@ export function annotateModel(provider: ProviderId, id: string): { tag: AgencyTa
   if (provider === "sensenova") {
     return {
       tag: "untested",
-      note: id === PROVIDERS.sensenova.defaultModel
+      note: id === def
         ? "codewhip default; agency unknown (no live probe yet)"
         : "served; agency unknown",
+    };
+  }
+  if (provider === "llm7") {
+    return {
+      tag: "untested",
+      note: id === def
+        ? "llm7 gateway default; OpenAI-compatible, no live probe yet"
+        : "served via llm7 gateway; agency unknown",
+    };
+  }
+  if (provider === "tokenharbor") {
+    return {
+      tag: "untested",
+      note: id === def
+        ? "tokenharbor orchestrator default; OpenAI-compatible, no live probe yet"
+        : "served via tokenharbor gateway; agency unknown",
     };
   }
   if (id.includes("embed")) return { tag: "non-chat", note: "embeddings only" };
@@ -55,7 +73,7 @@ export function annotateModel(provider: ProviderId, id: string): { tag: AgencyTa
   // free tier 429'd all live loops today — gated to "untested" until a probe
   // clears, not marketing-grade "agent".
   if (id.startsWith("mistral-small")) {
-    return id === PROVIDERS.mistral.defaultModel
+    return id === def
       ? { tag: "untested", note: "codewhip default; documented tool-caller, live probes 429-gated (2026-09-10)" }
       : { tag: "untested", note: "documented tool-caller, live probes 429-gated (2026-09-10)" };
   }
@@ -68,16 +86,20 @@ export type ModelsResult =
   | { ok: true; models: AnnotatedModel[] }
   | { ok: false; error: string };
 
-function defaultFor(provider: ProviderId): string {
-  return PROVIDERS[provider].defaultModel;
+function defaultFor(provider: string): string {
+  return getProviderConfig(provider)?.defaultModel ?? "";
 }
 
 /** One read-only listing call. Never throws — failures return a string. */
-export async function listModels(provider: ProviderId, apiKey: string): Promise<ModelsResult> {
+export async function listModels(provider: string, apiKey: string): Promise<ModelsResult> {
   if (apiKey.length === 0) {
     return { ok: false, error: "missing api key" };
   }
-  const url = modelsUrlFor(PROVIDERS[provider]);
+  const cfg = getProviderConfig(provider);
+  if (cfg === null) {
+    return { ok: false, error: `unknown provider "${provider}" (see: codewhip provider list)` };
+  }
+  const url = modelsUrlFor(cfg);
   let res: Response;
   try {
     res = await fetch(url, {

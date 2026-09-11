@@ -8,21 +8,33 @@ import type {
 } from "./provider-port.js";
 
 /**
- * Provider registry — adding a provider is ONE table row, nothing else.
+ * Builtin provider registry — adding a builtin is ONE table row, nothing else.
+ * User-registered providers live outside this file (see custom-providers.ts:
+ * `codewhip provider add`) and ride the same OpenAI-compatible ChatPort.
  * The loop only ever sees a ChatPort; openAiPort adapts any config.
  */
 
-export type ProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba";
+/** Builtins shipped with the install (llm7 + tokenharbor: gateway tiers). */
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor";
 
-export const PROVIDER_IDS: readonly ProviderId[] = [
+/** Any provider id: a builtin or a user-registered custom id. */
+export type ProviderId = string;
+
+export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "nvidia",
   "mistral",
   "sensenova",
   "alibaba",
+  "llm7",
+  "tokenharbor",
 ];
 
+export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
+  return (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 export type ProviderConfig = {
-  id: ProviderId;
+  id: string;
   /** Display/error prefix. */
   brand: string;
   /** Origin only — chatPath/modelsPath are appended (fixes mixed /v1 layouts). */
@@ -37,15 +49,22 @@ export type ProviderConfig = {
   timeoutMs: number;
   /** Optional 429-specific hint (provider quota nuance). */
   rateLimitedHint?: string;
+  /**
+   * Fallback key when no env/file key exists (llm7's anonymous "unused").
+   * Runs still work keyless; `auth login` upgrades to higher limits.
+   */
+  anonymousKey?: string;
 };
 
 const NVIDIA_TIMEOUT_MS = 45000;
 const MISTRAL_TIMEOUT_MS = 45000;
 const SENSENOVA_TIMEOUT_MS = 45000;
 const ALIBABA_TIMEOUT_MS = 45000;
+const LLM7_TIMEOUT_MS = 45000;
+const TOKENHARBOR_TIMEOUT_MS = 45000;
 const MAX_BODY_CHARS = 500;
 
-export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
+export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
   nvidia: {
     id: "nvidia",
     brand: "nvidia",
@@ -93,11 +112,35 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     keyUrl: "https://dashscope-intl.aliyun.com",
     timeoutMs: ALIBABA_TIMEOUT_MS,
   },
+  llm7: {
+    id: "llm7",
+    brand: "llm7",
+    baseUrl: "https://api.llm7.io",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "default",
+    envVar: "LLM7_API_KEY",
+    keyUrl: "https://dash.llm7.io",
+    timeoutMs: LLM7_TIMEOUT_MS,
+    rateLimitedHint: "anonymous access is heavily rate-limited — add a dash.llm7.io token for higher limits",
+    anonymousKey: "unused",
+  },
+  tokenharbor: {
+    id: "tokenharbor",
+    brand: "tokenharbor",
+    baseUrl: "https://tokenharbor.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "th-orchestra",
+    envVar: "TOKENHARBOR_API_KEY",
+    keyUrl: "https://tokenharbor.ai/dashboard/api-keys",
+    timeoutMs: TOKENHARBOR_TIMEOUT_MS,
+  },
 };
 
-export function parseProviderId(value: string | undefined): ProviderId | null {
+export function parseProviderId(value: string | undefined): BuiltinProviderId | null {
   return (PROVIDER_IDS as readonly string[]).includes(value ?? "")
-    ? (value as ProviderId)
+    ? (value as BuiltinProviderId)
     : null;
 }
 
@@ -304,7 +347,16 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
   };
 }
 
-/** Tool-calling adapter implementing the loop's ChatPort for any registered provider. */
-export function makePort(provider: ProviderId, apiKey: string, timeoutMs?: number): ChatPort {
-  return openAiPort(PROVIDERS[provider], apiKey, timeoutMs);
+/** Tool-calling adapter for an explicit config (builtins and customs alike). */
+export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): ChatPort {
+  return openAiPort(cfg, apiKey, timeoutMs);
+}
+
+/** Tool-calling adapter implementing the loop's ChatPort for a builtin provider. */
+export function makePort(provider: string, apiKey: string, timeoutMs?: number): ChatPort {
+  const cfg = PROVIDERS[provider as BuiltinProviderId];
+  if (cfg === undefined) {
+    return async () => ({ ok: false, error: `unknown provider: ${provider}`, retryable: "other" });
+  }
+  return openAiPort(cfg, apiKey, timeoutMs);
 }

@@ -1,44 +1,38 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { PROVIDER_IDS, PROVIDERS, type ProviderId } from "./provider.js";
+import { configDir } from "./config-dir.js";
+import { getProviderConfig } from "./custom-providers.js";
+import type { BuiltinProviderId } from "./provider.js";
 
 export type { ProviderId } from "./provider.js";
-
-export const CONFIG_DIR_ENV = "CODEWHIP_CONFIG_DIR";
+export { configDir, CONFIG_DIR_ENV } from "./config-dir.js";
 
 type StoredCreds = {
   nvidiaApiKey?: unknown;
   mistralApiKey?: unknown;
   sensenovaApiKey?: unknown;
   alibabaApiKey?: unknown;
+  llm7ApiKey?: unknown;
+  tokenharborApiKey?: unknown;
+  /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
+  [key: string]: unknown;
 };
 
-type CredField = keyof StoredCreds;
-
-const FIELD_BY_PROVIDER: Record<ProviderId, CredField> = {
+const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   nvidia: "nvidiaApiKey",
   mistral: "mistralApiKey",
   sensenova: "sensenovaApiKey",
   alibaba: "alibabaApiKey",
+  llm7: "llm7ApiKey",
+  tokenharbor: "tokenharborApiKey",
 };
 
-function fieldFor(provider: ProviderId): CredField {
-  return FIELD_BY_PROVIDER[provider];
+function customFieldFor(provider: string): string {
+  return `custom_${provider.toLowerCase().replace(/[^a-z0-9]/g, "_")}_ApiKey`;
 }
 
-export function configDir(): string {
-  const override = process.env[CONFIG_DIR_ENV];
-  if (override !== undefined && override.length > 0) {
-    return override;
-  }
-  if (process.platform === "win32") {
-    const appData = process.env["APPDATA"];
-    if (appData !== undefined && appData.length > 0) {
-      return path.join(appData, "codewhip");
-    }
-  }
-  return path.join(os.homedir(), ".config", "codewhip");
+function fieldFor(provider: string): string {
+  return FIELD_BY_PROVIDER[provider as BuiltinProviderId] ?? customFieldFor(provider);
 }
 
 function credsPath(): string {
@@ -54,16 +48,23 @@ function readStored(): StoredCreds {
   }
 }
 
-export type KeySource = "env" | "file" | "none";
+export type KeySource = "env" | "file" | "anonymous" | "none";
 
-export function resolveKey(provider: ProviderId): { key: string; source: KeySource } {
-  const fromEnv = process.env[PROVIDERS[provider].envVar] ?? "";
+export function resolveKey(provider: string): { key: string; source: KeySource } {
+  const cfg = getProviderConfig(provider);
+  if (cfg === null) {
+    return { key: "", source: "none" };
+  }
+  const fromEnv = process.env[cfg.envVar] ?? "";
   if (fromEnv.length > 0) {
     return { key: fromEnv, source: "env" };
   }
   const stored = readStored()[fieldFor(provider)];
   if (typeof stored === "string" && stored.length > 0) {
     return { key: stored, source: "file" };
+  }
+  if (cfg.anonymousKey !== undefined && cfg.anonymousKey.length > 0) {
+    return { key: cfg.anonymousKey, source: "anonymous" };
   }
   return { key: "", source: "none" };
 }
@@ -83,8 +84,7 @@ function writeStored(next: Record<string, string>): void {
 function allStoredFields(): Record<string, string> {
   const stored = readStored();
   const out: Record<string, string> = {};
-  for (const field of Object.values(FIELD_BY_PROVIDER)) {
-    const v = stored[field];
+  for (const [field, v] of Object.entries(stored)) {
     if (typeof v === "string" && v.length > 0) {
       out[field] = v;
     }
@@ -92,7 +92,7 @@ function allStoredFields(): Record<string, string> {
   return out;
 }
 
-export function saveKey(provider: ProviderId, key: string): void {
+export function saveKey(provider: string, key: string): void {
   writeStored({ ...allStoredFields(), [fieldFor(provider)]: key });
 }
 
@@ -102,7 +102,7 @@ export function saveApiKey(key: string): void {
 }
 
 /** Returns false when nothing was stored. Preserves every other provider. */
-export function clearKey(provider: ProviderId): boolean {
+export function clearKey(provider: string): boolean {
   const stored = readStored()[fieldFor(provider)];
   if (typeof stored !== "string" || stored.length === 0) {
     return false;

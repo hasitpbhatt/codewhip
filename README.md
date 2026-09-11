@@ -121,7 +121,7 @@ AGENTS.md               working agreement for coding agents
 
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → five tools → 4 providers + meter →
+- **H1 (parity + trust):** `agentLoop()` → five tools → 6 providers + custom registration + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
   (provenanced) → hash-chained audit → `init`/`run`/`--share` (local redacted
   bundles; hosted links need a server) →
@@ -189,9 +189,24 @@ codewhip run "Say OK"                              # nvidia default (kimi-k3, fr
 codewhip run "Say OK" --provider mistral           # mistral default (mistral-small-latest)
 codewhip run "Say OK" --provider sensenova         # sensenova default (sensenova-6.8-flash-lite)
 codewhip run "Say OK" --provider alibaba           # alibaba default (qwen-plus)
+codewhip run "Say OK" --provider llm7              # llm7 gateway default (works with no key: anonymous, rate-limited)
+codewhip run "Say OK" --provider tokenharbor       # tokenharbor orchestrator (needs a key: free account works)
 ```
 
-Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`. Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+
+### Custom providers (any OpenAI-compatible endpoint)
+
+```sh
+codewhip provider list
+codewhip provider add my-gateway --base-url https://gateway.example.com --model my-model --env-var MY_GATEWAY_API_KEY --key-url https://gateway.example.com/keys
+codewhip auth login my-gateway                     # same key flow as builtins (env MY_GATEWAY_API_KEY wins)
+codewhip run "Say OK" --provider my-gateway
+codewhip models my-gateway
+codewhip provider remove my-gateway
+```
+
+Registration is validated (`https://` base, `UPPER_SNAKE` env var, 5s–120s timeout) and stored keyless in `custom-providers.json` next to the key file — `--failover`, `--provider`, and `models` all see customs. Anything not OpenAI-compatible (`/v1/chat/completions` + Bearer) needs an adapter, not a table row.
 
 ### Surviving rate limits (opt-in, off by default)
 
