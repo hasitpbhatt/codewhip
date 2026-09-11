@@ -93,7 +93,7 @@ function writeSpec(): ToolSpec {
 function bashSpec(): ToolSpec {
   return {
     name: "bash",
-    description: "Run a command via the system shell (PowerShell on Windows, sh elsewhere), cwd-jailed, timeout-killed. Redirection and chaining work. Destructive commands are denied, never ask. Args: command, timeoutMs.",
+    description: "Run a command via the system shell (PowerShell on Windows, sh elsewhere), cwd-jailed, timeout-killed. Redirection (>, <) and chaining (;, |, &, `, $(), newlines) are denied — use read/write/edit for file work, one command per call. Destructive commands are denied, never ask. Args: command, timeoutMs.",
     parameters: {
       type: "object",
       properties: {

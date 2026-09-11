@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ToolContext, ToolResult } from "./types.js";
-import { CHAIN_RX, matchDenylist } from "../policy.js";
+import { CHAIN_RX, matchDenylist, matchWorktreeEscape } from "../policy.js";
 
 export const BASH_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -40,7 +40,11 @@ export async function bashTool(
   // shell is a privileged primitive — refuse separators here too so a future
   // non-loop caller can't smuggle statements past the prefix allowlist.
   if (CHAIN_RX.test(command)) {
-    return { ok: false, output: "bash: shell chaining/statement separation is denied (newlines, ;, |, &, `, $())" };
+    return { ok: false, output: "bash: shell chaining/statement separation is denied (newlines, ;, |, &, <, >, `, $())" };
+  }
+  const escape = matchWorktreeEscape(command);
+  if (escape !== null) {
+    return { ok: false, output: `bash: denied — ${escape} (non-overridable)` };
   }
   const timeout = args.timeoutMs ?? BASH_TIMEOUT_MS;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 120000) {

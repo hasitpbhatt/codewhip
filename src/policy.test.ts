@@ -15,6 +15,44 @@ describe("policy", () => {
     strictEqual(checkPermission("bash", "rm -rf /").decision, "deny");
     strictEqual(checkPermission("bash", "git push --force").decision, "deny");
   });
+  it("rm flag variants cannot dodge the denylist", () => {
+    strictEqual(checkPermission("bash", "rm -rfv /").decision, "deny");
+    strictEqual(checkPermission("bash", "rm --recursive --force /tmp/x").decision, "deny");
+    strictEqual(checkPermission("bash", "rm -fr ~").decision, "deny");
+    strictEqual(checkPermission("bash", "rm -rf --no-preserve-root ./build").decision, "deny");
+    strictEqual(checkPermission("bash", "sudo rm -rf /").decision, "deny");
+    strictEqual(checkPermission("bash", "rm -rf /").ruleId, "denylist:rm -rf /");
+  });
+  it("narrow rm stays ask-gated", () => {
+    strictEqual(checkPermission("bash", "rm file.txt").decision, "ask");
+    strictEqual(checkPermission("bash", "rm -r ./build").decision, "ask");
+    strictEqual(checkPermission("bash", "rm -rf ./build").decision, "ask");
+  });
+  it("Windows destructors are denied (bash runs PowerShell on win32)", () => {
+    strictEqual(checkPermission("bash", "Remove-Item -Recurse -Force C:\\temp").decision, "deny");
+    strictEqual(checkPermission("bash", "rd /s /q build").decision, "deny");
+    strictEqual(checkPermission("bash", "del /s /f .").decision, "deny");
+    strictEqual(checkPermission("bash", "format c:").decision, "deny");
+    strictEqual(checkPermission("bash", "dd if=x of=/dev/sda").decision, "deny");
+    strictEqual(checkPermission("bash", "del file.txt").decision, "ask");
+  });
+  it("worktree escapes are denied, relatives and URLs are not", () => {
+    strictEqual(checkPermission("bash", "cat ../secret").decision, "deny");
+    strictEqual(checkPermission("bash", "ls C:\\").ruleId, "denylist:worktree-escape");
+    strictEqual(checkPermission("bash", "cat /etc/passwd").decision, "deny");
+    strictEqual(checkPermission("bash", "ls ~/").decision, "deny");
+    strictEqual(checkPermission("bash", "cd ..").decision, "deny");
+    strictEqual(checkPermission("bash", "echo hi").decision, "ask");
+    strictEqual(checkPermission("bash", "git status").decision, "allow");
+    strictEqual(checkPermission("bash", "npm test").decision, "ask");
+    strictEqual(checkPermission("bash", "curl http://example.com/x").decision, "ask");
+    strictEqual(checkPermission("bash", "echo v1..5").decision, "ask");
+  });
+  it("redirection is denied like chaining", () => {
+    strictEqual(checkPermission("bash", "echo hi > f.txt").decision, "deny");
+    strictEqual(checkPermission("bash", "echo hi >> .codewhip/x").decision, "deny");
+    strictEqual(checkPermission("bash", "cat < secrets.txt").decision, "deny");
+  });
   it("force-push is denied regardless of argument order", () => {
     strictEqual(checkPermission("bash", "git push origin --force").decision, "deny");
     strictEqual(checkPermission("bash", "git push origin HEAD -f").decision, "deny");

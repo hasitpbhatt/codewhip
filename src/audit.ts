@@ -117,10 +117,31 @@ export function readLastAuditRaw(cwd: string, n: number): string {
  * Append one entry to the chain. Returns false (never throws) on disk
  * failure so the agent loop keeps running. Reads the tail to derive
  * `seq` and `prev_hash`, so sequences are global across runs.
+ *
+ * Hardened (P0): mkdir-lock against concurrent-run seq forks (best-effort,
+ * bounded retries), plus fsync per append so a crash loses at most one
+ * entry — never the whole buffered trail (loop flushes per call).
  */
 export function appendEntry(cwd: string, input: AuditInput): boolean {
+  const dir = path.join(cwd, ".codewhip");
+  const lockDir = path.join(dir, "audit.lock");
+  for (let i = 0; i < 50; i++) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(lockDir);
+      break;
+    } catch {
+      if (i === 49) return false;
+      const wait = 10 + Math.floor(Math.random() * 20);
+      const end = Date.now() + wait;
+      while (Date.now() < end) { /* bounded spin, no deps */ }
+      try {
+        const st = fs.statSync(lockDir);
+        if (Date.now() - st.mtimeMs > 5000) fs.rmdirSync(lockDir);
+      } catch { /* lock vanished, retry */ }
+    }
+  }
   try {
-    fs.mkdirSync(path.join(cwd, ".codewhip"), { recursive: true });
     const { entries } = readAuditLog(cwd);
     const last = entries[entries.length - 1];
     const sigBase: AuditEntry = {
@@ -141,10 +162,22 @@ export function appendEntry(cwd: string, input: AuditInput): boolean {
       priv === null
         ? null
         : edSign(null, Buffer.from(entryHash(sigBase), "utf8"), priv).toString("hex");
-    fs.appendFileSync(auditPath(cwd), JSON.stringify({ ...sigBase, sig }) + "\n", "utf8");
+    const fd = fs.openSync(auditPath(cwd), "a");
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ ...sigBase, sig }) + "\n", "utf8");
+      try {
+        fs.fsyncSync(fd);
+      } catch { /* fsync best-effort (tmpfs/CI) */ }
+    } finally {
+      fs.closeSync(fd);
+    }
     return true;
   } catch {
     return false;
+  } finally {
+    try {
+      fs.rmdirSync(lockDir);
+    } catch { /* lock release best-effort */ }
   }
 }
 
@@ -180,14 +213,28 @@ export type AuditVerification = {
 
 /**
  * Re-walk the chain: seq continuity, prev_hash linking, and (when a key
- * exists) ed25519 signatures. Unsigned entries are not a chain failure on
- * their own — only signed-but-invalid or key-missing-with-signatures are.
+ * exists) ed25519 signatures. Key deletion is BROKEN, not unsigned:
+ * signed entries with no local pubkey fail, and stripping sigs to launder
+ * breaks nothing locally — so export (which carries pubkey + chain_tail)
+ * is the external anchor. Truncating the tail is invisible locally;
+ * middle deletion fails via seq/prev_hash.
  */
 export function verifyChain(cwd: string): AuditVerification {
   const { entries, parseErrors } = readAuditLog(cwd);
   const problems: string[] = parseErrors.map((e) => `parse error: ${e}`);
   const pub = loadPublicKey(cwd);
+  const privExists = (() => {
+    try {
+      fs.accessSync(path.join(cwd, ".codewhip", "key"));
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   const keyPresent = pub !== null;
+  if (!keyPresent && privExists) {
+    problems.push("key deleted: private key present without pubkey — chain BROKEN");
+  }
   let expectedSeq = 1;
   let expectedPrev = "";
   let signed = 0;
@@ -208,7 +255,7 @@ export function verifyChain(cwd: string): AuditVerification {
     } else {
       signed += 1;
       if (pub === null) {
-        problems.push(`seq ${e.seq}: signature present but no .codewhip/key to check`);
+        problems.push(`seq ${e.seq}: signature present but no pubkey — key deleted, chain BROKEN`);
       } else if (
         !edVerify(
           null,
@@ -245,12 +292,17 @@ type AuditBundle = {
 /**
  * Content-addressed signed bundle for an external auditor: all entries plus
  * the chain tail (hash of the last entry) and the local public key, signed
- * as one blob. Refuses to export a chain that fails to parse.
+ * as one blob. Refuses a chain that fails to parse OR fails verify —
+ * a signed bundle over a broken chain is false proof, so export gates on both.
  */
 export function buildBundle(cwd: string): { bundle: AuditBundle; json: string } | { error: string } {
   const { entries, parseErrors } = readAuditLog(cwd);
   if (parseErrors.length > 0) {
     return { error: `refusing to export a broken chain: ${parseErrors[0]}` };
+  }
+  const v = verifyChain(cwd);
+  if (!v.valid) {
+    return { error: `refusing to export a broken chain: ${v.problems[0] ?? "verify failed"}` };
   }
   const pubkeyRaw = loadPublicKey(cwd);
   const base = {

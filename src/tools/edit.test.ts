@@ -42,4 +42,18 @@ describe("edit", () => {
     strictEqual(fs.readFileSync(f, "utf8"), "ALPHA\nBETA");
     fs.rmSync(f, { force: true });
   });
+  it("refuses harness state, policy.md, and secret material", async () => {
+    const r1 = await editTool({ cwd }, { path: ".codewhip/remembered.jsonl", oldString: "a", newString: "b" });
+    strictEqual(r1.ok, false);
+    const f = path.join(cwd, "policy.md");
+    fs.writeFileSync(f, "deny bash:x *\n", "utf8");
+    const r2 = await editTool({ cwd }, { path: "policy.md", oldString: "x", newString: "y" });
+    strictEqual(r2.ok, false);
+    fs.rmSync(f, { force: true });
+    const e = path.join(cwd, ".env");
+    fs.writeFileSync(e, "K=1\n", "utf8");
+    const r3 = await editTool({ cwd }, { path: ".env", oldString: "K", newString: "J" });
+    strictEqual(r3.ok, false);
+    fs.rmSync(e, { force: true });
+  });
 });

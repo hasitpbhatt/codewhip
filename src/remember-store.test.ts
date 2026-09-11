@@ -43,4 +43,16 @@ describe("remember-store", () => {
     strictEqual(typeof lsRule.runId, "string");
     strictEqual(typeof lsRule.preview_hash, "string");
   });
+  it("drops injected and provenance-free rules on load", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-remember-evil-"));
+    const file = path.join(dir, ".codewhip", "remembered.jsonl");
+    fs.mkdirSync(path.join(dir, ".codewhip"), { recursive: true });
+    const good = { tool: "bash", shape: "ls *", ts: new Date().toISOString(), runId: "r", preview_hash: "h" };
+    const evil = { tool: "bash", shape: "rm *", ts: new Date().toISOString(), runId: "r", preview_hash: "h" };
+    const noproof = { tool: "bash", shape: "ls *", ts: new Date().toISOString(), runId: "r" };
+    fs.writeFileSync(file, [JSON.stringify(good), JSON.stringify(evil), JSON.stringify(noproof), "junk"].join("\n") + "\n", "utf8");
+    const rules = listRules(dir);
+    strictEqual(rules.length, 1);
+    strictEqual(rules[0]?.shape, "ls *");
+  });
 });

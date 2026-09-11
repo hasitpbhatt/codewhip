@@ -9,6 +9,10 @@
 # calls as denied (loop.ts), --yolo is never passed here, and the denylist
 # applies. PR commenting is intentionally NOT wired in v1 — the audit trail
 # ships as a workflow artifact; review it before acting on it.
+#
+# Security: prompt travels via env (never shell-interpolated); artifact
+# explicitly EXCLUDES the private signing key (.codewhip/key) — bundle +
+# pubkey only. Actions SHA-pinned (lookup: api.github.com/repos/actions/*).
 name: "CodeWhip agent run"
 description: "Build codewhip from source, run it headless in CI, and upload .codewhip/ (outcomes, audit chain, share bundle) as an artifact."
 inputs:
@@ -42,7 +46,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
@@ -53,15 +57,29 @@ runs:
     - run: npm run build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-    - run: node dist/index.js run "${{ inputs.prompt }}" --provider "${{ inputs.provider }}" ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }} ${{ inputs.task-class != '' && format('--class {0}', inputs.task-class) || '' }} --share
+    - run: |
+        args=(--provider "$CODEWHIP_PROVIDER" --share)
+        if [ -n "$CODEWHIP_MODEL" ]; then args+=(--model "$CODEWHIP_MODEL"); fi
+        if [ -n "$CODEWHIP_CLASS" ]; then args+=(--class "$CODEWHIP_CLASS"); fi
+        node dist/index.js run "$CODEWHIP_PROMPT" "${args[@]}"
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        CODEWHIP_PROMPT: ${{ inputs.prompt }}
+        CODEWHIP_PROVIDER: ${{ inputs.provider }}
+        CODEWHIP_MODEL: ${{ inputs.model }}
+        CODEWHIP_CLASS: ${{ inputs.task-class }}
         NVIDIA_API_KEY: ${{ env.NVIDIA_API_KEY }}
         MISTRAL_API_KEY: ${{ env.MISTRAL_API_KEY }}
         SENSENOVA_API_KEY: ${{ env.SENSENOVA_API_KEY }}
         ALIBABA_API_KEY: ${{ env.ALIBABA_API_KEY }}
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.working-directory }}/.codewhip/
+        if-no-files-found: warn
+        path: |
+          ${{ inputs.working-directory }}/.codewhip/outcomes.jsonl
+          ${{ inputs.working-directory }}/.codewhip/audit.log
+          ${{ inputs.working-directory }}/.codewhip/share-*.json
+          ${{ inputs.working-directory }}/.codewhip/key.pub
+          ${{ inputs.working-directory }}/policy.md

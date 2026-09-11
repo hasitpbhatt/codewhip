@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ToolContext, ToolResult } from "./types.js";
-import { jailPath } from "./jail.js";
+import { isPrivateKeyPath, isSecretFileName, jailPath } from "./jail.js";
 
 export type ReadArgs = {
   path: string;
@@ -34,6 +35,14 @@ export async function readTool(ctx: ToolContext, args: ReadArgs): Promise<ToolRe
   const safe = jailPath(ctx.cwd, args.path);
   if (safe === null) {
     return { ok: false, output: "read: path escapes workspace jail" };
+  }
+  // Secret material is refused, not redacted: search skips the same list,
+  // and push-time redaction is only a pattern-based second net.
+  if (isSecretFileName(path.basename(safe))) {
+    return { ok: false, output: "read: refused — secret material (.env/.pem/.key/credentials.json)" };
+  }
+  if (isPrivateKeyPath(safe)) {
+    return { ok: false, output: "read: refused — harness signing key" };
   }
   let stat: fs.Stats;
   try {

@@ -35,8 +35,8 @@ function writeKey(cwd: string): void {
   const dir = path.join(cwd, ".codewhip");
   fs.mkdirSync(dir, { recursive: true });
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  fs.writeFileSync(dir + "\\key", privateKey.export({ type: "pkcs8", format: "pem" }), "utf8");
-  fs.writeFileSync(dir + "\\key.pub", publicKey.export({ type: "spki", format: "pem" }), "utf8");
+  fs.writeFileSync(path.join(dir, "key"), privateKey.export({ type: "pkcs8", format: "pem" }), "utf8");
+  fs.writeFileSync(path.join(dir, "key.pub"), publicKey.export({ type: "spki", format: "pem" }), "utf8");
 }
 
 describe("audit chain", () => {
@@ -184,6 +184,29 @@ describe("audit chain", () => {
     fs.appendFileSync(auditPath(cwd), "broken\n", "utf8");
     const result = buildBundle(cwd);
     ok("error" in result);
+  });
+
+  it("refuses to export a tampered chain (verify gate, not just parse)", () => {
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    appendEntry(cwd, { runId: "r1", actor: "human", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "read", args_hash: "m", result_hash: "n", policy: "c" });
+    const file = auditPath(cwd);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
+    const second = JSON.parse(lines[1] as string) as AuditEntry;
+    second.args_hash = "tampered";
+    fs.writeFileSync(file, (lines[0] as string) + "\n" + JSON.stringify(second) + "\n" + (lines[2] as string) + "\n", "utf8");
+    const result = buildBundle(cwd);
+    ok("error" in result);
+  });
+
+  it("key deletion reads BROKEN for a signed chain", () => {
+    writeKey(cwd);
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    fs.rmSync(path.join(cwd, ".codewhip", "key"));
+    fs.rmSync(path.join(cwd, ".codewhip", "key.pub"));
+    const v = verifyChain(cwd);
+    strictEqual(v.valid, false);
+    ok(v.problems.some((p) => p.includes("BROKEN") || p.includes("no pubkey")), v.problems.join(" | "));
   });
 
   it("hashes the same recorded content independently (matches fixture)", () => {

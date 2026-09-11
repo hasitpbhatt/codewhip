@@ -6,9 +6,9 @@ import { loadPromotedDenies } from "./policy-store.js";
 import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
-import { appendEntry, type AuditActor, type AuditInput } from "./audit.js";
+import { appendEntry, type AuditActor } from "./audit.js";
 import { SYSTEM_PROMPT } from "./system.js";
-import { shapeOf, targetsSelfProtected } from "./remember.js";
+import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
 import type { ProviderId } from "./provider.js";
 
@@ -174,7 +174,6 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     { role: "user", content: args.prompt },
   ];
   const calls: OutcomeToolCall[] = [];
-  const auditEntries: AuditInput[] = [];
   const trace: LoopTraceCall[] = [];
   let promptTokens = 0;
   let completionTokens = 0;
@@ -325,15 +324,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       const hash = argsHash(parsed ?? call.argsJson);
       const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string, shape?: string): void => {
         calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId, ...(shape === undefined ? {} : { shape }) });
-        auditEntries.push({
-          runId,
-          actor,
-          tool: call.name,
-          args_hash: hash,
-          result_hash: resultHash,
-          policy: `${decision}:${ruleId}`,
-        });
-        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: preview.slice(0, 500) });
+        // Per-call flush (P0): a crash loses at most one entry, never the trail.
+        try {
+          appendEntry(args.cwd, {
+            runId,
+            actor,
+            tool: call.name,
+            args_hash: hash,
+            result_hash: resultHash,
+            policy: `${decision}:${ruleId}`,
+          });
+        } catch { /* appendEntry never throws; belt-and-braces */ }
+        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500) });
       };
       if (def === null || parsed === null) {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
@@ -374,18 +376,17 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           const subjectForShape = subject;
           const shape = shapeOf(def.name, subjectForShape);
           const rules = [...(args.remembered ?? [])];
-          const prefix = shape === null ? null : shape.replace(/\*$/, "");
-          // Match the remembered head: bare head ("ls") or head + args
-          // ("ls -la"). Stored shapes are always `${head} *`, so the head
-          // is the prefix minus its trailing space.
+          // Bash shapes are `${head} *`: match the bare head ("ls") or head
+          // + args ("ls -la"). Edit/write shapes are bare paths: exact match
+          // only (no prefix over-match into sibling files).
           const hit =
-            prefix !== null
-              ? rules.find(
-                  (r) =>
-                    r.tool === def.name &&
-                    (subjectForShape === prefix.trim() || subjectForShape.startsWith(prefix))
-                )
-              : undefined;
+            shape === null
+              ? undefined
+              : rules.find((r) => {
+                  if (r.tool !== def.name || r.shape !== shape) return false;
+                  if (def.name === "bash") return true;
+                  return subjectForShape === shape;
+                });
           if (hit !== undefined) {
             proceed = true;
             grantActor = "remembered";
@@ -400,13 +401,16 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             if (answer === "no") {
               const out = `held for approval (${verdict.ruleId}) — declined`;
               messages.push({ role: "tool", toolCallId: call.id, content: out });
-              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out, shape ?? undefined);
+              // Declines record a generalizable deny shape (independent of
+              // allow-curation, so dangerous heads stay promotable).
+              const dshape = declineShape(def.name, subjectForShape);
+              record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out, dshape ?? undefined);
               emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
               continue;
             }
             grantActor = "human";
             if (answer === "always") {
-              if (shape === null || prefix === null) {
+              if (shape === null) {
                 emit("policy", `not memorable: ${subjectForShape.trim().split(/\s/)[0] ?? ""} — approved once, no rule stored`);
               } else if (targetsSelfProtected(shape)) {
                 emit("policy", `not memorable: self-protected path — approved once, no rule stored`);
@@ -471,9 +475,6 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
   });
-  for (const entry of auditEntries) {
-    appendEntry(args.cwd, entry);
-  }
 
   return {
     text,

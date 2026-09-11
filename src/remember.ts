@@ -21,8 +21,8 @@ export const MEMORABLE_SINGLE_HEADS: string[] = [
   "find", "where", "pwd", "tree", "echo", "wc",
 ];
 
-/** Statement separators and redirects make a command unmemorable. */
-const UNMEMORABLE_RX = /[;&|]|\$\(|>>?|\n|\r/;
+/** Statement separators, redirects, and substitution make a command unmemorable. */
+const UNMEMORABLE_RX = /[;&|<>]|`|\$\(|\n|\r/;
 
 /** Shape is `${head} *`; matching uses startsWith on the head prefix. */
 export type Shape = string;
@@ -56,11 +56,57 @@ export function isMemorable(tool: ToolName, preview: string): boolean {
 /** Shape for any memorable tool call; null when refuse-remember. */
 export function shapeOf(tool: ToolName, preview: string): string | null {
   if (!isMemorable(tool, preview)) return null;
-  return tool === "bash" ? bashShape(preview) : `edit:${preview.trim().slice(0, 120)}`;
+  if (tool === "bash") return bashShape(preview);
+  // Edit/write shapes are bare paths (no tool prefix): the matcher compares
+  // the subject path directly, and decline keys stay promotable as-is.
+  const p = preview.trim().slice(0, 120);
+  return p.length > 0 ? p : null;
+}
+
+/**
+ * Generalizable deny shape for a declined ask — independent of the
+ * allow-curation above. Any sane head qualifies (rm/curl/kubectl declines
+ * must be promotable too); unmemorable (chained/redirect) commands still
+ * yield null because no safe generalization exists. Bash generalizes to the
+ * first two tokens (`npm publish *`, `rm -rf *`); edit/write to the path.
+ */
+export function declineShape(tool: ToolName, subject: string): string | null {
+  if (tool === "edit" || tool === "write") {
+    const p = subject.trim().slice(0, 120);
+    return p.length > 0 ? p : null;
+  }
+  if (tool !== "bash") return null;
+  const trimmed = subject.trim();
+  if (UNMEMORABLE_RX.test(trimmed)) return null;
+  const parts = trimmed.replace(/\s+/g, " ").toLowerCase().split(" ");
+  const first = parts[0] ?? "";
+  if (first.length === 0 || first.length > 40) return null;
+  if (!/^[a-z0-9_./-]+$/.test(first)) return null;
+  const second = parts[1];
+  if (second !== undefined && second.length > 0 && second.length <= 40 && /^[a-z0-9_./-]+$/.test(second)) {
+    return `${first} ${second} *`;
+  }
+  return `${first} *`;
+}
+
+/** Structural check for a STORED shape (load-time re-validation). */
+export function isValidStoredShape(tool: string, shape: string): boolean {
+  if (tool !== "bash" && tool !== "edit" && tool !== "write") return false;
+  if (shape.length === 0 || shape.length > 160) return false;
+  if (/[\r\n]/.test(shape)) return false;
+  if (targetsSelfProtected(shape)) return false;
+  if (tool === "bash") {
+    if (!shape.endsWith(" *")) return false;
+    const head = shape.slice(0, -2);
+    return MEMORABLE_MULTI_HEADS.includes(head) || MEMORABLE_SINGLE_HEADS.includes(head);
+  }
+  return !shape.includes("*");
 }
 
 /** Does this shape target a self-protected path? Never remember it. */
 export function targetsSelfProtected(shape: string): boolean {
-  const n = shape.toLowerCase();
-  return n.includes(".codewhip/") || n.includes("remembered.jsonl") || n.includes("codewhip-policy.yaml");
+  const segs = shape.toLowerCase().replace(/\\/g, "/").split("/");
+  if (segs.includes(".codewhip")) return true;
+  const base = segs[segs.length - 1] ?? "";
+  return base === "remembered.jsonl" || base === "codewhip-policy.yaml" || base === "policy.md";
 }

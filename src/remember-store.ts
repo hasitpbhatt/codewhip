@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Shape } from "./remember.js";
+import { isValidStoredShape, type Shape } from "./remember.js";
 
 export type RememberedRule = {
   tool: "bash" | "edit" | "write";
@@ -13,7 +13,9 @@ export type RememberedRule = {
   preview_hash: string;
 };
 
-/** Read remembered rules from .codewhip/remembered.jsonl. Fail-closed. */
+/** Read remembered rules. Fail-closed; re-validates every line so a
+ * hand-edited file can't inject shapes the curator would never store
+ * (and provenance-free rules — what Ruling 4 forbids — never load). */
 export function listRules(cwd: string): RememberedRule[] {
   const file = path.join(cwd, ".codewhip", "remembered.jsonl");
   let text: string;
@@ -27,7 +29,17 @@ export function listRules(cwd: string): RememberedRule[] {
     if (line.trim() === "") continue;
     try {
       const r = JSON.parse(line) as RememberedRule;
-      if (r.tool && r.shape && r.ts && r.runId) rules.push(r);
+      if (
+        typeof r.tool === "string" &&
+        typeof r.shape === "string" &&
+        typeof r.ts === "string" &&
+        typeof r.runId === "string" &&
+        typeof r.preview_hash === "string" &&
+        r.preview_hash.length > 0 &&
+        isValidStoredShape(r.tool, r.shape)
+      ) {
+        rules.push(r);
+      }
     } catch {
       // malformed line, skip
     }

@@ -8,8 +8,9 @@ import { makePort, parseProviderId, PROVIDERS, PROVIDER_IDS, type ProviderId } f
 import { listModels } from "./models.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
-import type { UsageBucket } from "./outcomes.js";
-import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
+import { appendOutcome, newRunId, promptHash, type UsageBucket } from "./outcomes.js";
+import { sha256Hex } from "./hash.js";
+import { appendEntry, auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
@@ -280,6 +281,32 @@ function missingKeyHelp(provider: ProviderId): void {
   process.exitCode = 1;
 }
 
+/**
+ * Pre-loop refusals (private-without-consent, missing key) leave a
+ * content-free deny trail: prompt_hash + error hash only, zero prompt
+ * content — audit-senior holds even when the loop never starts.
+ */
+function logPreLoopDeny(cwd: string, prompt: string, model: string, policy: string, error: string): void {
+  try {
+    const runId = newRunId();
+    const ph = promptHash(prompt);
+    const rh = sha256Hex(error);
+    appendOutcome(cwd, {
+      v: 1,
+      ts: new Date().toISOString(),
+      runId,
+      model,
+      prompt_hash: ph,
+      yolo: false,
+      tool_calls: [],
+      usage: { prompt: 0, completion: 0 },
+      result_preview_redacted: "",
+      verdict: null,
+    });
+    appendEntry(cwd, { runId, actor: "policy", tool: "run", args_hash: ph, result_hash: rh, policy: `deny:${policy}` });
+  } catch { /* trail best-effort, never blocks the refusal */ }
+}
+
 function promptApproval(question: string): Promise<ApprovalAnswer> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -305,6 +332,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if ("error" in routed) {
     console.error(`codewhip: ${routed.error}`);
     process.exitCode = 1;
+    logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:private-without-consent", routed.error);
     printStubReceipt(opts.model, opts.provider);
     return;
   }
@@ -323,6 +351,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   const { key: apiKey } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
+    logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:missing-key", `missing ${opts.provider} key`);
     printStubReceipt(opts.model, opts.provider);
     return;
   }
@@ -633,13 +662,24 @@ function cmdPolicy(args: string[]): void {
     const sep = raw.indexOf(":");
     const tool = raw.slice(0, sep);
     const shape = raw.slice(sep + 1);
-    if (sep <= 0 || shape.length === 0) {
+    if (sep <= 0 || shape.length === 0 || /[\r\n]/.test(raw)) {
       console.error('usage: codewhip policy approve "<tool:shape>"  (e.g. "bash:npm publish *")');
       process.exitCode = 1;
       return;
     }
-    const cands = declineCandidates(cwd, 1);
-    const known = cands.find((c) => c.tool === tool && c.shape === shape);
+    if (tool !== "bash" && tool !== "edit" && tool !== "write") {
+      console.error(`policy: tool must be bash|edit|write (got "${tool}")`);
+      process.exitCode = 1;
+      return;
+    }
+    // Zero-evidence approve is refused: the shape must be a live candidate
+    // at full threshold (3+ declines across 2+ runs in 30d).
+    const known = declineCandidates(cwd).find((c) => c.tool === tool && c.shape === shape);
+    if (known === undefined) {
+      console.error(`policy: "${tool}:${shape}" is not a candidate (needs 3+ declines across 2+ runs) — see: codewhip policy candidates`);
+      process.exitCode = 1;
+      return;
+    }
     if (!appendPromotedDeny(cwd, tool, shape, known?.count ?? 0)) {
       console.error(`policy: "${tool}:${shape}" is already promoted (or the disk failed) — see policy list.`);
       process.exitCode = 1;

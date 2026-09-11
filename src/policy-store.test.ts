@@ -66,40 +66,82 @@ describe("policy-store", () => {
     ok(raw.includes("deny bash:npm publish *"));
     strictEqual(loadPromotedDenies(cwd).length, 1);
   });
-  it("surfaces 3+ declines of the same shape as candidates", () => {
+  it("surfaces 3+ declines across 2+ runs as candidates", () => {
+    const NOW = Date.parse("2026-09-12T00:00:00.000Z");
     const dir = path.join(cwd, ".codewhip");
     fs.mkdirSync(dir, { recursive: true });
-    const line = (seq: number, shape?: string): string =>
+    const call = (seq: number, shape?: string): unknown =>
+      ({ seq, tool: "bash", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "default:shell:ask+declined", ...(shape === undefined ? {} : { shape }) });
+    const rec = (runId: string, calls: unknown[]): string =>
       JSON.stringify({
-        v: 1, ts: "2026-09-11T00:00:00.000Z", runId: "r", model: "m", prompt_hash: "p",
-        yolo: false,
-        tool_calls: [{ seq, tool: "bash", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "default:shell:ask+declined", ...(shape === undefined ? {} : { shape }) }],
+        v: 1, ts: "2026-09-11T00:00:00.000Z", runId, model: "m", prompt_hash: "p",
+        yolo: false, tool_calls: calls,
         usage: { prompt: 0, completion: 0 }, result_preview_redacted: "", verdict: null,
       });
     fs.writeFileSync(
       path.join(dir, "outcomes.jsonl"),
-      [line(1, "npm publish *"), line(2, "npm publish *"), line(3, "npm publish *"), line(4, "echo *"), line(5, "echo *"), line(6)].join("\n") + "\n",
+      [
+        // One run = one record; r1 spams the shape twice but counts once.
+        rec("r1", [call(1, "npm publish *"), call(2, "npm publish *")]),
+        rec("r2", [call(1, "npm publish *")]),
+        rec("r3", [call(1, "npm publish *")]),
+        rec("r1", [call(3, "echo hi *")]),
+        rec("r2", [call(2, "echo hi *")]),
+        rec("r1", [call(4)]),
+      ].join("\n") + "\n",
       "utf8"
     );
-    const cands = declineCandidates(cwd);
+    const cands = declineCandidates(cwd, 3, NOW);
     strictEqual(cands.length, 1);
     strictEqual(cands[0]?.tool, "bash");
     strictEqual(cands[0]?.shape, "npm publish *");
     strictEqual(cands[0]?.count, 3);
   });
-  it("excludes already-promoted shapes from candidates", () => {
+  it("one spamming session cannot mint a candidate alone", () => {
+    const NOW = Date.parse("2026-09-12T00:00:00.000Z");
     const dir = path.join(cwd, ".codewhip");
     fs.mkdirSync(dir, { recursive: true });
-    const mk = (): string =>
+    // One run, five declines of the same shape: capped to one count AND one
+    // distinct run — no candidate either way.
+    const calls = [1, 2, 3, 4, 5].map((seq) => (
+      { seq, tool: "bash", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "default:shell:ask+declined", shape: "npm publish *" }
+    ));
+    const rec = JSON.stringify({
+      v: 1, ts: "2026-09-11T00:00:00.000Z", runId: "r1", model: "m", prompt_hash: "p",
+      yolo: false, tool_calls: calls,
+      usage: { prompt: 0, completion: 0 }, result_preview_redacted: "", verdict: null,
+    });
+    fs.writeFileSync(path.join(dir, "outcomes.jsonl"), rec + "\n", "utf8");
+    strictEqual(declineCandidates(cwd, 3, NOW).length, 0);
+  });
+  it("ignores declines older than the window", () => {
+    const NOW = Date.parse("2026-09-12T00:00:00.000Z");
+    const dir = path.join(cwd, ".codewhip");
+    fs.mkdirSync(dir, { recursive: true });
+    const mk = (runId: string): string =>
       JSON.stringify({
-        v: 1, ts: "2026-09-11T00:00:00.000Z", runId: "r", model: "m", prompt_hash: "p",
+        v: 1, ts: "2026-01-01T00:00:00.000Z", runId, model: "m", prompt_hash: "p",
         yolo: false,
         tool_calls: [{ seq: 1, tool: "bash", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "default:shell:ask+declined", shape: "npm publish *" }],
         usage: { prompt: 0, completion: 0 }, result_preview_redacted: "", verdict: null,
       });
-    fs.writeFileSync(path.join(dir, "outcomes.jsonl"), [mk(), mk(), mk()].join("\n") + "\n", "utf8");
-    strictEqual(declineCandidates(cwd).length, 1);
+    fs.writeFileSync(path.join(dir, "outcomes.jsonl"), [mk("r1"), mk("r2"), mk("r3")].join("\n") + "\n", "utf8");
+    strictEqual(declineCandidates(cwd, 3, NOW).length, 0);
+  });
+  it("excludes already-promoted shapes from candidates", () => {
+    const NOW = Date.parse("2026-09-12T00:00:00.000Z");
+    const dir = path.join(cwd, ".codewhip");
+    fs.mkdirSync(dir, { recursive: true });
+    const mk = (runId: string): string =>
+      JSON.stringify({
+        v: 1, ts: "2026-09-11T00:00:00.000Z", runId, model: "m", prompt_hash: "p",
+        yolo: false,
+        tool_calls: [{ seq: 1, tool: "bash", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "default:shell:ask+declined", shape: "npm publish *" }],
+        usage: { prompt: 0, completion: 0 }, result_preview_redacted: "", verdict: null,
+      });
+    fs.writeFileSync(path.join(dir, "outcomes.jsonl"), [mk("r1"), mk("r2"), mk("r3")].join("\n") + "\n", "utf8");
+    strictEqual(declineCandidates(cwd, 3, NOW).length, 1);
     strictEqual(appendPromotedDeny(cwd, "bash", "npm publish *", 3), true);
-    strictEqual(declineCandidates(cwd).length, 0);
+    strictEqual(declineCandidates(cwd, 3, NOW).length, 0);
   });
 });

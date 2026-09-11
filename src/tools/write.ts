@@ -49,13 +49,14 @@ function jailWritePath(cwd: string, target: string): string | null {
   return abs;
 }
 
-/** Harness self-protection: refuses .codewhip/** and policy/memory files. */
+/** Harness self-protection: refuses .codewhip/**, policy files, and secret material. */
 export function refusesSelfProtected(abs: string): boolean {
   const segs = abs.split(path.sep);
   return (
     segs.includes(".codewhip") ||
     segs[segs.length - 1] === "remembered.jsonl" ||
-    segs[segs.length - 1] === "codewhip-policy.yaml"
+    segs[segs.length - 1] === "codewhip-policy.yaml" ||
+    segs[segs.length - 1] === "policy.md"
   );
 }
 
@@ -71,7 +72,7 @@ export async function writeTool(ctx: ToolContext, args: WriteArgs): Promise<Tool
     return { ok: false, output: "write: path escapes workspace jail" };
   }
   if (refusesSelfProtected(safe)) {
-    return { ok: false, output: "write: refused — target is harness state (.codewhip/** or codewhip-policy.yaml)" };
+    return { ok: false, output: "write: refused — target is harness state (.codewhip/**, policy files)" };
   }
   // Don't clobber a path that is currently a directory.
   try {

@@ -89,7 +89,7 @@ describe("loop", () => {
     strictEqual(last.tool_calls.length, 1);
     strictEqual(last.tool_calls[0]?.decision, "deny");
     ok((last.tool_calls[0]?.ruleId ?? "").endsWith("+declined"));
-    strictEqual(last.tool_calls[0]?.shape, "echo *");
+    strictEqual(last.tool_calls[0]?.shape, "echo hi *");
   });
   it("remembered shape auto-allows without asking", async () => {
     const ev: string[] = [];

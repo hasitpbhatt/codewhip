@@ -108,26 +108,40 @@ export type PromotionCandidate = {
 };
 
 /**
- * Group declined asks by tool:shape (3+ = candidate), excluding shapes
- * already promoted. Reads outcomes.jsonl — declines without a recorded
- * shape can't generalize and are skipped.
+ * Group declined asks by tool:shape into candidates. Hardened against
+ * poisoning: needs `threshold` declines across ≥2 distinct runs within
+ * `windowMs` (default 30d), counting at most one per run per shape — one
+ * bad session spamming declines can't mint a candidate. Skips shapeless
+ * declines (no safe generalization) and already-promoted shapes.
  */
-export function declineCandidates(cwd: string, threshold = 3): PromotionCandidate[] {
-  const counts = new Map<string, number>();
+export function declineCandidates(cwd: string, threshold = 3, nowMs: number = Date.now(), windowMs: number = 30 * 24 * 3600 * 1000): PromotionCandidate[] {
+  const stats = new Map<string, { count: number; runs: Set<string>; newest: number }>();
   for (const r of readOutcomeRecords(cwd)) {
+    const ts = Date.parse(r.ts);
+    if (!Number.isFinite(ts) || nowMs - ts > windowMs || ts > nowMs) continue;
+    const seenInRun = new Set<string>();
     for (const c of r.tool_calls ?? []) {
       if (c.decision !== "deny" || !c.ruleId.endsWith("+declined")) continue;
       if (typeof c.shape !== "string" || c.shape.length === 0) continue;
       const key = `${c.tool}:${c.shape}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      if (seenInRun.has(key)) continue;
+      seenInRun.add(key);
+      let s = stats.get(key);
+      if (s === undefined) {
+        s = { count: 0, runs: new Set(), newest: 0 };
+        stats.set(key, s);
+      }
+      s.count += 1;
+      s.runs.add(r.runId);
+      if (ts > s.newest) s.newest = ts;
     }
   }
   const promoted = new Set(loadPromotedDenies(cwd).map((d) => `${d.tool}:${d.shape}`));
   const out: PromotionCandidate[] = [];
-  for (const [key, count] of counts) {
-    if (count < threshold || promoted.has(key)) continue;
+  for (const [key, s] of stats) {
+    if (s.count < threshold || s.runs.size < 2 || promoted.has(key)) continue;
     const sep = key.indexOf(":");
-    out.push({ tool: key.slice(0, sep), shape: key.slice(sep + 1), count });
+    out.push({ tool: key.slice(0, sep), shape: key.slice(sep + 1), count: s.count });
   }
   out.sort((a, b) => b.count - a.count);
   return out;

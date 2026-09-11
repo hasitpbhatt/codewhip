@@ -28,3 +28,22 @@ export function jailPath(cwd: string, target: string): string | null {
   }
   return realTarget;
 }
+
+/**
+ * Secret-material filenames, refused by read/edit and skipped by search.
+ * One list, three tools — push-time redaction is only the second net.
+ */
+const SECRET_FILE_RX = [/^\.env(\.|$)/i, /\.pem$/i, /\.key$/i, /credentials\.json$/i];
+
+export function isSecretFileName(base: string): boolean {
+  return SECRET_FILE_RX.some((rx) => {
+    rx.lastIndex = 0;
+    return rx.test(base);
+  });
+}
+
+/** The repo-local private signing key — never served to the model. */
+export function isPrivateKeyPath(abs: string): boolean {
+  const segs = abs.split(path.sep);
+  return segs.includes(".codewhip") && segs[segs.length - 1] === "key";
+}

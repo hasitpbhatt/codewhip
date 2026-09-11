@@ -63,7 +63,7 @@ export function buildShareBundle(cwd: string, input: ShareInput): { bundle: Shar
     model: input.model,
     prompt_redacted: scrub(input.prompt),
     result_redacted: scrub(input.resultText),
-    error: input.error ?? null,
+    error: input.error === undefined ? null : scrub(input.error),
     tool_calls: input.trace.map((t) => ({
       seq: t.seq,
       tool: t.tool,

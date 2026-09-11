@@ -38,6 +38,7 @@ describe("write", () => {
   it("refusesSelfProtected flags .codewhip and policy files", () => {
     strictEqual(refusesSelfProtected(path.join(cwd, ".codewhip", "remembered.jsonl")), true);
     strictEqual(refusesSelfProtected(path.join(cwd, "codewhip-policy.yaml")), true);
+    strictEqual(refusesSelfProtected(path.join(cwd, "policy.md")), true);
     strictEqual(refusesSelfProtected(path.join(cwd, "src", "main.ts")), false);
   });
 });

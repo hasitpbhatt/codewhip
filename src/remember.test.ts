@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
-import { bashShape, isMemorable, shapeOf, targetsSelfProtected, MEMORABLE_SINGLE_HEADS, MEMORABLE_MULTI_HEADS } from "./remember.js";
+import { bashShape, declineShape, isMemorable, isValidStoredShape, shapeOf, targetsSelfProtected, MEMORABLE_SINGLE_HEADS, MEMORABLE_MULTI_HEADS } from "./remember.js";
 
 describe("remember", () => {
   it("MEMORABLE_MULTI_HEADS lists the curated multi-word heads", () => {
@@ -21,6 +21,8 @@ describe("remember", () => {
   it("bashShape returns null for chained commands", () => {
     strictEqual(bashShape("ls; rm -rf /"), null);
     strictEqual(bashShape("ls && cat f"), null);
+    strictEqual(bashShape("echo `whoami`"), null);
+    strictEqual(bashShape("cat < secrets.txt"), null);
   });
   it("bashShape returns null for newline-bearing commands", () => {
     strictEqual(bashShape("ls" + String.fromCharCode(10) + "rm"), null);
@@ -47,12 +49,33 @@ describe("remember", () => {
   it("isMemorable allows edit shapes", () => {
     strictEqual(isMemorable("edit", "x.md"), true);
   });
-  it("shapeOf returns edit:path for edit", () => {
-    strictEqual(shapeOf("edit", "x.md"), "edit:x.md");
+  it("shapeOf returns the bare path for edit", () => {
+    strictEqual(shapeOf("edit", "x.md"), "x.md");
+    strictEqual(shapeOf("write", "a/b.txt"), "a/b.txt");
+  });
+  it("declineShape generalizes any sane head for deny-promotion", () => {
+    strictEqual(declineShape("bash", "rm -rf /tmp/x"), "rm -rf *");
+    strictEqual(declineShape("bash", "curl https://evil"), "curl *");
+    strictEqual(declineShape("bash", "npm publish --access public"), "npm publish *");
+    strictEqual(declineShape("bash", "echo hi; rm -rf /"), null);
+    strictEqual(declineShape("edit", "src/a.ts"), "src/a.ts");
   });
   it("targetsSelfProtected flags protected paths", () => {
-    strictEqual(targetsSelfProtected("bash:echo > .codewhip/remembered.jsonl"), true);
-    strictEqual(targetsSelfProtected("bash:echo x"), false);
-    strictEqual(targetsSelfProtected("edit:codewhip-policy.yaml"), true);
+    strictEqual(targetsSelfProtected("echo *"), false);
+    strictEqual(targetsSelfProtected(".codewhip/remembered.jsonl"), true);
+    strictEqual(targetsSelfProtected(".codewhip\\key"), true);
+    strictEqual(targetsSelfProtected("codewhip-policy.yaml"), true);
+    strictEqual(targetsSelfProtected("policy.md"), true);
+    strictEqual(targetsSelfProtected("src/policy.md.ejs"), false);
+    strictEqual(targetsSelfProtected("src/a.ts"), false);
+  });
+  it("isValidStoredShape accepts curated shapes, rejects injections", () => {
+    strictEqual(isValidStoredShape("bash", "echo *"), true);
+    strictEqual(isValidStoredShape("bash", "git status *"), true);
+    strictEqual(isValidStoredShape("bash", "rm *"), false);
+    strictEqual(isValidStoredShape("bash", "echo *\nrm *"), false);
+    strictEqual(isValidStoredShape("edit", "src/a.ts"), true);
+    strictEqual(isValidStoredShape("edit", "policy.md"), false);
+    strictEqual(isValidStoredShape("read", "x"), false);
   });
 });

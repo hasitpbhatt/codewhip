@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ToolContext, ToolResult } from "./types.js";
-import { jailPath } from "./jail.js";
+import { isSecretFileName, jailPath } from "./jail.js";
+import { refusesSelfProtected } from "./write.js";
 
 export type EditArgs = {
   path: string;
@@ -47,6 +49,12 @@ export async function editTool(ctx: ToolContext, args: EditArgs): Promise<ToolRe
   const safe = jailPath(ctx.cwd, args.path);
   if (safe === null) {
     return { ok: false, output: "edit: path escapes workspace jail" };
+  }
+  if (refusesSelfProtected(safe)) {
+    return { ok: false, output: "edit: refused — target is harness state (.codewhip/**, policy files)" };
+  }
+  if (isSecretFileName(path.basename(safe))) {
+    return { ok: false, output: "edit: refused — secret material (.env/.pem/.key/credentials.json)" };
   }
   let text: string;
   try {

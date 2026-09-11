@@ -1,17 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolContext, ToolResult } from "./types.js";
-import { jailPath } from "./jail.js";
+import { isSecretFileName, jailPath } from "./jail.js";
 
 const MAX_RESULTS = 50;
 const MAX_FILES = 2000;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_CHARS = 4000;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".codewhip"]);
-// Never crawl secret material: search/read skip it outright, and push-time
-// redaction (loop transcript) is only a pattern-based second net — so refusal
-// to READ *.env / .pem / .key / credentials.json stays the primary defense.
-const SKIP_FILES = [/^\.env(\.|$)/i, /\.pem$/i, /\.key$/i, /credentials\.json$/i];
 
 function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -39,7 +35,9 @@ function walk(cwd: string, rel: string, out: string[]): void {
     if (e.isDirectory()) {
       walk(cwd, next, out);
     } else if (e.isFile()) {
-      if (SKIP_FILES.some((rx) => rx.test(e.name))) continue;
+      // Never crawl secret material (shared list in jail.ts — read/edit
+      // refuse it too; push-time redaction is only the second net).
+      if (isSecretFileName(e.name)) continue;
       out.push(next);
     }
   }
