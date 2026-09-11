@@ -61,6 +61,7 @@ function printHelp(): void {
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
+  console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
   console.log("  pack                 team policy packs shipped locally (list/pull <name> [--force])");
   console.log("  help                 show this help");
@@ -800,6 +801,21 @@ async function main(): Promise<void> {
   }
   if (command === "verdict") {
     cmdVerdict(args.slice(1));
+    return;
+  }
+  if (command === "demo") {
+    if (args[1] !== "--deny") {
+      console.error("usage: codewhip demo --deny  (offline, $0, no key needed)");
+      process.exitCode = 1;
+      return;
+    }
+    const { runDenyDemo } = await import("./demo.js");
+    const r = await runDenyDemo(process.cwd());
+    console.log(`demo: ${r.denied} denied / ${r.allowed} allowed (bar: ≥5 blocks in demo)`);
+    console.log(`audit: chain ${r.auditValid ? "INTACT" : "BROKEN"} (see: codewhip audit --verify)`);
+    console.log(r.receipt);
+    console.log(`runId: ${r.runId}`);
+    if (r.denied < 5 || r.allowed < 1 || !r.auditValid) process.exitCode = 1;
     return;
   }
   if (command === "policy") {

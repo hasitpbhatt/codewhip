@@ -97,6 +97,11 @@ Nothing copied blindly — no TUI/MCP/skills/provider-matrix scope. Kill-list ho
    accepted-rate. `outcomes.jsonl` v1 untouched on disk (still writes
    `verdict: null`; join is in-memory) — no migration, old readers fine.
 2. Offline wedge demo (`codewhip demo --deny` on the $0 fake port).
+   — SHIPPED 2026-09-11 (155/155): `src/demo.ts` scripts five disasters
+   (rm -rf /, push --force, chaining, redirection, absolute-path escape)
+   + one safe `git status` through the real loop + policy + audit.
+   Live proof: `5 denied / 1 allowed`, chain INTACT, `$0.0000` receipt.
+   No network, no key, no new deps.
 3. Pasteable artifact (`run --share --print` Markdown receipt block).
 4. Passable gate (price sensenova/alibaba/mistral or re-route polish; derive price key from `PROVIDERS`).
 5. Truth to model (reword chaining claims; fix search comment).
