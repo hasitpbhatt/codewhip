@@ -113,3 +113,10 @@ P1 — trust that spreads:
   untracked, never fiction); polish gate printed per run. The <$0.05 launch
   gate needs a real priced polish run — mechanism landed, proof pending.
   111/111 tests.
+
+- 2026-09-11 — **`codewhip metrics` ships (bars readable, verdicts honest).**
+  `src/metrics.ts`: aggregates `outcomes.jsonl` + remembered rules into runs,
+  allow/deny, blocks/100, priced spend ($/task on known routes, untracked
+  counted never fiction-priced), memory lines/week. Task success stays
+  "unmeasurable" until verdict instrumentation exists — reported, not faked.
+  116/116 tests.

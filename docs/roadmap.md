@@ -94,7 +94,7 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
 8. No public launch, partnerships, or content flywheel until polish <$0.05
    with receipts; no unbounded memory without redaction + policy scope.
 
-## Metrics (bars)
+## Metrics (bars — readable via `codewhip metrics`)
 
 | Metric | Definition | H1 bar |
 |---|---|---|

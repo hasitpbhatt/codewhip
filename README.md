@@ -11,8 +11,8 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (111 tests) pins the
-policy, jail, memory, audit chain, share redaction, router, and loop. The five Naval agents have debated and
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (116 tests) pins the
+policy, jail, memory, audit chain, share redaction, router, metrics, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
@@ -101,10 +101,11 @@ src/index.ts            CLI entry (help, run/auth/models/audit)
 src/loop.ts             agentLoop(): stream → permission → exec → append, budget
 src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
 src/router.ts           3-class task router (implement/polish/private) + polish gate
+src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 111-test suite
+src/testkit/            $0 fake ChatPort for the 116-test suite
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -137,7 +138,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (111 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts (116 tests)
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.

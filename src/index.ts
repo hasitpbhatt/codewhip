@@ -12,6 +12,7 @@ import type { UsageBucket } from "./outcomes.js";
 import { auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
+import { renderMetrics, summarizeCwd } from "./metrics.js";
 import {
   clearKey,
   configDir,
@@ -54,6 +55,7 @@ function printHelp(): void {
   console.log("  auth                 store provider keys (login/logout/status [nvidia|mistral|sensenova|alibaba])");
   console.log("  models [provider]    list served models with agency tags (nvidia|mistral|sensenova|alibaba, default: nvidia)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
+  console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  help                 show this help");
   console.log("");
   console.log("Options (run):");
@@ -634,6 +636,10 @@ async function main(): Promise<void> {
   }
   if (command === "audit") {
     cmdAudit(args.slice(1));
+    return;
+  }
+  if (command === "metrics") {
+    console.log(renderMetrics(summarizeCwd(process.cwd())));
     return;
   }
   if (command === "models") {
