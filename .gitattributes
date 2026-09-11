@@ -1,0 +1,9 @@
+# Normalize line endings to LF on commit (cross-platform CLI; kills CRLF churn).
+* text=auto eol=lf
+
+# Binaries Git must never mangle.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

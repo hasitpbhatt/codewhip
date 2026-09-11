@@ -1,5 +1,8 @@
 # CodeWhip — crack through code like a whip
 
+[![ci](https://github.com/hasitpbhatt/codewhip/actions/workflows/ci.yml/badge.svg)](https://github.com/hasitpbhatt/codewhip/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 > The terminal agent a team lead can let an intern run on prod-adjacent
 > code at 2am — policy-checked, memory-scoped, replayable, metered.
 
@@ -11,7 +14,7 @@ for *delegatability*. CodeWhip does.
 
 **Status: MVP loop live.** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite (133 tests) pins the
+`init`/`auth`/`models`/`audit` ship; a $0-quota test suite pins the
 policy, jail, memory, audit chain, share redaction, router, metrics, promotion, packs, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
@@ -107,7 +110,20 @@ src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
 src/tools/              read/search/write/edit/bash + jail
-src/testkit/            $0 fake ChatPort for the 133-test suite
+src/testkit/            $0 fake ChatPort for the test suite
+src/auth.ts             provider keys (login/logout/status; env wins, file 0600)
+src/config-dir.ts       global key/config dir (%APPDATA% | ~/.config)
+src/custom-providers.ts user-registered OpenAI-compatible providers
+src/models.ts           served-model listing with agency tags
+src/provider.ts         builtin registry + ChatPort adapter
+src/audit.ts            hash-chained signed audit log
+src/outcomes.ts         outcomes.jsonl per-run records
+src/redact.ts           key/secret scrubber (share + audit previews)
+src/share.ts            redacted chain-anchored share bundles
+src/verdict.ts          human verdicts sidecar (accepted/edited/reverted/rejected)
+src/system.ts           system prompt (harness rules stay out of it)
+src/demo.ts             offline wedge demo ($0 fake port)
+src/hash.ts             sha256 helpers
 SOUL.md                 product conscience (read this first)
 docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
 docs/moat/00-convergence.md   the 7 debate rulings (no ties)
@@ -115,6 +131,8 @@ docs/moat/01-leverage.md      minimal loop + router economics
 docs/moat/02-memory.md        compounding memory + flywheel
 docs/moat/03-governor.md      policy schema + audit + sandbox
 docs/moat/04-scout.md         wedge defense + terminal-first GTM
+docs/moat/05-h1-audit.md      four-lens H1 gap audit
+docs/moat/06-post-h1-verdict.md   five-lens post-H1 verdict (code, not claims)
 .opencode/agents/naval-*.md   the 5 reusable Naval personas
 AGENTS.md               working agreement for coding agents
 ```
@@ -140,7 +158,7 @@ npm install
 npm run dev        # tsx src/index.ts (no build, fastest local loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit
-npm test           # $0-quota suite: tsx --test src/**/*.test.ts (133 tests)
+npm test           # $0-quota suite: tsx --test src/**/*.test.ts
 ```
 
 Requires Node >= 18. TypeScript strict, ESM.
@@ -283,6 +301,14 @@ This repo ships its strategy team as reusable subagents
 - **naval-scout** — uncopyable wedge + terminal-first GTM; non-clone list.
 - **naval-synthesizer** — stages the debate, rules with no ties, converges.
 
+## Contributing & Security
+
+Bug reports and feature requests:
+[issues](https://github.com/hasitpbhatt/codewhip/issues). Vulnerabilities
+(jail escape, audit forgery, redaction leak) go to private email — see
+[SECURITY.md](SECURITY.md). Dev setup, commit style, and the PR checklist:
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).

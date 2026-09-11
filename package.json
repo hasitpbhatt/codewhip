@@ -2,6 +2,15 @@
   "name": "codewhip",
   "version": "0.1.0",
   "description": "AI coding agent that cracks through code like a whip",
+  "author": "Hasit Bhatt",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasitpbhatt/codewhip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hasitpbhatt/codewhip/issues"
+  },
+  "homepage": "https://github.com/hasitpbhatt/codewhip#readme",
   "type": "module",
   "bin": {
     "codewhip": "dist/index.js"
