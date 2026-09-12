@@ -246,6 +246,22 @@ newest-to-oldest so the earliest content wins, removes files the run
 created, and lands on the hash-chained audit trail like everything else.
 The intern at 2am has an undo.
 
+### Plan before act: `--plan`
+
+Review step for the whole task, the way `edit` has `ask`:
+
+```sh
+codewhip run "migrate auth to sessions" --plan
+```
+
+The run is **read-only**: `edit`/`write`/`bash` are refused by the harness
+for the entire run — above `ask`, above `--yolo`, above remembered rules,
+nothing can grant them. `read`/`search`/`webfetch` stay allowed, so the
+agent can investigate freely; the run's final output is the implementation
+plan, which you review, then re-run without `--plan` to execute it. The
+banner prints `!! --plan armed` up front and every refusal lands on the
+audit trail as `deny:plan:read-only`.
+
 ### Free models at one place
 
 `codewhip free` lists the free-provider chain read-only (no key, no network):

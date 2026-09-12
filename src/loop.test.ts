@@ -263,6 +263,79 @@ describe("loop", () => {
       globalThis.fetch = realFetch;
     }
   });
+  it("plan mode: even --yolo cannot grant edit/write/bash, and nothing is touched", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-plan-"));
+    fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+    const { port } = makeFakePort([
+      toolTurn("edit", JSON.stringify({ path: "f.txt", oldString: "hello", newString: "bye" })),
+      toolTurn("write", JSON.stringify({ path: "g.txt", content: "x" })),
+      toolTurn("bash", JSON.stringify({ command: "echo hi" })),
+      textTurn("here is the plan"),
+    ]);
+    const ev: string[] = [];
+    const r = await agentLoop({
+      prompt: "plan this", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 10, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk, planMode: true,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(runCwd),
+    });
+    strictEqual(r.text, "here is the plan");
+    strictEqual(r.trace.length, 3);
+    ok(r.trace.every((t) => t.policy === "deny:plan:read-only"), JSON.stringify(r.trace.map((t) => t.policy)));
+    ok(ev.some((t) => t.includes("(plan:read-only)")), ev.join(" "));
+    strictEqual(fs.readFileSync(path.join(runCwd, "f.txt"), "utf8"), "hello\n");
+    ok(!fs.existsSync(path.join(runCwd, "g.txt")));
+    const v = verifyChain(runCwd);
+    strictEqual(v.valid, true);
+    strictEqual(v.total, 3);
+  });
+  it("plan mode: read/search stay allowed so research still works", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-plan-"));
+    fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+    const { port, messagesSeen } = makeFakePort([
+      toolTurn("read", JSON.stringify({ path: "f.txt" })),
+      toolTurn("bash", JSON.stringify({ command: "echo hi" })),
+      textTurn("plan ready"),
+    ]);
+    const r = await agentLoop({
+      prompt: "plan this", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, planMode: true, remembered: listRules(runCwd),
+    });
+    strictEqual(r.text, "plan ready");
+    strictEqual(r.trace.length, 2);
+    strictEqual(r.trace[0]?.policy, "allow:default:read:allow");
+    strictEqual(r.trace[1]?.policy, "deny:plan:read-only");
+    const readMsg = messagesSeen[1]?.find((m) => m.role === "tool");
+    ok(readMsg !== undefined && readMsg.content.includes("hello"));
+  });
+  it("plan mode: a remembered rule cannot bypass the read-only run", async () => {
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "echo hi" })),
+      textTurn("plan ready"),
+    ]);
+    const r = await agentLoop({
+      prompt: "plan this", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: async () => "yes", planMode: true,
+      remembered: [{ tool: "bash", shape: "echo *", ts: "", runId: "", preview_hash: "" }],
+    });
+    strictEqual(r.trace.length, 1);
+    strictEqual(r.trace[0]?.policy, "deny:plan:read-only");
+  });
+  it("plan mode: the system prompt tells the model to answer with a plan", async () => {
+    const { port, messagesSeen } = makeFakePort([textTurn("plan ready")]);
+    await agentLoop({
+      prompt: "plan this", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, planMode: true, remembered: listRules(cwd),
+    });
+    ok(messagesSeen[0]?.[0]?.content.includes("PLAN MODE"));
+  });
+  it("no plan mode: the system prompt is unchanged", async () => {
+    const { port, messagesSeen } = makeFakePort([textTurn("done")]);
+    await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd),
+    });
+    ok(!messagesSeen[0]?.[0]?.content.includes("PLAN MODE"));
+  });
   it("token budget stops the run with a partial receipt", async () => {
     const ev: string[] = [];
     const { port } = makeFakePort([textTurn("one", { prompt: 300000, completion: 0 })]);

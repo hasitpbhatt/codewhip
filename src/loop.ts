@@ -57,6 +57,13 @@ export type LoopArgs = {
   models?: string[];
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
   tokenBudget?: number;
+  /**
+   * Run-scoped read-only mode (committee ruling 2): edit/write/bash are
+   * refused by the harness before the permission ladder — ask, --yolo, and
+   * remembered rules can never grant them. Read/search/webfetch stay
+   * allowed for research; the run's output is the plan.
+   */
+  planMode?: boolean;
   /** Bootstrap list of remembered rules (index.ts loads once; loop appends on `a`). */
   remembered?: RememberedRule[];
   /** Progress listener (index.ts prints). Never throws into the loop. */
@@ -179,7 +186,13 @@ function capOutput(text: string): string {
 export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const runId = newRunId();
   const messages: LoopMsg[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "system",
+      content:
+        args.planMode === true
+          ? `${SYSTEM_PROMPT}\n\nPLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan.`
+          : SYSTEM_PROMPT,
+    },
     { role: "user", content: args.prompt },
   ];
   const calls: OutcomeToolCall[] = [];
@@ -374,6 +387,15 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       const preview = previewForLog(call.name, parsed);
+      // Plan mode is run-scoped policy: mutations are refused before the
+      // permission ladder, so ask/yolo/remembered can never grant them.
+      if (args.planMode === true && (def.name === "edit" || def.name === "write" || def.name === "bash")) {
+        const out = `plan mode: run is read-only — ${call.name} refused; produce a plan instead`;
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "plan:read-only", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (plan:read-only)`);
+        continue;
+      }
       const subject = permissionSubject(def.name, parsed, preview);
       const verdict = checkPermission(def.name, subject, promoted);
       if (verdict.decision === "deny") {

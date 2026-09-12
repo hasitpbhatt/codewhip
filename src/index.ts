@@ -45,6 +45,8 @@ type RunOptions = {
   failover: boolean;
   /** Arm the free-provider chain (mutually exclusive with --failover). */
   free: boolean;
+  /** Run-scoped read-only: edit/write/bash denied, output is the plan. */
+  plan: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
   /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
@@ -67,6 +69,7 @@ function printRunOptions(): void {
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
+  console.log("  --plan               read-only run: edit/write/bash denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  -v, --version        print version");
 }
@@ -257,6 +260,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let retryWait = false;
   let failover = false;
   let free = false;
+  let plan = false;
   let share = false;
   const positional: string[] = [];
 
@@ -330,6 +334,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     } else if (a === "--free") {
       if (failover) return fail("use --free or --failover, not both");
       free = true;
+    } else if (a === "--plan") {
+      plan = true;
     } else if (a === "--share") {
       share = true;
     } else if (!a.startsWith("-")) {
@@ -342,7 +348,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, share,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share,
     taskClass, timeoutMs,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
@@ -504,6 +510,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     : routed;
   opts = { ...opts, provider: route.provider, model: route.model };
   console.log(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
+  if (opts.plan) {
+    console.log("!! --plan armed: read-only run — edit/write/bash denied for the whole run (even with --yolo); the output is the plan.");
+  }
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
@@ -590,6 +599,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       signal: ctrl.signal,
       askUser: promptApproval,
       remembered: listRules(process.cwd()),
+      planMode: opts.plan,
       retryWait: opts.retryWait,
       failovers: failoverTargets,
       models: opts.models,
