@@ -263,6 +263,43 @@ plan, which you review, then re-run without `--plan` to execute it. The
 banner prints `!! --plan armed` up front and every refusal lands on the
 audit trail as `deny:plan:read-only`.
 
+### Subagents: explore, review, and converge in parallel
+
+The model can spawn **read-only subagents** for investigation and
+multi-perspective work — `delegate` runs one child, `delegate_many` fans up
+to 4 out concurrently (the committee pattern: independent perspectives,
+then converge):
+
+```sh
+codewhip run "review src/loop.ts for bugs"   # the model may delegate to `review`
+codewhip run "compare auth approaches"       # or fan out explore/review/plan
+```
+
+Three built-ins ship zero-config: `explore` (find and report with
+file:line evidence), `review` (adversarial findings, P0–P3), `plan`
+(ordered implementation plan). Custom agents live in
+`.codewhip/agents/<name>.md` — flat frontmatter (`description` required,
+optional `model` served on the parent's port, optional `max_steps` ≤ 25)
+and the body is the child's system prompt; a file overrides a same-name
+built-in.
+
+Why this doesn't dilute the trust model:
+
+- children are **read-only** (read/search/webfetch only, refused
+  pre-ladder — nothing inside a child can prompt, mutate, or delegate) and
+  depth-capped: subagents cannot spawn subagents;
+- every child tool call lands on the **global hash-chained audit log**
+  under the child's own runId, and the child writes its own
+  `outcomes.jsonl` record — nothing is a black box;
+- child tokens fold into the parent's **receipt** (same buckets, honest
+  `est.` marks) — delegation never spends off-book;
+- child progress streams into your terminal prefixed `[<agent>]`, and the
+  parent sees only the child's final report — its context stays clean.
+
+`--plan` runs cannot delegate (read-only runs spawn no children), and a
+child's `delegate` call is refused as `deny:loop:max-depth` even if a
+rogue model asks for it.
+
 ### Sessions that survive their own context window (compaction)
 
 Long runs die a quiet death: old tool outputs (file dumps, command logs)

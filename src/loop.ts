@@ -13,6 +13,7 @@ import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
+import { listAgents } from "./subagents.js";
 import type { ProviderId } from "./provider.js";
 
 export type ApprovalAnswer = "yes" | "always" | "no";
@@ -86,6 +87,10 @@ export type LoopArgs = {
   remembered?: RememberedRule[];
   /** Progress listener (index.ts prints). Never throws into the loop. */
   onEvent?: (event: LoopEvent) => void;
+  /** Delegation depth: 0 = top-level run (may delegate), >= 1 = subagent (read-only, no delegate tools). */
+  depth?: number;
+  /** Child system prompt override (subagent bodies). Default: the main SYSTEM_PROMPT. */
+  systemPrompt?: string;
 };
 
 export type LoopTraceCall = {
@@ -119,7 +124,7 @@ export type LoopResult = {
 };
 
 function lookupTool(name: string): ToolDef | null {
-  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash" || name === "webfetch") {
+  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash" || name === "webfetch" || name === "delegate" || name === "delegate_many") {
     return TOOLS[name];
   }
   return null;
@@ -207,14 +212,30 @@ function capOutput(text: string): string {
  */
 export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const runId = newRunId();
+  const depth = args.depth ?? 0;
+  const isChild = depth > 0;
+  // Child runs get the agent's own body; plan mode appends the read-only
+  // note with wording that matches the audience (a child reports findings,
+  // a top-level --plan run's output IS the plan).
+  const baseSystem = args.systemPrompt ?? SYSTEM_PROMPT;
+  let systemContent =
+    args.planMode === true
+      ? isChild
+        ? `${baseSystem}\n\nREAD-ONLY SUBAGENT RUN: edit/write/bash/delegate are refused by the harness. Investigate freely, then answer with your findings.`
+        : `${baseSystem}\n\nPLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan.`
+      : baseSystem;
+  if (!isChild) {
+    // Delegation roster rides the system message (dynamic per run — agent
+    // files are user-authored), keeping the delegate tool spec static.
+    const roster = listAgents(args.cwd)
+      .map((a) => `- ${a.name}: ${a.description}`)
+      .join("\n");
+    if (roster.length > 0) {
+      systemContent += `\n\nDelegable subagents (delegate / delegate_many tools):\n${roster}`;
+    }
+  }
   const messages: LoopMsg[] = [
-    {
-      role: "system",
-      content:
-        args.planMode === true
-          ? `${SYSTEM_PROMPT}\n\nPLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan.`
-          : SYSTEM_PROMPT,
-    },
+    { role: "system", content: systemContent },
     { role: "user", content: args.prompt },
   ];
   const calls: OutcomeToolCall[] = [];
@@ -275,6 +296,25 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     // A bucket is only honest as metered when every contributing call was.
     bucket.estimated = bucket.estimated === true || estimated;
   };
+  /**
+   * Child usage folds into the parent's buckets and run totals: delegation
+   * spends the parent's budget honestly (receipts rule), never off-book.
+   */
+  const foldChildUsage = (childBuckets: UsageBucket[]): void => {
+    for (const b of childBuckets) {
+      promptTokens += b.prompt;
+      completionTokens += b.completion;
+      const key = `${b.label}:${b.model}`;
+      let bucket = buckets.get(key);
+      if (bucket === undefined) {
+        bucket = { label: b.label, model: b.model, prompt: 0, completion: 0 };
+        buckets.set(key, bucket);
+      }
+      bucket.prompt += b.prompt;
+      bucket.completion += b.completion;
+      if (b.estimated === true) bucket.estimated = true;
+    }
+  };
 
   for (let step = 1; step <= args.maxSteps; step++) {
     if (args.signal?.aborted === true) {
@@ -312,7 +352,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         attempt = await current.port({
           model: current.model,
           messages,
-          tools: toolSpecs(),
+          tools: toolSpecs(depth),
           signal: args.signal,
         });
       } catch (err) {
@@ -443,9 +483,22 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       const preview = previewForLog(call.name, parsed);
-      // Plan mode is run-scoped policy: mutations are refused before the
-      // permission ladder, so ask/yolo/remembered can never grant them.
-      if (args.planMode === true && (def.name === "edit" || def.name === "write" || def.name === "bash")) {
+      // Depth guard (belt): children never see the delegate specs, but a
+      // rogue tool call for a non-advertised tool still fails closed here.
+      if (isChild && (def.name === "delegate" || def.name === "delegate_many")) {
+        const out = "delegation depth exhausted: subagents cannot delegate";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "loop:max-depth", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} (loop:max-depth)`);
+        continue;
+      }
+      // Plan mode is run-scoped policy: mutations and delegation are refused
+      // before the permission ladder, so ask/yolo/remembered can never grant
+      // them — a read-only plan run spawns no children.
+      if (
+        args.planMode === true &&
+        (def.name === "edit" || def.name === "write" || def.name === "bash" || def.name === "delegate" || def.name === "delegate_many")
+      ) {
         const out = `plan mode: run is read-only — ${call.name} refused; produce a plan instead`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "plan:read-only", sha256Hex(out), "policy", out);
@@ -581,7 +634,20 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       let result: ToolResult;
       try {
         result = await withTimeout(
-          (signal) => def.exec({ cwd: args.cwd }, parsed, signal),
+          (signal) =>
+            def.exec(
+              {
+                cwd: args.cwd,
+                port: current.port,
+                model: current.model,
+                label: current.label,
+                depth,
+                onChildUsage: foldChildUsage,
+                onChildEvent: (text) => emit("tool", text),
+              },
+              parsed,
+              signal
+            ),
           def.timeoutMs,
           args.signal
         );

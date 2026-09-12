@@ -6,6 +6,8 @@ import { isEditArgs, editTool } from "./edit.js";
 import { isWriteArgs, writeTool } from "./write.js";
 import { BASH_TIMEOUT_MS, bashTool, isBashArgs } from "./bash.js";
 import { WEBFETCH_TIMEOUT_MS, isWebfetchArgs, webfetchTool } from "./webfetch.js";
+import { delegateTool } from "./delegate.js";
+import { delegateManyTool } from "./delegate_many.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
 // carries zero runtime deps. Week-1 ships static OpenAI specs + per-tool
@@ -168,8 +170,30 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
     exec: (ctx, args, signal) =>
       isWebfetchArgs(args) ? webfetchTool(ctx, args, signal) : Promise.resolve({ ok: false, output: "webfetch: bad args" } as ToolResult),
   },
+  delegate: delegateTool,
+  delegate_many: delegateManyTool,
 };
 
-export function toolSpecs(): ToolSpec[] {
-  return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.edit.spec, TOOLS.write.spec, TOOLS.bash.spec, TOOLS.webfetch.spec];
+/**
+ * Tool specs by delegation depth: a top-level run (depth 0) sees everything
+ * including the delegation tools; a child (depth >= 1) sees ONLY the read-only
+ * set — delegate tools are absent (depth guard) and edit/write/bash are absent
+ * (children are read-only; advertising tools we refuse would burn child tokens
+ * on refused calls). Filter at construction, not per call, so the transcript
+ * and failover paths keep their same-specs assumption.
+ */
+export function toolSpecs(depth = 0): ToolSpec[] {
+  if (depth > 0) {
+    return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.webfetch.spec];
+  }
+  return [
+    TOOLS.read.spec,
+    TOOLS.search.spec,
+    TOOLS.edit.spec,
+    TOOLS.write.spec,
+    TOOLS.bash.spec,
+    TOOLS.webfetch.spec,
+    TOOLS.delegate.spec,
+    TOOLS.delegate_many.spec,
+  ];
 }

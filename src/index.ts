@@ -201,7 +201,7 @@ function printHelp(): void {
   console.log("");
   printKeysHelp();
   console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia + the free chain = $0; other providers print cost untracked).");
-  console.log(`Model: agentLoop() live (read/search/edit/write/bash) — policy-checked, metered.`);
+  console.log(`Model: agentLoop() live (read/search/edit/write/bash/webfetch + read-only subagents) — policy-checked, metered.`);
 }
 
 function costNote(provider: string, model?: string): string {
@@ -534,7 +534,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   opts = { ...opts, provider: route.provider, model: route.model };
   console.log(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
   if (opts.plan) {
-    console.log("!! --plan armed: read-only run — edit/write/bash denied for the whole run (even with --yolo); the output is the plan.");
+    console.log("!! --plan armed: read-only run — edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan.");
   }
   if (opts.noStream) {
     setStreamingEnabled(false);

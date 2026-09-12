@@ -1,0 +1,322 @@
+import { describe, it } from "node:test";
+import { strictEqual, ok } from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { agentLoop } from "./loop.js";
+import { makeFakePort, textTurn, toolTurn } from "./testkit/fakePort.js";
+import {
+  BUILTIN_AGENTS,
+  listAgents,
+  parseAgentFile,
+  findAgent,
+  runChildAgent,
+  MAX_DELEGATION_DEPTH,
+} from "./subagents.js";
+import { toolSpecs } from "./tools/registry.js";
+import { readAuditLog, verifyChain } from "./audit.js";
+import { readOutcomeRecords } from "./outcomes.js";
+
+function tmpDir(prefix: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function stubAsk(_q: string): Promise<"yes" | "always" | "no"> {
+  return Promise.resolve("yes");
+}
+
+describe("subagents", () => {
+  it("parseAgentFile: valid file parses (name from filename, body, max_steps, model)", () => {
+    const r = parseAgentFile(
+      "scout.md",
+      "---\ndescription: Fast recon.\nmax_steps: 5\nmodel: m2\n---\nYou are scout.\nReport fast."
+    );
+    ok("agent" in r, JSON.stringify(r));
+    strictEqual(r.agent.name, "scout");
+    strictEqual(r.agent.description, "Fast recon.");
+    strictEqual(r.agent.maxSteps, 5);
+    strictEqual(r.agent.model, "m2");
+    ok(r.agent.systemPrompt.includes("You are scout."));
+  });
+
+  it("parseAgentFile: malformed sources fail closed", () => {
+    ok("error" in parseAgentFile("Bad_Name.md", "---\ndescription: x\n---\nbody"));
+    ok("error" in parseAgentFile("a.md", "no frontmatter here"));
+    ok("error" in parseAgentFile("a.md", "---\ndescription: x\n")); // unclosed
+    ok("error" in parseAgentFile("a.md", "---\n---\nbody")); // missing description
+    ok("error" in parseAgentFile("a.md", "---\ndescription: x\n---\n")); // empty body
+    ok("error" in parseAgentFile("a.md", "---\ndescription: x\nmax_steps: 0\n---\nbody")); // bad steps
+    ok("error" in parseAgentFile("a.md", "---\ndescription: x\nmax_steps: nope\n---\nbody"));
+  });
+
+  it("built-ins ship zero-config: explore, review, plan with descriptions", () => {
+    const names = BUILTIN_AGENTS.map((a) => a.name);
+    ok(names.includes("explore") && names.includes("review") && names.includes("plan"), names.join(","));
+    for (const a of BUILTIN_AGENTS) {
+      ok(a.description.length > 10 && a.systemPrompt.length > 30, a.name);
+      ok(a.maxSteps >= 1);
+    }
+  });
+
+  it("listAgents: a file overrides the same-name built-in; missing dir returns built-ins", () => {
+    const cwd = tmpDir("codewhip-sub-agents-");
+    try {
+      ok(listAgents(cwd).length === BUILTIN_AGENTS.length);
+      fs.mkdirSync(path.join(cwd, ".codewhip", "agents"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, ".codewhip", "agents", "explore.md"),
+        "---\ndescription: Custom explore override.\n---\nCustom explore body."
+      );
+      fs.writeFileSync(
+        path.join(cwd, ".codewhip", "agents", "scout.md"),
+        "---\ndescription: Custom scout.\n---\nScout body."
+      );
+      fs.writeFileSync(path.join(cwd, ".codewhip", "agents", "broken.md"), "not frontmatter");
+      const agents = listAgents(cwd);
+      const explore = agents.find((a) => a.name === "explore");
+      ok(explore !== undefined && explore.description === "Custom explore override.");
+      ok(findAgent(cwd, "scout") !== null);
+      ok(findAgent(cwd, "broken") === null); // invalid files are skipped, never crash
+      ok(findAgent(cwd, "nonexistent") === null);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("toolSpecs: depth 0 sees all 8 tools; children see only read/search/webfetch", () => {
+    const names0 = toolSpecs(0).map((s) => s.name);
+    strictEqual(names0.length, 8);
+    ok(names0.includes("delegate") && names0.includes("delegate_many"));
+    const names1 = toolSpecs(1).map((s) => s.name);
+    strictEqual(names1.length, 3);
+    ok(names1.includes("read") && names1.includes("search") && names1.includes("webfetch"));
+    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash"));
+  });
+
+  it("delegate: child runs, audit chain carries the child runId, usage folds into the receipt", async () => {
+    const runCwd = tmpDir("codewhip-sub-delegate-");
+    fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+    try {
+      const { port, record, messagesSeen } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "read f.txt and report" }), { prompt: 100, completion: 10 }),
+        toolTurn("read", JSON.stringify({ path: "f.txt" }), { prompt: 50, completion: 5 }),
+        textTurn("f.txt says hello", { prompt: 50, completion: 5 }),
+        textTurn("done", { prompt: 10, completion: 2 }),
+      ]);
+      const events: string[] = [];
+      const r = await agentLoop({
+        prompt: "explore the file", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk,
+        onEvent: (e) => events.push(e.text), remembered: [],
+      });
+      strictEqual(r.text, "done");
+      // Roster rides the parent's system message; the child gets its own body.
+      ok(messagesSeen[0]?.[0]?.content.includes("Delegable subagents"), messagesSeen[0]?.[0]?.content.slice(0, 200) ?? "");
+      ok(messagesSeen[0]?.[0]?.content.includes("explore:"));
+      const childSystem = messagesSeen[1]?.[0]?.content ?? "";
+      ok(childSystem.startsWith("You are the explore subagent"), childSystem.slice(0, 120));
+      ok(childSystem.includes("READ-ONLY SUBAGENT RUN"));
+      ok(!childSystem.includes("Delegable subagents"));
+      // Child advertised specs are the read-only set; parent saw all 8.
+      strictEqual(record[0]?.toolCount, 8);
+      strictEqual(record[1]?.toolCount, 3);
+      // Usage folds honestly into the parent's totals and buckets.
+      strictEqual(r.promptTokens, 100 + 50 + 50 + 10);
+      strictEqual(r.completionTokens, 10 + 5 + 5 + 2);
+      const bucket = r.usageByModel.find((b) => b.label === "nvidia" && b.model === "m");
+      ok(bucket !== undefined && bucket.prompt === 210 && bucket.completion === 22);
+      // Child progress forwarded to the parent's event stream.
+      ok(events.some((e) => e.startsWith("[explore]")), events.join(" | "));
+      // The delegate call is on the parent's trail, allowed by policy.
+      const delegateTrace = r.trace.find((t) => t.tool === "delegate");
+      ok(delegateTrace !== undefined && delegateTrace.policy === "allow:delegate:read-only", JSON.stringify(r.trace));
+      // Child runId is on the global audit chain; chain verifies intact.
+      // (The child made exactly one tool call — the read — so exactly one
+      // child-owned audit entry; the delegate call itself is parent-owned.)
+      const parentRunIds = new Set([r.runId]);
+      const audit = readAuditLog(runCwd).entries;
+      const childEntries = audit.filter((e) => !parentRunIds.has(e.runId));
+      strictEqual(childEntries.length, 1);
+      strictEqual(childEntries[0]?.tool, "read");
+      strictEqual(verifyChain(runCwd).valid, true);
+      // Child wrote its own outcome record.
+      const childOutcome = readOutcomeRecords(runCwd).find((o) => !parentRunIds.has(o.runId));
+      ok(childOutcome !== undefined, "expected a child outcome record");
+      strictEqual(childOutcome?.model, "m");
+      // Delegate output carries the child runId back to the parent transcript.
+      const delegateOut = messagesSeen[3]?.filter((m) => m.role === "tool").map((m) => m.content).join("\n") ?? "";
+      ok(delegateOut.includes("[subagent explore runId:"), delegateOut.slice(-120));
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("depth guard: a child's delegate call is denied before the ladder (loop:max-depth)", async () => {
+    const runCwd = tmpDir("codewhip-sub-depth-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "try to delegate" })),
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "nested" })),
+        textTurn("child done"),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.text, "done");
+      // The child's outcome record shows its delegate call denied at depth.
+      const child = readOutcomeRecords(runCwd).find((o) => o.runId !== r.runId);
+      ok(child !== undefined, "expected child outcome");
+      const deny = child?.tool_calls.find((c) => c.ruleId === "loop:max-depth");
+      ok(deny !== undefined && deny.decision === "deny", JSON.stringify(child?.tool_calls));
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("plan mode: a read-only parent run cannot delegate", async () => {
+    const runCwd = tmpDir("codewhip-sub-plan-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "nope" })),
+        textTurn("plan only"),
+      ]);
+      const r = await agentLoop({
+        prompt: "plan", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, planMode: true, remembered: [],
+      });
+      strictEqual(r.text, "plan only");
+      const delegateTrace = r.trace.find((t) => t.tool === "delegate");
+      ok(delegateTrace !== undefined && delegateTrace.policy === "deny:plan:read-only", JSON.stringify(r.trace));
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("delegate is never memoized: identical repeat runs a second child", async () => {
+    const runCwd = tmpDir("codewhip-sub-memo-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "same task" })),
+        textTurn("first report"),
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "same task" })),
+        textTurn("second report"),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "twice", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 8, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.repeatCalls, 0);
+      strictEqual(r.trace.filter((t) => t.tool === "delegate").length, 2);
+      const childRuns = readOutcomeRecords(runCwd).filter((o) => o.runId !== r.runId);
+      strictEqual(childRuns.length, 2);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("delegate_many: ordered reports, both children audited, usage folded (max 4)", async () => {
+    const runCwd = tmpDir("codewhip-sub-many-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn(
+          "delegate_many",
+          JSON.stringify({ entries: [{ agent: "explore", task: "do TASK-A" }, { agent: "review", task: "do TASK-B" }] }),
+          { prompt: 100, completion: 10 }
+        ),
+        textTurn("converged", { prompt: 10, completion: 2 }),
+      ]);
+      const r = await agentLoop({
+        prompt: "fan out", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.text, "converged");
+      const delegateOut = r.trace.find((t) => t.tool === "delegate_many");
+      ok(delegateOut !== undefined && delegateOut.policy === "allow:delegate:read-only");
+      // Two child outcome records; chain intact.
+      const childRuns = readOutcomeRecords(runCwd).filter((o) => o.runId !== r.runId);
+      ok(childRuns.length >= 2, `expected 2 child outcomes, got ${childRuns.length}`);
+      strictEqual(verifyChain(runCwd).valid, true);
+      // Usage folded: 100 + 1 + 1 (two children) + 10 prompt.
+      ok(r.promptTokens >= 100 + 10, `prompt tokens should include child usage: ${r.promptTokens}`);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("delegate_many refuses more than the fanout cap without running children", async () => {
+    const runCwd = tmpDir("codewhip-sub-cap-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn(
+          "delegate_many",
+          JSON.stringify({
+            entries: [
+              { agent: "explore", task: "1" },
+              { agent: "explore", task: "2" },
+              { agent: "explore", task: "3" },
+              { agent: "explore", task: "4" },
+              { agent: "explore", task: "5" },
+            ],
+          })
+        ),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "too many", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.text, "done");
+      const out = r.trace.find((t) => t.tool === "delegate_many");
+      ok(out !== undefined);
+      // Only the refusal reached the model; no child outcomes were written.
+      const childRuns = readOutcomeRecords(runCwd).filter((o) => o.runId !== r.runId);
+      strictEqual(childRuns.length, 0);
+      const firstAudit = readAuditLog(runCwd).entries.find((e) => e.tool === "delegate_many");
+      ok(firstAudit !== undefined && firstAudit.policy.startsWith("allow:delegate:read-only"));
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("runChildAgent: refuses beyond the depth cap even when called directly", async () => {
+    const r = await runChildAgent({
+      cwd: tmpDir("codewhip-sub-direct-"),
+      agent: BUILTIN_AGENTS[0] as NonNullable<(typeof BUILTIN_AGENTS)[number]>,
+      task: "x",
+      port: async () => ({ ok: true, text: "y", toolCalls: [], promptTokens: 1, completionTokens: 1 }),
+      model: "m",
+      label: "nvidia",
+      depth: MAX_DELEGATION_DEPTH, // child depth already at cap
+    });
+    ok(!r.ok);
+    ok(r.error.includes("depth cap"));
+  });
+
+  it("per-agent model override: the child calls the port with the agent's model", async () => {
+    const runCwd = tmpDir("codewhip-sub-model-");
+    try {
+      fs.mkdirSync(path.join(runCwd, ".codewhip", "agents"), { recursive: true });
+      fs.writeFileSync(
+        path.join(runCwd, ".codewhip", "agents", "cheap.md"),
+        "---\ndescription: Cheap scout.\nmodel: m-cheap\n---\nYou are cheap."
+      );
+      const { port, record } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "cheap", task: "look" })),
+        textTurn("cheap done"),
+        textTurn("done"),
+      ]);
+      await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(record[1]?.model, "m-cheap");
+      strictEqual(record[2]?.model, "m");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+});

@@ -23,6 +23,8 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [ ] **Undo** — automatic per-run file checkpoints on edit/write (before-image + sha256 manifest, JSONL, self-protecting) + `codewhip rollback <runId-prefix> [--list]`. *(committee ruling 1)*
 - [x] **Plan mode** — `--plan` denies edit/write/bash run-scoped, above ask and above `--yolo`; the run's output is the plan. *(committee ruling 2 — shipped 2026-09-11)*
 - [x] **Compaction** — sessions survive the context window with honest receipt lines ("compacted: N tool outputs dropped…"). *(committee ruling 3 — shipped 2026-09-11: two-tier prune, chars/4 est. ceiling, on by default)*
+- [x] **Subagents & delegation** — read-only child runs (`delegate`, `delegate_many` ≤4 concurrent) behind declarative `.codewhip/agents/` files + 3 built-ins; depth-capped, plan-mode children, child calls on the global audit chain under their own runIds, child usage folded into the parent receipt. *(shipped 2026-09-12 — overturns the earlier committee kill-list call, which assumed delegation would fork the audit model; the global chain composes instead)*
+- [x] **Trust certificate** — `codewhip trust` prints chain/policy/polish-gate/memory/keys state with contextual next steps (`--json` for CI). *(shipped 2026-09-12)*
 - [ ] **REPL slash commands** — `/model`, `/free`; free-chain visibility in-run.
 - [ ] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain.
 - [ ] **Passable gate** — price `sensenova/alibaba/mistral` or re-route polish to a priced <$0.05 route; derive price key from `PROVIDERS` and never fiction-price.

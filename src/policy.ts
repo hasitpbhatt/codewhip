@@ -224,6 +224,17 @@ export function checkPermission(tool: ToolName, commandPreview: string, promoted
       reason: "read-only tools are allow by default",
     };
   }
+  // Delegation grants no authority beyond read/search/webfetch (children are
+  // plan-mode read-only and depth-capped — the harness refuses everything
+  // else before the ladder), so the act of delegating is allow-class and
+  // every child call stays individually auditable under the child's runId.
+  if (tool === "delegate" || tool === "delegate_many") {
+    return {
+      decision: "allow",
+      ruleId: "delegate:read-only",
+      reason: "subagents are read-only (read/search/webfetch, no delegation) — delegation grants no extra authority",
+    };
+  }
   const norm = normalize(commandPreview);
   if (tool === "bash" && !CHAIN_RX.test(commandPreview)) {
     for (const safe of SAFE_BASH_PREFIXES) {
