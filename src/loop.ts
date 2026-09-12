@@ -13,7 +13,7 @@ import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
-import { listAgents } from "./subagents.js";
+import { listAgentsWithErrors } from "./subagents.js";
 import type { ProviderId } from "./provider.js";
 
 export type ApprovalAnswer = "yes" | "always" | "no";
@@ -217,6 +217,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const runId = newRunId();
   const depth = args.depth ?? 0;
   const isChild = depth > 0;
+  let agentFileErrors: string[] = [];
   // Child runs get the agent's own body; plan mode appends the read-only
   // note with wording that matches the audience (a child reports findings,
   // a top-level --plan run's output IS the plan).
@@ -229,10 +230,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       : baseSystem;
   if (!isChild) {
     // Delegation roster rides the system message (dynamic per run — agent
-    // files are user-authored), keeping the delegate tool spec static.
-    const roster = listAgents(args.cwd)
-      .map((a) => `- ${a.name}: ${a.description}`)
-      .join("\n");
+    // files are user-authored), keeping the delegate tool spec static. A
+    // broken agent file is surfaced, never swallowed silently (emitted once
+    // `emit` exists, right after the transcript seed).
+    const { agents, errors } = listAgentsWithErrors(args.cwd);
+    agentFileErrors = errors;
+    const roster = agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
     if (roster.length > 0) {
       systemContent += `\n\nDelegable subagents (delegate / delegate_many tools):\n${roster}`;
     }
@@ -262,6 +265,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // Listener failures never break the loop.
     }
   };
+  for (const e of agentFileErrors) {
+    emit("policy", `subagent file skipped: ${e}`);
+  }
 
   let current = { label: args.label, model: args.model, port: args.port };
   const buckets = new Map<string, UsageBucket>();

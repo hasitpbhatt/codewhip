@@ -146,7 +146,15 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
 
 /** Built-ins plus `.codewhip/agents/*.md` (files override same-name builtins), name-sorted. */
 export function listAgents(cwd: string): AgentDef[] {
+  return listAgentsWithErrors(cwd).agents;
+}
+
+/** listAgents plus the parse errors it skipped — a typo'd frontmatter must
+ * never fail silently (the moment of maximum user investment is a broken
+ * agent file, and swallowing it looks like the agent never existed). */
+export function listAgentsWithErrors(cwd: string): { agents: AgentDef[]; errors: string[] } {
   const byName = new Map<string, AgentDef>(BUILTIN_AGENTS.map((a) => [a.name, a]));
+  const errors: string[] = [];
   const dir = path.join(cwd, ".codewhip", "agents");
   let files: string[] = [];
   try {
@@ -159,14 +167,17 @@ export function listAgents(cwd: string): AgentDef[] {
     try {
       raw = fs.readFileSync(path.join(dir, f), "utf8");
     } catch {
+      errors.push(`${f}: unreadable`);
       continue;
     }
     const parsed = parseAgentFile(f, raw);
     if ("agent" in parsed) {
       byName.set(parsed.agent.name, parsed.agent);
+    } else {
+      errors.push(parsed.error);
     }
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return { agents: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)), errors };
 }
 
 export function findAgent(cwd: string, name: string): AgentDef | null {

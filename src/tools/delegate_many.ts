@@ -69,10 +69,10 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
   if (ctx.depth + 1 > MAX_DELEGATION_DEPTH) {
     return { ok: false, output: "delegate_many: subagents cannot delegate (depth cap)" };
   }
-  const entries = args.entries.slice(0, MAX_FANOUT);
   if (args.entries.length > MAX_FANOUT) {
     return { ok: false, output: `delegate_many: at most ${MAX_FANOUT} entries (got ${args.entries.length})` };
   }
+  const entries = args.entries;
   const agents: Array<{ name: string; def: NonNullable<ReturnType<typeof findAgent>>; task: string }> = [];
   for (const e of entries) {
     if (e.task.length > MAX_TASK_CHARS) {

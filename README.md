@@ -295,7 +295,9 @@ Why this doesn't dilute the trust model:
   `est.` marks) — delegation never spends off-book. Budgets are enforced,
   not just metered: each child inherits the parent's remaining
   `--token-budget` live, and folded child spend can trip the parent's
-  check mid-run;
+  check mid-run. (Parallel fan-out hands each child the same remaining-
+  budget snapshot, so aggregate exposure is bounded at N × remaining —
+  the parent's folded check is the hard stop.)
 - children inherit the run's 429 defenses (`--models` rotation,
   `--retry-wait`) so a parallel fan-out on a rate-limited provider rotates
   instead of dying — and they share remembered `webfetch` grants (a host

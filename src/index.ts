@@ -72,7 +72,7 @@ function printRunOptions(): void {
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
-  console.log("  --plan               read-only run: edit/write/bash denied for the whole run (even with --yolo); the output is the plan");
+  console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
   console.log("  -v, --version        print version");
