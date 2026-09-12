@@ -1,0 +1,10 @@
+# CodeWhip policy (v1 preview) — LAST-match-wins, fail-closed
+defaults:
+  read: allow
+  edit: ask
+  shell: ask
+  external: deny
+deny:
+  - "rm -rf /"
+  - "git push --force"
+  - "curl .*\.env"
