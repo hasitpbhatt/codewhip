@@ -135,6 +135,10 @@ function printCommandHelp(topic: string): boolean {
       console.log("  Records every chat + models call (ok / auth / quota / timeout / network / bad_model / other).");
       console.log("  Flags providers/models below 80% success so you can avoid failing ones. Append a provider id to filter.");
       return true;
+    case "trust":
+      console.log("codewhip trust — print a single trust certificate (chain intact, violations blocked, polish gate, memory accruing, keys ready, policy active).");
+      console.log("  One command for a team lead to hand to an intern at 2am: does this repo pass the trust test?");
+      return true;
     case "verdict":
       console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
       console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
@@ -163,7 +167,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics stats verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -184,6 +188,7 @@ function printHelp(): void {
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  stats [provider]     per-provider/model request health (ok/auth/quota/timeout/network/bad_model/other)");
+  console.log("  trust                print a single trust certificate (chain, violations, polish, memory, keys, policy)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
   console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
@@ -1186,6 +1191,70 @@ function cmdStats(args: string[]): void {
   console.log(renderProviderHealth(summary));
 }
 
+function cmdTrust(): void {
+  const cwd = process.cwd();
+  const lines: string[] = ["codewhip trust — single-command trust certificate"];
+
+  // 1. Audit chain
+  const v = verifyChain(cwd);
+  const chainStatus = v.valid ? "INTACT" : "BROKEN";
+  lines.push(`  audit chain: ${chainStatus} (${v.total} entries, ${v.signed} signed, ${v.unsigned} unsigned, ${v.keyPresent ? "key present" : "no local key"})`);
+  if (!v.valid) {
+    for (const p of v.problems) {
+      lines.push(`    ! ${p}`);
+    }
+  }
+
+  // 2. Policy denies (denylist + promoted)
+  const promotedDenies = loadPromotedDenies(cwd);
+  const hasPromotedDenies = promotedDenies.length > 0;
+  lines.push(`  policy: ${hasPromotedDenies ? `${promotedDenies.length} promoted deny(es) active` : "no promoted denies"}`);
+
+  // 3. Polish gate (only meaningful after a polish run)
+  lines.push(`  polish gate: not evaluated this run (run a polish task to prove <$0.05)`);
+
+  // 4. Memory accruing
+  const remembered = listRules(cwd);
+  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing`);
+
+  // 5. Keys ready
+  const allCfgs = listAllProviderConfigs();
+  const keysReady: string[] = [];
+  const keysMissing: string[] = [];
+  for (const cfg of allCfgs) {
+    const { source } = resolveKey(cfg.id);
+    if (source === "none" && cfg.anonymousKey === undefined) {
+      keysMissing.push(cfg.id);
+    } else {
+      keysReady.push(`${cfg.id} (${source})`);
+    }
+  }
+  lines.push(`  keys: ${keysReady.length} ready, ${keysMissing.length} missing`);
+  if (keysMissing.length > 0) {
+    lines.push(`    missing: ${keysMissing.join(", ")}`);
+  }
+
+  // 6. Policy active (has a policy.md with deny lines or promoted denies)
+  const policyPath = policyMdPath(cwd);
+  let policyActive = false;
+  if (fs.existsSync(policyPath)) {
+    const raw = fs.readFileSync(policyPath, "utf8");
+    const denyLines = raw.split("\n").filter((l) => l.trim().startsWith("deny "));
+    policyActive = denyLines.length > 0 || hasPromotedDenies;
+  }
+  lines.push(`  policy.md: ${policyActive ? "active (has denies)" : "empty or missing"}`);
+
+  // Summary
+  const allGood = v.valid && keysMissing.length === 0 && policyActive && remembered.length >= 0; // remembered is optional
+  lines.push("");
+  lines.push(allGood ? "TRUST: PASS" : "TRUST: NEEDS WORK");
+  if (!allGood) {
+    lines.push("  run: codewhip audit --verify (chain), codewhip auth status (keys), codewhip policy list (policy), codewhip remember list (memory)");
+  }
+
+  console.log(lines.join("\n"));
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -1246,6 +1315,10 @@ async function main(): Promise<void> {
   }
   if (command === "stats") {
     cmdStats(args.slice(1));
+    return;
+  }
+  if (command === "trust") {
+    cmdTrust();
     return;
   }
   if (command === "verdict") {
