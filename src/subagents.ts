@@ -77,6 +77,9 @@ function toDef(src: { name: string; description: string; systemPrompt: string; m
 export const BUILTIN_AGENTS: AgentDef[] = BUILTIN_SOURCES.map(toDef);
 
 const NAME_RX = /^[a-z][a-z0-9_-]{1,31}$/;
+/** Agent-file body cap: a runaway system prompt is a cost amplifier the
+ * compactor can't touch (system messages are protected from pruning). */
+const MAX_BODY_CHARS = 8000;
 
 /**
  * Parse one `.codewhip/agents/<name>.md` source. Flat frontmatter only
@@ -126,6 +129,9 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
   }
   if (body.length === 0) {
     return { error: `${fileName}: empty prompt body` };
+  }
+  if (body.length > MAX_BODY_CHARS) {
+    return { error: `${fileName}: prompt body too long (${body.length} chars, max ${MAX_BODY_CHARS})` };
   }
   return {
     agent: {
@@ -177,6 +183,17 @@ export type ChildRunOptions = {
   label: string;
   depth: number;
   signal?: AbortSignal;
+  /** Parent's remaining token budget — enforced live inside the child. */
+  tokenBudget?: number;
+  /** Parent's compaction ceiling (children share the transcript-size policy). */
+  compactTokens?: number;
+  /** Same-provider rotation candidates — forwarded only when the child rides
+   * the parent's model (a per-agent model override would mis-rotate onto ids
+   * from a different family). */
+  models?: string[];
+  retryWait?: boolean;
+  /** The delegating parent's runId (outcome attribution / metrics de-dup). */
+  parentRunId?: string;
   /** Progress lines, already prefixed with the agent name. */
   onEvent?: (text: string) => void;
 };
@@ -195,9 +212,10 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
   if (opts.depth + 1 > MAX_DELEGATION_DEPTH) {
     return { ok: false, error: `delegation depth cap is ${MAX_DELEGATION_DEPTH}`, usageByModel: [] };
   }
+  const childModel = opts.agent.model ?? opts.model;
   const childArgs: LoopArgs = {
     prompt: opts.task,
-    model: opts.agent.model ?? opts.model,
+    model: childModel,
     label: opts.label as LoopArgs["label"],
     cwd: opts.cwd,
     maxSteps: opts.agent.maxSteps,
@@ -209,6 +227,13 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     depth: opts.depth + 1,
     remembered: listRules(opts.cwd),
     systemPrompt: opts.agent.systemPrompt,
+    ...(opts.parentRunId === undefined ? {} : { parentRunId: opts.parentRunId }),
+    ...(opts.tokenBudget === undefined ? {} : { tokenBudget: Math.max(1, opts.tokenBudget) }),
+    ...(opts.compactTokens === undefined ? {} : { compactTokens: opts.compactTokens }),
+    ...(opts.retryWait === undefined ? {} : { retryWait: opts.retryWait }),
+    // Rotation only makes sense on the parent's model family; a per-agent
+    // model override rides a different id space — never forward candidates.
+    ...(opts.models !== undefined && opts.agent.model === undefined && opts.models.length > 0 ? { models: opts.models } : {}),
     ...(opts.onEvent === undefined
       ? {}
       : { onEvent: (e) => opts.onEvent?.(`[${opts.agent.name}] ${e.text}`) }),

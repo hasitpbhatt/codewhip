@@ -30,4 +30,15 @@ export type ToolContext = {
   onChildUsage?: (buckets: UsageBucket[]) => void;
   /** Forward child progress lines to the parent's event stream. */
   onChildEvent?: (text: string) => void;
+  /** Parent's remaining token budget at exec time — children inherit it so
+   * delegation is enforced live, not just metered (undefined = no budget). */
+  remainingBudget?: number;
+  /** Same-provider rotation candidates + 429 retry-wait, forwarded so a
+   * rate-limited child rotates instead of dying (parallel fan-out friendly). */
+  rotationModels?: string[];
+  retryWait?: boolean;
+  /** Parent's compaction ceiling (children share the transcript-size policy). */
+  compactTokens?: number;
+  /** Parent's runId — stamped on the child's outcome record for attribution. */
+  parentRunId?: string;
 };

@@ -33,7 +33,13 @@ export function loadOutcomeRecords(cwd: string): OutcomeRecord[] {
   return readOutcomeRecords(cwd);
 }
 
-/** Pure aggregation — the unit under test. `nowMs` injects the clock. */
+/** Pure aggregation — the unit under test. `nowMs` injects the clock.
+ *
+ * Subagent de-dup (honest metering): child runs carry `parent_run_id` and
+ * their spend is already folded into the parent's `usageByModel`. Run-level
+ * bars (runs, spend, blocks-per-100) therefore count top-level records only;
+ * activity totals (tool calls, allow/deny decisions) count every record,
+ * because each child call is a real policy decision on the audit trail. */
 export function summarize(records: OutcomeRecord[], memoryLines: number, oldestMemoryTs: string | null, nowMs: number): MetricsSummary {
   let toolCalls = 0;
   let allowed = 0;
@@ -47,7 +53,10 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
   let rejected = 0;
   let periodStart: string | null = null;
   let periodEnd: string | null = null;
+  let runs = 0;
+  let allRecords = 0;
   for (const r of records) {
+    allRecords += 1;
     if (periodStart === null || r.ts < periodStart) periodStart = r.ts;
     if (periodEnd === null || r.ts > periodEnd) periodEnd = r.ts;
     for (const c of r.tool_calls ?? []) {
@@ -61,6 +70,8 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
       else if (r.verdict === "reverted") reverted += 1;
       else if (r.verdict === "rejected") rejected += 1;
     }
+    if (r.parent_run_id !== undefined) continue; // child: spend/verdicts counted, run bars not
+    runs += 1;
     const buckets = r.usageByModel ?? [];
     if (buckets.length === 0) {
       untrackedRuns += 1;
@@ -91,13 +102,13 @@ export function summarize(records: OutcomeRecord[], memoryLines: number, oldestM
     }
   }
   return {
-    runs: records.length,
+    runs,
     periodStart,
     periodEnd,
     toolCalls,
     allowed,
     denied,
-    blocksPer100: records.length === 0 ? 0 : (denied / records.length) * 100,
+    blocksPer100: allRecords === 0 ? 0 : (denied / allRecords) * 100,
     pricedCost,
     pricedRuns,
     untrackedRuns,

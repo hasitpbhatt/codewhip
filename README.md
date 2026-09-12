@@ -292,7 +292,14 @@ Why this doesn't dilute the trust model:
   under the child's own runId, and the child writes its own
   `outcomes.jsonl` record — nothing is a black box;
 - child tokens fold into the parent's **receipt** (same buckets, honest
-  `est.` marks) — delegation never spends off-book;
+  `est.` marks) — delegation never spends off-book. Budgets are enforced,
+  not just metered: each child inherits the parent's remaining
+  `--token-budget` live, and folded child spend can trip the parent's
+  check mid-run;
+- children inherit the run's 429 defenses (`--models` rotation,
+  `--retry-wait`) so a parallel fan-out on a rate-limited provider rotates
+  instead of dying — and they share remembered `webfetch` grants (a host
+  you already approved this run is the same grant a child uses);
 - child progress streams into your terminal prefixed `[<agent>]`, and the
   parent sees only the child's final report — its context stays clean.
 

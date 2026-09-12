@@ -16,6 +16,7 @@ import {
 import { toolSpecs } from "./tools/registry.js";
 import { readAuditLog, verifyChain } from "./audit.js";
 import { readOutcomeRecords } from "./outcomes.js";
+import { summarize } from "./metrics.js";
 
 function tmpDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -318,5 +319,67 @@ describe("subagents", () => {
     } finally {
       fs.rmSync(runCwd, { recursive: true, force: true });
     }
+  });
+
+  it("child token budget is enforced live; folded child spend trips the parent's budget honestly", async () => {
+    const runCwd = tmpDir("codewhip-sub-budget-");
+    try {
+      const { port, record } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "burn" }), { prompt: 100, completion: 0 }),
+        // Child turn 1: 40 tokens (inside the child's inherited 150-100=50).
+        toolTurn("read", JSON.stringify({ path: "f.txt" }), { prompt: 40, completion: 0 }),
+        // Child turn 2: +20 = 60 > 50 — the child must stop here.
+        textTurn("child partial", { prompt: 20, completion: 0 }),
+        textTurn("done", { prompt: 10, completion: 0 }),
+      ]);
+      fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], tokenBudget: 150,
+      });
+      // The child made exactly 2 calls (its second tripped its own budget);
+      // the parent's final turn then consumed the 4th scripted response.
+      strictEqual(record.length, 4, `port calls: ${record.length}`);
+      // The child's outcome record exists, names its parent, and counts its spend.
+      const childOutcome = readOutcomeRecords(runCwd).find((o) => o.runId !== r.runId);
+      ok(childOutcome !== undefined);
+      strictEqual(childOutcome?.parent_run_id, r.runId);
+      strictEqual(childOutcome?.usage.prompt, 60);
+      // Honest metering: child spend is folded into the parent's totals, and
+      // the parent's own budget check (100 + 60 + 10 = 170 > 150) trips —
+      // delegation can never spend off-book.
+      strictEqual(r.promptTokens, 170);
+      ok(r.error?.includes("token budget exhausted") === true, r.error ?? "no error");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("metrics: child runs are attributed (activity counted, run/spend bars not double-counted)", () => {
+    const parent = {
+      v: 1 as const, ts: "2026-09-12T00:00:00Z", runId: "p", model: "m", prompt_hash: "h", yolo: false,
+      tool_calls: [{ seq: 1, tool: "delegate", args_hash: "a", result_hash: "b", decision: "allow", ruleId: "delegate:read-only" }],
+      usage: { prompt: 140, completion: 10 },
+      result_preview_redacted: "", verdict: null,
+      usageByModel: [{ label: "nvidia" as const, model: "m", prompt: 140, completion: 10 }], // already includes child spend
+    };
+    const child = {
+      v: 1 as const, ts: "2026-09-12T00:00:01Z", runId: "c", model: "m", prompt_hash: "h2", yolo: false,
+      tool_calls: [{ seq: 1, tool: "read", args_hash: "a", result_hash: "b", decision: "deny", ruleId: "plan:read-only" }],
+      usage: { prompt: 40, completion: 0 },
+      result_preview_redacted: "", verdict: null,
+      usageByModel: [{ label: "nvidia" as const, model: "m", prompt: 40, completion: 0 }],
+      parent_run_id: "p",
+    };
+    const s = summarize([parent, child], 0, null, Date.now());
+    strictEqual(s.runs, 1); // child does not inflate the run count
+    strictEqual(s.toolCalls, 2); // child activity is real and counted
+    strictEqual(s.denied, 1);
+    strictEqual(s.pricedRuns + s.untrackedRuns, 1); // spend counted once (folded into parent)
+  });
+
+  it("parseAgentFile: prompt body over the cap is rejected", () => {
+    const big = "x".repeat(8001);
+    ok("error" in parseAgentFile("a.md", `---\ndescription: x\n---\n${big}`));
   });
 });

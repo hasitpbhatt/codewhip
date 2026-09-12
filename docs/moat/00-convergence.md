@@ -136,3 +136,14 @@ P1 — trust that spreads:
   denies (`.env.*`) actually deny. 133/133 tests. **H1 backlog complete.**
 
 - 2026-09-11 — **Roadmap trim + SOUL stage update.** `docs/roadmap.md` removes shipped H1 P0/P1 items and adds the Next post-H1 polish list sourced from `docs/moat/06-post-h1-verdict.md` (pasteable share, passable gate, truth to model, pack honesty, reporting honesty, drift/hygiene). Weekly sequencing removed as obsolete. `SOUL.md` stage updated from pre-implementation/stub to H1 core shipped with launch gate OPEN. No scope creep; frozen schemas unchanged, rulings remain additive only.
+
+- 2026-09-12 — **Ruling addendum: subagents overturn recorded.** The
+  committee's kill-list call on subagents assumed delegation would fork the
+  audit model (which agent's seq appends next). Implementation proved the
+  premise wrong: the audit chain is global (seq/prev_hash derived from the
+  tail per append, mkdir-locked), so nested runs compose onto one chain
+  under their own runIds. Subagents shipped read-only (plan-mode children,
+  depth cap 1, budget-inheriting, receipt-honest usage folding, per-child
+  outcome records with `parent_run_id` for metrics de-dup) — delegation
+  grants no authority beyond read/search/webfetch and widens the audit
+  surface. Full reasoning and committee re-review: `docs/moat/*-subagents-review.md`.

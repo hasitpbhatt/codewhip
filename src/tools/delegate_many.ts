@@ -95,6 +95,11 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
         label: ctx.label,
         depth: ctx.depth,
         signal,
+        tokenBudget: ctx.remainingBudget,
+        compactTokens: ctx.compactTokens,
+        models: ctx.rotationModels,
+        retryWait: ctx.retryWait,
+        parentRunId: ctx.parentRunId,
         ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
       })
     )

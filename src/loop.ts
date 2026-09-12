@@ -91,6 +91,9 @@ export type LoopArgs = {
   depth?: number;
   /** Child system prompt override (subagent bodies). Default: the main SYSTEM_PROMPT. */
   systemPrompt?: string;
+  /** Set on child runs: the delegating parent's runId (outcomes attribution —
+   * child spend is folded into the parent's record; aggregators de-dup on this). */
+  parentRunId?: string;
 };
 
 export type LoopTraceCall = {
@@ -644,6 +647,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 depth,
                 onChildUsage: foldChildUsage,
                 onChildEvent: (text) => emit("tool", text),
+                remainingBudget:
+                  args.tokenBudget === undefined ? undefined : Math.max(0, args.tokenBudget - (promptTokens + completionTokens)),
+                rotationModels: args.models,
+                retryWait: args.retryWait,
+                compactTokens: args.compactTokens,
+                parentRunId: runId,
               },
               parsed,
               signal
@@ -690,6 +699,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     verdict: null,
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
+    ...(args.parentRunId === undefined ? {} : { parent_run_id: args.parentRunId }),
   });
 
   return {

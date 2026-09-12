@@ -50,6 +50,9 @@ export type OutcomeRecord = {
   usageByModel?: UsageBucket[];
   /** Optional since v1-freeze: retry/failover trail. Old readers ignore it. */
   failovers?: FailoverRecord[];
+  /** Optional since subagents: set on child runs — spend is already folded
+   * into the parent's record, so aggregators must not double-count. */
+  parent_run_id?: string;
 };
 
 export function newRunId(): string {
