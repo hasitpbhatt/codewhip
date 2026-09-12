@@ -4,10 +4,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
+import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
+import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
@@ -51,6 +52,8 @@ type RunOptions = {
   share: boolean;
   /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
   timeoutMs?: number;
+  /** Disable SSE streaming (whole-body responses) — escape hatch per run. */
+  noStream: boolean;
   /** Explicit --class routing override (undefined = auto-classify). */
   taskClass?: TaskClass;
   modelExplicit: boolean;
@@ -64,13 +67,14 @@ function printRunOptions(): void {
   console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
-  console.log("  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; 5000..120000)");
+  console.log(`  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})`);
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --plan               read-only run: edit/write/bash denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
+  console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
   console.log("  -v, --version        print version");
 }
 
@@ -126,6 +130,11 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip metrics — aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week).");
       console.log("  Reads .codewhip/outcomes.jsonl + verdicts.jsonl; honest about unmeasurable bars.");
       return true;
+    case "stats":
+      console.log("codewhip stats [provider-filter] — per-provider/model request health from provider-analytics.jsonl.");
+      console.log("  Records every chat + models call (ok / auth / quota / timeout / network / bad_model / other).");
+      console.log("  Flags providers/models below 80% success so you can avoid failing ones. Append a provider id to filter.");
+      return true;
     case "verdict":
       console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
       console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
@@ -154,7 +163,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics stats verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -174,6 +183,7 @@ function printHelp(): void {
   console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
+  console.log("  stats [provider]     per-provider/model request health (ok/auth/quota/timeout/network/bad_model/other)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
   console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
@@ -231,7 +241,10 @@ function mixReceiptString(buckets: UsageBucket[], provider: ProviderId, model: s
   for (const b of list) {
     p += b.prompt;
     c += b.completion;
-    parts.push(`${b.label}:${b.model} ${b.prompt}+${b.completion}`);
+    // "est." is the honest marker for streams that ended without a usage
+    // block — never present a chars/4 estimate as a meter reading.
+    const est = b.estimated === true ? "est. " : "";
+    parts.push(`${b.label}:${b.model} ${est}${b.prompt}+${b.completion}`);
     costs.push(costNote(b.label, b.model));
   }
   return `receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`;
@@ -262,6 +275,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let free = false;
   let plan = false;
   let share = false;
+  let noStream = false;
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
@@ -322,7 +336,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
       const v = args[i + 1];
       if (v === undefined) return fail("--timeout-ms needs a value in ms");
       const n = Number(args[++i]);
-      if (!Number.isInteger(n) || n < 5000 || n > 120000) return fail("--timeout-ms must be an integer 5000..120000");
+      if (!Number.isInteger(n) || n < MIN_CHAT_TIMEOUT_MS || n > MAX_CHAT_TIMEOUT_MS) return fail(`--timeout-ms must be an integer ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS}`);
       timeoutMs = n;
     } else if (a === "--yolo") {
       yolo = true;
@@ -336,6 +350,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
       free = true;
     } else if (a === "--plan") {
       plan = true;
+    } else if (a === "--no-stream") {
+      noStream = true;
     } else if (a === "--share") {
       share = true;
     } else if (!a.startsWith("-")) {
@@ -349,7 +365,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share,
-    taskClass, timeoutMs,
+    taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
   };
 }
@@ -513,6 +529,10 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   if (opts.plan) {
     console.log("!! --plan armed: read-only run — edit/write/bash denied for the whole run (even with --yolo); the output is the plan.");
   }
+  if (opts.noStream) {
+    setStreamingEnabled(false);
+    console.log("!! --no-stream armed: whole-body responses (SSE off for this process).");
+  }
   if (opts.yolo) {
     console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
   }
@@ -620,7 +640,22 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     if (result.checkpoints > 0) {
       console.log(`checkpoints: ${result.checkpoints} file(s) snapshotted — undo: codewhip rollback ${result.runId.slice(0, 8)}`);
     }
+    if (result.compact.events > 0) {
+      console.log(`compacted: ${result.compact.truncated} old tool output(s) truncated, ${result.compact.dropped} exchange(s) elided across ${result.compact.events} compaction(s) — transcript kept under the context ceiling`);
+    }
+    if (result.repeatCalls > 0) {
+      console.log(`repeats: ${result.repeatCalls} identical idempotent tool call(s) served from the run memo instead of re-executing — a weak model wasting steps, not a harness fault`);
+    }
     console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
+    // Inline provider-health hint — only when this provider has recorded failures,
+    // so healthy runs stay quiet. Full breakdown: codewhip stats <provider>.
+    const healthRecs = readProviderCalls().filter((r) => r.provider === opts.provider);
+    if (healthRecs.length > 0) {
+      const ph = summarizeCalls(healthRecs).providers[0];
+      if (ph !== undefined && ph.failed > 0) {
+        console.log(`health: ${opts.provider} ${Math.round(ph.successRate * 100)}% ok over ${ph.total} call(s), ${ph.failed} failed — detail: codewhip stats ${opts.provider}`);
+      }
+    }
     if (route.taskClass === "polish") {
       const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
       console.log(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
@@ -824,8 +859,8 @@ function cmdProvider(args: string[]): void {
     }
     const timeoutRaw = flag("--timeout-ms");
     const timeoutMs = timeoutRaw === undefined ? undefined : Number(timeoutRaw);
-    if (timeoutRaw !== undefined && (!Number.isInteger(timeoutMs) || (timeoutMs as number) < 5000 || (timeoutMs as number) > 120000)) {
-      console.error("provider: --timeout-ms must be an integer 5000..120000");
+    if (timeoutRaw !== undefined && (!Number.isInteger(timeoutMs) || (timeoutMs as number) < MIN_CHAT_TIMEOUT_MS || (timeoutMs as number) > MAX_CHAT_TIMEOUT_MS)) {
+      console.error(`provider: --timeout-ms must be an integer ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS}`);
       process.exitCode = 1;
       return;
     }
@@ -1140,6 +1175,17 @@ function cmdRollback(args: string[]): void {
   });
 }
 
+function cmdStats(args: string[]): void {
+  const summary = summarizeCalls(readProviderCalls());
+  if (args.length > 0) {
+    const filter = args[0].toLowerCase();
+    summary.providers = summary.providers.filter(
+      (p) => p.provider.toLowerCase() === filter || p.provider.toLowerCase().includes(filter),
+    );
+  }
+  console.log(renderProviderHealth(summary));
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -1196,6 +1242,10 @@ async function main(): Promise<void> {
   }
   if (command === "metrics") {
     console.log(renderMetrics(summarizeCwd(process.cwd())));
+    return;
+  }
+  if (command === "stats") {
+    cmdStats(args.slice(1));
     return;
   }
   if (command === "verdict") {

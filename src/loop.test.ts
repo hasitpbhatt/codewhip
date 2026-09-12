@@ -16,6 +16,98 @@ function stubAsk(_q: string): Promise<"yes" | "always" | "no"> {
 }
 
 describe("loop", () => {
+  it("repeat guard: identical idempotent reads execute once and then nudge", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-repeat-"));
+    const target = path.join(runCwd, "f.txt");
+    fs.writeFileSync(target, "hello\n");
+    const { TOOLS } = await import("./tools/registry.js");
+    const realExec = TOOLS.read.exec;
+    let execs = 0;
+    TOOLS.read.exec = (ctx, a, s) => {
+      execs += 1;
+      return realExec(ctx, a, s);
+    };
+    try {
+      const readArgs = JSON.stringify({ path: "f.txt" });
+      const { port, messagesSeen } = makeFakePort([
+        toolTurn("read", readArgs),
+        toolTurn("read", readArgs),
+        toolTurn("read", readArgs),
+        toolTurn("read", readArgs),
+        toolTurn("read", readArgs),
+        textTurn("done"),
+      ]);
+      const ev: string[] = [];
+      const r = await agentLoop({
+        prompt: "read it", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 10, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk,
+        onEvent: (e) => ev.push(e.text), remembered: listRules(runCwd),
+      });
+      strictEqual(r.text, "done");
+      // Five identical calls, one real execution.
+      strictEqual(execs, 1);
+      strictEqual(r.repeatCalls, 4);
+      strictEqual(r.trace.length, 5);
+      ok(r.trace.every((t) => t.policy === "allow:loop:repeat-call" || t.policy === "allow:default:read:allow"));
+      ok(ev.some((t) => t.includes("loop:repeat-call")), ev.join(" | "));
+      // The nudge replaces the body once the model is clearly stuck.
+      const lastTool = messagesSeen[5]?.filter((m) => m.role === "tool").at(-1);
+      ok(lastTool !== undefined && lastTool.content.includes("cannot change"), lastTool?.content ?? "");
+      const v = verifyChain(runCwd);
+      strictEqual(v.valid, true);
+    } finally {
+      TOOLS.read.exec = realExec;
+    }
+  });
+  it("repeat guard: an intervening edit invalidates the memo", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-repeat-inv-"));
+    fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+    const { TOOLS } = await import("./tools/registry.js");
+    const realExec = TOOLS.read.exec;
+    let execs = 0;
+    TOOLS.read.exec = (ctx, a, s) => {
+      execs += 1;
+      return realExec(ctx, a, s);
+    };
+    try {
+      const readArgs = JSON.stringify({ path: "f.txt" });
+      const { port, messagesSeen } = makeFakePort([
+        toolTurn("read", readArgs),
+        toolTurn("read", readArgs),
+        toolTurn("edit", JSON.stringify({ path: "f.txt", oldString: "hello", newString: "bye" })),
+        toolTurn("read", readArgs),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "edit it", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 10, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(runCwd),
+      });
+      strictEqual(r.text, "done");
+      // read, repeated read (memo), edit clears, read again re-executes.
+      strictEqual(execs, 2);
+      strictEqual(r.repeatCalls, 1);
+      const lastTool = messagesSeen[4]?.filter((m) => m.role === "tool").at(-1);
+      ok(lastTool !== undefined && lastTool.content.includes("bye"), lastTool?.content ?? "");
+    } finally {
+      TOOLS.read.exec = realExec;
+    }
+  });
+  it("repeat guard: a denied call is never memoized as a standing denial", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-repeat-deny-"));
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "rm -rf /" })),
+      toolTurn("bash", JSON.stringify({ command: "rm -rf /" })),
+      textTurn("done"),
+    ]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(runCwd),
+    });
+    // Both denials land as denials (bash is not idempotent — the guard skips it).
+    strictEqual(r.repeatCalls, 0);
+    strictEqual(r.trace.length, 2);
+    ok(r.trace.every((t) => t.policy === "deny:denylist:rm -rf /"), JSON.stringify(r.trace.map((t) => t.policy)));
+  });
   it("happy path: tool call then text answer", async () => {
     const ev: string[] = [];
     const { port } = makeFakePort([
@@ -335,6 +427,44 @@ describe("loop", () => {
       stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd),
     });
     ok(!messagesSeen[0]?.[0]?.content.includes("PLAN MODE"));
+  });
+  it("compaction fires mid-run with an honest event when the transcript crosses the ceiling", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-compact-"));
+    for (const f of ["a.txt", "b.txt", "c.txt"]) {
+      fs.writeFileSync(path.join(runCwd, f), "x".repeat(8000));
+    }
+    const ev: string[] = [];
+    const { port } = makeFakePort([
+      toolTurn("read", JSON.stringify({ path: "a.txt" }), { prompt: 10, completion: 0 }),
+      toolTurn("read", JSON.stringify({ path: "b.txt" }), { prompt: 10, completion: 0 }),
+      toolTurn("read", JSON.stringify({ path: "c.txt" }), { prompt: 10, completion: 0 }),
+      textTurn("done"),
+    ]);
+    // Force the ceiling low: each read's (capped) 4000-char output dwarfs it.
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 10, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk, compactTokens: 100,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(runCwd),
+    });
+    strictEqual(r.error, undefined);
+    strictEqual(r.text, "done");
+    ok(r.compact.events >= 1, JSON.stringify(r.compact));
+    ok(ev.some((t) => t.includes("compacted:") && t.includes("est.")), ev.join(" "));
+  });
+  it("compactTokens: 0 disables compaction entirely", async () => {
+    const ev: string[] = [];
+    const { port } = makeFakePort([
+      toolTurn("read", JSON.stringify({ path: "a.txt" })),
+      textTurn("done"),
+    ]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk, compactTokens: 0,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(cwd),
+    });
+    strictEqual(r.error, undefined);
+    strictEqual(r.compact.events, 0);
+    ok(!ev.some((t) => t.includes("compacted:")));
   });
   it("token budget stops the run with a partial receipt", async () => {
     const ev: string[] = [];

@@ -16,7 +16,7 @@ process.env[envKey] = dir;
 
 describe("auth", () => {
   it("registry supports all sixteen builtin providers", () => {
-    strictEqual(PROVIDER_IDS.length, 16);
+    strictEqual(PROVIDER_IDS.length, 34);
   });
   it("keyless free tiers fall back to their verified anonymous keys", () => {
     strictEqual(resolveKey("kilo").source, "anonymous");
@@ -25,6 +25,8 @@ describe("auth", () => {
     strictEqual(resolveKey("opencode").key, "public");
     strictEqual(resolveKey("empero").source, "anonymous");
     strictEqual(resolveKey("empero").key, "free");
+    strictEqual(resolveKey("pollinations").source, "anonymous");
+    strictEqual(resolveKey("pollinations").key, "unused");
   });
   it("resolves no key when nothing is stored", () => {
     strictEqual(resolveKey("nvidia").source, "none");

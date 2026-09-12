@@ -30,6 +30,8 @@ export type UsageBucket = {
   model: string;
   prompt: number;
   completion: number;
+  /** Optional since v1-freeze: these counts are chars/4 estimates, not metered. */
+  estimated?: boolean;
 };
 
 export type OutcomeRecord = {

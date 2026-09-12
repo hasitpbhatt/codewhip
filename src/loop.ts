@@ -1,6 +1,6 @@
 import type { ChatPort, LoopMsg } from "./provider-port.js";
 import { TOOLS, toolSpecs, type ToolDef } from "./tools/registry.js";
-import type { ToolResult } from "./tools/types.js";
+import type { ToolName, ToolResult } from "./tools/types.js";
 import { checkPermission, permissionSubject } from "./policy.js";
 import { loadPromotedDenies } from "./policy-store.js";
 import { argsHash, sha256Hex } from "./hash.js";
@@ -12,13 +12,14 @@ import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
 import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
+import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import type { ProviderId } from "./provider.js";
 
 export type ApprovalAnswer = "yes" | "always" | "no";
 export type AskUser = (question: string) => Promise<ApprovalAnswer>;
 
 export type LoopEvent = {
-  kind: "tool" | "retry" | "failover" | "policy";
+  kind: "tool" | "retry" | "failover" | "policy" | "compact";
   text: string;
 };
 
@@ -27,6 +28,16 @@ export type FailoverTarget = {
   model: string;
   port: ChatPort;
 };
+
+/**
+ * Tools whose output depends only on (args, workspace bytes): safe to memo
+ * within a run. The mutating/authority-bearing tools are deliberately absent —
+ * bash can change the tree, and a cached deny would fight the in-run
+ * remembered-rule path (an `a` answer promotes a shape after the deny).
+ */
+const IDEMPOTENT_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["read", "search", "webfetch"]);
+/** Identical repeats of one call allowed before the answer is replaced by a nudge. */
+const REPEAT_NUDGE_AT = 3;
 
 export type LoopArgs = {
   prompt: string;
@@ -57,6 +68,13 @@ export type LoopArgs = {
   models?: string[];
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
   tokenBudget?: number;
+  /**
+   * Est-token ceiling for a single provider call (chars/4 estimate).
+   * When the transcript crosses it, oldest tool outputs are truncated and
+   * old exchanges elided (committee ruling 3) with an honest receipt.
+   * undefined = DEFAULT_COMPACT_TOKENS; 0 disables compaction.
+   */
+  compactTokens?: number;
   /**
    * Run-scoped read-only mode (committee ruling 2): edit/write/bash are
    * refused by the harness before the permission ladder — ask, --yolo, and
@@ -94,6 +112,10 @@ export type LoopResult = {
   cancelled: boolean;
   /** Files snapshotted pre-edit/write this run (undo via codewhip rollback). */
   checkpoints: number;
+  /** Compaction tally: honest receipt for transcript pruning (ruling 3). */
+  compact: { events: number; truncated: number; dropped: number };
+  /** Identical idempotent calls served from the run memo instead of re-executing. */
+  repeatCalls: number;
 };
 
 function lookupTool(name: string): ToolDef | null {
@@ -203,6 +225,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let seq = 0;
   /** Successful edit/write calls snapshotted this run (undo trail). */
   let checkpoints = 0;
+  let compactEvents = 0;
+  let compactTruncated = 0;
+  let compactDropped = 0;
   let cancelled = false;
   let text = "";
   let error: string | undefined;
@@ -227,7 +252,16 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let nextTarget = 0;
   /** Same-provider models already attempted (head first). Bounds rotation: no cycles. */
   const tried = new Set<string>([args.model]);
-  const addUsage = (p: number, c: number): void => {
+  /**
+   * Run-scoped memo of idempotent tool results, keyed `tool:argsHash`. Cleared
+   * whenever a successful edit/write changes the tree, so a legitimate re-read
+   * after a mutation still executes. A weak model can otherwise burn the step
+   * budget re-running the same call while every repeat bloats the prompt that
+   * all later turns re-send.
+   */
+  const memo = new Map<string, { output: string; repeats: number }>();
+  let repeatCalls = 0;
+  const addUsage = (p: number, c: number, estimated: boolean): void => {
     promptTokens += p;
     completionTokens += c;
     const key = `${current.label}:${current.model}`;
@@ -238,6 +272,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     }
     bucket.prompt += p;
     bucket.completion += c;
+    // A bucket is only honest as metered when every contributing call was.
+    bucket.estimated = bucket.estimated === true || estimated;
   };
 
   for (let step = 1; step <= args.maxSteps; step++) {
@@ -246,6 +282,26 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       break;
     }
     steps = step;
+    // Compaction gate (committee ruling 3): when a single provider call's
+    // estimated size crosses the ceiling, prune the oldest tail first —
+    // honest receipt line, message structure kept valid.
+    const compactLimit = args.compactTokens ?? DEFAULT_COMPACT_TOKENS;
+    if (compactLimit > 0) {
+      const est = estimateTokens(messages);
+      if (est > compactLimit) {
+        const c = compactTranscript(messages, compactLimit);
+        if (c.truncated > 0 || c.dropped > 0) {
+          messages.splice(0, messages.length, ...c.messages);
+          compactEvents += 1;
+          compactTruncated += c.truncated;
+          compactDropped += c.dropped;
+          emit(
+            "compact",
+            `compacted: ${c.truncated} old tool output(s) truncated, ${c.dropped} exchange(s) elided (est. ${c.tokensBefore} → ${c.tokensAfter} tokens)`
+          );
+        }
+      }
+    }
     // One turn: at most one bounded wait per RUN; each rate-limited/timeout
     // retry consumes at most one rotation candidate or one chain target.
     // Retries never consume maxSteps; a failed turn leaves no message behind.
@@ -339,7 +395,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     if (cancelled || error !== undefined || turn === null) {
       break;
     }
-    addUsage(turn.promptTokens, turn.completionTokens);
+    addUsage(turn.promptTokens, turn.completionTokens, turn.usageEstimated === true);
     if (args.tokenBudget !== undefined && promptTokens + completionTokens > args.tokenBudget) {
       error = `token budget exhausted (${promptTokens + completionTokens}/${args.tokenBudget}) — partial transcript kept`;
       emit("policy", `token budget exhausted — stopping (partial transcript kept, receipt follows)`);
@@ -497,6 +553,25 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (!proceed) {
         continue;
       }
+      // Repeat guard: an idempotent call already answered unchanged this
+      // generation is served from the memo. Permission was still evaluated
+      // above, so repeats stay visible on the audit trail, not hidden.
+      const memoKey = `${def.name}:${hash}`;
+      if (IDEMPOTENT_TOOLS.has(def.name)) {
+        const hit = memo.get(memoKey);
+        if (hit !== undefined) {
+          hit.repeats += 1;
+          repeatCalls += 1;
+          const out =
+            hit.repeats >= REPEAT_NUDGE_AT
+              ? `repeat of ${call.name} (${hit.repeats + 1}x, identical arguments): this result cannot change until the workspace does. Act on what you already have — edit/write — or answer, instead of calling ${call.name} again.`
+              : `${hit.output}\n\n[repeat of ${call.name} with identical arguments — served from this run's memo. Act on this result instead of calling again.]`;
+          messages.push({ role: "tool", toolCallId: call.id, content: capOutput(out) });
+          record("allow", "loop:repeat-call", sha256Hex(out.slice(0, 2000)), "policy", out);
+          emit("tool", `repeat ${call.name} ${preview} (loop:repeat-call, ${hit.repeats + 1}x)`);
+          continue;
+        }
+      }
       // Checkpoint before-image FIRST: undo needs the pre-edit bytes even
       // when the exec itself crashes. Saved only on a successful exec, so
       // failed calls leave no checkpoint trail. Self-protected paths return
@@ -515,6 +590,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       if (result.ok && beforeImage !== null && saveCheckpoint(args.cwd, runId, seq, beforeImage)) {
         checkpoints += 1;
+      }
+      if (result.ok && (def.name === "edit" || def.name === "write")) {
+        // The tree moved: every memoized read/search is now potentially stale.
+        memo.clear();
+      } else if (result.ok && IDEMPOTENT_TOOLS.has(def.name)) {
+        memo.set(memoKey, { output: result.output, repeats: 0 });
       }
       const redacted = redactSecrets(result.output);
       const scrubbed = redacted !== result.output;
@@ -557,6 +638,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     steps,
     toolCalls: calls.length,
     checkpoints,
+    compact: { events: compactEvents, truncated: compactTruncated, dropped: compactDropped },
+    repeatCalls,
     trace,
     cancelled,
   };

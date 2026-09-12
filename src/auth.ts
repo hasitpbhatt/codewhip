@@ -24,6 +24,25 @@ type StoredCreds = {
   cerebrasApiKey?: unknown;
   zaiApiKey?: unknown;
   emperoApiKey?: unknown;
+  // Onboarded free OpenAI-compatible providers (2026-09-11 addendum).
+  pollinationsApiKey?: unknown;
+  sambanovaApiKey?: unknown;
+  chutesApiKey?: unknown;
+  hyperbolicApiKey?: unknown;
+  leptonApiKey?: unknown;
+  xaiApiKey?: unknown;
+  huggingfaceApiKey?: unknown;
+  upstageApiKey?: unknown;
+  novitaApiKey?: unknown;
+  parasailApiKey?: unknown;
+  volcengineApiKey?: unknown;
+  qianfanApiKey?: unknown;
+  hunyuanApiKey?: unknown;
+  moonshotApiKey?: unknown;
+  deepseekApiKey?: unknown;
+  minimaxApiKey?: unknown;
+  stepfunApiKey?: unknown;
+  ppioApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -45,6 +64,25 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   cerebras: "cerebrasApiKey",
   zai: "zaiApiKey",
   empero: "emperoApiKey",
+  // Onboarded free OpenAI-compatible providers (2026-09-11 addendum).
+  pollinations: "pollinationsApiKey",
+  sambanova: "sambanovaApiKey",
+  chutes: "chutesApiKey",
+  hyperbolic: "hyperbolicApiKey",
+  lepton: "leptonApiKey",
+  xai: "xaiApiKey",
+  huggingface: "huggingfaceApiKey",
+  upstage: "upstageApiKey",
+  novita: "novitaApiKey",
+  parasail: "parasailApiKey",
+  volcengine: "volcengineApiKey",
+  qianfan: "qianfanApiKey",
+  hunyuan: "hunyuanApiKey",
+  moonshot: "moonshotApiKey",
+  deepseek: "deepseekApiKey",
+  minimax: "minimaxApiKey",
+  stepfun: "stepfunApiKey",
+  ppio: "ppioApiKey",
 };
 
 function customFieldFor(provider: string): string {

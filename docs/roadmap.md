@@ -22,11 +22,11 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 
 - [ ] **Undo** — automatic per-run file checkpoints on edit/write (before-image + sha256 manifest, JSONL, self-protecting) + `codewhip rollback <runId-prefix> [--list]`. *(committee ruling 1)*
 - [x] **Plan mode** — `--plan` denies edit/write/bash run-scoped, above ask and above `--yolo`; the run's output is the plan. *(committee ruling 2 — shipped 2026-09-11)*
-- [ ] **Compaction** — sessions survive the context window with honest receipt lines ("compacted: N tool outputs dropped…"). *(committee ruling 3)*
+- [x] **Compaction** — sessions survive the context window with honest receipt lines ("compacted: N tool outputs dropped…"). *(committee ruling 3 — shipped 2026-09-11: two-tier prune, chars/4 est. ceiling, on by default)*
 - [ ] **REPL slash commands** — `/model`, `/free`; free-chain visibility in-run.
 - [ ] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain.
 - [ ] **Passable gate** — price `sensenova/alibaba/mistral` or re-route polish to a priced <$0.05 route; derive price key from `PROVIDERS` and never fiction-price.
-- [ ] **Truth to model** — reword tool specs so the model does not believe chaining is permitted; fix the search comment that incorrectly claims `read` skips secrets.
+- [ ] **Truth to model** — reword tool specs so the model does not believe chaining is permitted; fix the search comment that incorrectly claims `read` skips secrets. *(Repeat-call guard shipped 2026-09-12: identical idempotent calls are memoized in-run, cleared on edit/write, recorded as `allow:loop:repeat-call`.)*
 - [ ] **Pack honesty** — make starter pack denies fire on both `edit` and `write`, normalize shapes, or drop phantom claims.
 - [ ] **Reporting honesty** — decision buckets (allow/deny/remembered/policy), untracked spend handling, `--last`/`--replay` parity, empty export failure, `missing===2` clarity.
 - [ ] **Drift + hygiene** — settle tool count wording, single-shot vs REPL labeling, receipt legend for $ tracking, gate OPEN label, dead branches, REPL receipt, remove vacuous assertions.
@@ -42,7 +42,9 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   then; flat files never replaced.
 - [ ] Full provider matrix + auto-fallback + latency optimization; local-model
   parity path (free-tier slice shipped 2026-09-11: 8 free gateways — 4 keyless
-  (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain).
+  (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain;
+  SSE streaming + first-byte/idle timeouts + timeout-classification fix shipped
+  2026-09-12).
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

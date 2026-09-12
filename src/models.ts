@@ -1,4 +1,5 @@
-import { modelsUrlFor } from "./provider.js";
+import { candidateBaseUrls, pinHost } from "./provider.js";
+import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
 import { getProviderConfig } from "./custom-providers.js";
 
 const MODELS_TIMEOUT_MS = 15000;
@@ -138,43 +139,67 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
   if (cfg === null) {
     return { ok: false, error: `unknown provider "${provider}" (see: codewhip provider list)` };
   }
-  const url = modelsUrlFor(cfg);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const name = err instanceof Error ? err.name : "";
-    if (name === "TimeoutError" || name === "AbortError") {
-      return { ok: false, error: `${provider} models listing timed out after ${MODELS_TIMEOUT_MS}ms` };
+  // Try each candidate host; fall back to the next only on auth rejection, and
+  // pin the first host that serves a model list (sticky across runs).
+  const hosts = candidateBaseUrls(cfg);
+  let lastError = "";
+  for (const host of hosts) {
+    const url = `${host}${cfg.modelsPath}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : "";
+      if (name === "TimeoutError" || name === "AbortError") {
+        lastError = `${provider} models listing timed out after ${MODELS_TIMEOUT_MS}ms`;
+        if (hosts.length > 1) continue;
+        recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "timeout", host, error: lastError.slice(0, 120) });
+        return { ok: false, error: lastError };
+      }
+      lastError = `network error: ${err instanceof Error ? err.message : "fetch failed"}`;
+      if (hosts.length > 1) continue;
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "network", host, error: lastError.slice(0, 120) });
+      return { ok: false, error: lastError };
     }
-    return { ok: false, error: `network error: ${err instanceof Error ? err.message : "fetch failed"}` };
-  }
-  if (!res.ok) {
+    if (res.ok) {
+      if (host !== cfg.baseUrl) {
+        pinHost(provider, host);
+      }
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "ok", host, status: res.status });
+      let data: unknown;
+      try {
+        data = (await res.json()) as unknown;
+      } catch {
+        return { ok: false, error: `${provider} models listing returned invalid JSON` };
+      }
+      const rows = (data as { data?: unknown }).data;
+      if (!Array.isArray(rows)) {
+        return { ok: false, error: `${provider} models listing returned an unexpected shape` };
+      }
+      const ids = [...new Set(rows.flatMap((r) => (typeof (r as { id?: unknown }).id === "string" ? [(r as { id: string }).id] : [])))].sort();
+      const fallback = defaultFor(provider);
+      return {
+        ok: true,
+        models: ids.map((id) => ({ id, ...annotateModel(provider, id), isDefault: id === fallback })),
+      };
+    }
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: `invalid ${provider} key (never printed or logged)` };
+      lastError = `invalid ${provider} key (never printed or logged)`;
+      if (hosts.length > 1) continue;
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "auth", host, status: res.status, error: lastError.slice(0, 120) });
+      return { ok: false, error: lastError };
     }
     if (res.status === 429) {
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "quota", host, status: res.status });
       return { ok: false, error: `${provider} rate limited — the listing shares your quota, retry later` };
     }
-    return { ok: false, error: `${provider} models listing failed (http ${res.status})` };
+    lastError = `${provider} models listing failed (http ${res.status})`;
+    if (hosts.length > 1) continue;
+    recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: outcomeForStatus(res.status), host, status: res.status, error: lastError.slice(0, 120) });
+    return { ok: false, error: lastError };
   }
-  let data: unknown;
-  try {
-    data = (await res.json()) as unknown;
-  } catch {
-    return { ok: false, error: `${provider} models listing returned invalid JSON` };
-  }
-  const rows = (data as { data?: unknown }).data;
-  if (!Array.isArray(rows)) {
-    return { ok: false, error: `${provider} models listing returned an unexpected shape` };
-  }
-  const ids = [...new Set(rows.flatMap((r) => (typeof (r as { id?: unknown }).id === "string" ? [(r as { id: string }).id] : [])))].sort();
-  const fallback = defaultFor(provider);
-  return {
-    ok: true,
-    models: ids.map((id) => ({ id, ...annotateModel(provider, id), isDefault: id === fallback })),
-  };
+  return { ok: false, error: lastError || `${provider} models listing failed` };
 }

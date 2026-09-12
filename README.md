@@ -92,7 +92,8 @@ receipt anyway.
   consent). Polish runs print a gate line (`PASS` only on a priced route
   <$0.05; `OPEN` while costs are untracked). `--token-budget` enforced mid-run
   (default 250000), same-provider `--models a,b,c` rotation and one-shot
-  `--failover`/`--retry-wait` on 429 only.
+  `--failover`/`--retry-wait` on 429 only (timeouts rotate/fail over; retry-wait
+  stays 429-only).
 - **Sandbox:** v1 = Node path jail (realpath, symlink-aware) + non-overridable
   denylist; v2 swaps the executor (E2B/Firecracker) behind the frozen
   policy/audit schema.
@@ -262,6 +263,30 @@ plan, which you review, then re-run without `--plan` to execute it. The
 banner prints `!! --plan armed` up front and every refusal lands on the
 audit trail as `deny:plan:read-only`.
 
+### Sessions that survive their own context window (compaction)
+
+Long runs die a quiet death: old tool outputs (file dumps, command logs)
+crowd the context until the provider refuses the call. CodeWhip compacts
+instead of dying. When a call's estimated size (chars/4, printed as
+`est.` — no fake tokenizer precision) crosses the ceiling, the *oldest*
+tail is pruned, never the working set:
+
+1. old tool outputs are truncated to a 600-char head with a visible
+   `…[compacted]` marker;
+2. if that isn't enough, whole old exchanges are elided to stubs naming
+   the tools they called — assistant + tool responses move as a block, so
+   the transcript stays valid.
+
+The system prompt, your original task, and the newest exchanges are never
+touched, and every compaction prints an honest receipt:
+
+```
+◆ compacted: 2 old tool output(s) truncated, 1 exchange(s) elided (est. 8112 → 5990 tokens)
+compacted: 2 old tool output(s) truncated, 1 exchange(s) elided across 1 compaction(s) — transcript kept under the context ceiling
+```
+
+On by default; the API takes `compactTokens: 0` to disable.
+
 ### Free models at one place
 
 `codewhip free` lists the free-provider chain read-only (no key, no network):
@@ -312,7 +337,7 @@ codewhip run "..." --provider mistral --models mistral-small-latest,mistral-medi
                                   # walk models in order on 429, each once per run (order: wait, rotate, failover)
 ```
 
-Both wait and switch are 429-only: auth, 5xx, and timeouts never trigger them. `--failover` needs the other provider's key up front (aborts otherwise — it never runs keyless), starts from the provider default (drop `--model`, or lead `--models` with it), and banners because it may bill pay-go. Keep completion-refusers like `codestral-latest` out of agent chains: it answers but won't call tools for file work. Receipts show the per-model mix whenever a run crosses models or providers.
+Both wait and switch are 429-only: auth, 5xx, and other transport errors never trigger them. Timeouts and stalls do rotate/fail over (a slow model is better served by another model than by waiting) — but `--retry-wait` stays 429-only. `--failover` needs the other provider's key up front (aborts otherwise — it never runs keyless), starts from the provider default (drop `--model`, or lead `--models` with it), and banners because it may bill pay-go. Keep completion-refusers like `codestral-latest` out of agent chains: it answers but won't call tools for file work. Receipts show the per-model mix whenever a run crosses models or providers.
 
 ### Approvals that stick ("always allow")
 

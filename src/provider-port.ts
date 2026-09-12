@@ -27,6 +27,12 @@ export type ChatPortResult = {
   toolCalls: LoopToolCall[];
   promptTokens: number;
   completionTokens: number;
+  /**
+   * True when the provider returned no usage block and the numbers are a
+   * chars/4 estimate (streaming gateways). Receipts print "est." for these
+   * instead of presenting an estimate as a meter reading.
+   */
+  usageEstimated?: boolean;
 };
 
 export type RetryableKind = "rate-limited" | "timeout" | "auth" | "other";

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
-import { isBuiltinProviderId, PROVIDERS, type ProviderConfig } from "./provider.js";
+import { isBuiltinProviderId, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, type ProviderConfig } from "./provider.js";
 
 /**
  * User-registered OpenAI-compatible providers (`codewhip provider add`).
@@ -57,8 +57,8 @@ function normalize(input: CustomProviderInput): ProviderConfig | { error: string
     return { error: "bad --key-url (need https://… or omit)" };
   }
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 5000 || timeoutMs > 120000) {
-    return { error: "bad --timeout-ms (need integer 5000..120000)" };
+  if (!Number.isInteger(timeoutMs) || timeoutMs < MIN_CHAT_TIMEOUT_MS || timeoutMs > MAX_CHAT_TIMEOUT_MS) {
+    return { error: `bad --timeout-ms (need integer ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})` };
   }
   const brand = (input.brand ?? id).trim() || id;
   const cfg: ProviderConfig = { id, brand, baseUrl, chatPath, modelsPath, defaultModel, envVar, keyUrl, timeoutMs };
