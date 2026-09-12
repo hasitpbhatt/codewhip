@@ -136,7 +136,9 @@ function printCommandHelp(topic: string): boolean {
       console.log("  Flags providers/models below 80% success so you can avoid failing ones. Append a provider id to filter.");
       return true;
     case "trust":
-      console.log("codewhip trust — print a single trust certificate (chain intact, violations blocked, polish gate, memory accruing, keys ready, policy active).");
+      console.log("codewhip trust [--json] [--verbose] — print a single trust certificate (chain intact, violations blocked, polish gate, memory accruing, keys ready, policy active).");
+      console.log("  --json     machine-readable output for CI/automation");
+      console.log("  --verbose  show missing keys list (default: hidden)");
       console.log("  One command for a team lead to hand to an intern at 2am: does this repo pass the trust test?");
       return true;
     case "verdict":
@@ -1191,8 +1193,10 @@ function cmdStats(args: string[]): void {
   console.log(renderProviderHealth(summary));
 }
 
-function cmdTrust(): void {
+function cmdTrust(args: string[]): void {
   const cwd = process.cwd();
+  const jsonOutput = args.includes("--json");
+  const verbose = args.includes("--verbose");
   const lines: string[] = ["codewhip trust — single-command trust certificate"];
   const issues: string[] = [];
 
@@ -1226,15 +1230,19 @@ function cmdTrust(): void {
   if (fs.existsSync(basePolicyPath)) {
     const raw = fs.readFileSync(basePolicyPath, "utf8");
     // YAML format: deny: followed by - "command" lines
-    const inDenySection = false;
+    let inDenySection = false;
     for (const line of raw.split("\n")) {
       const t = line.trim();
       if (t === "deny:") {
-        // Next lines with - "..." are deny entries
+        inDenySection = true;
         continue;
       }
-      if (t.startsWith("- ") && t.includes('"')) {
+      if (inDenySection && t.startsWith("- ") && t.includes('"')) {
         baseDenies++;
+      }
+      if (inDenySection && !t.startsWith("- ") && t.length > 0 && !t.startsWith("#")) {
+        // Exit deny section on next top-level key
+        inDenySection = false;
       }
     }
   }
@@ -1267,8 +1275,11 @@ function cmdTrust(): void {
 
   // 4. Memory accruing — at least 1 remembered rule for PASS
   const remembered = listRules(cwd);
-  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing`);
   const hasMemory = remembered.length > 0;
+  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing`);
+  if (!hasMemory) {
+    issues.push("memory");
+  }
 
   // 5. Keys — separate usable (env/file) from anonymous/rate-limited
   const allCfgs = listAllProviderConfigs();
@@ -1290,12 +1301,15 @@ function cmdTrust(): void {
       }
     }
   }
-  lines.push(`  keys: ${usableKeys.length} usable (env/file), ${anonymousKeys.length} anonymous (rate-limited)`);
+  lines.push(`  keys: ${usableKeys.length} usable (env/file), ${anonymousKeys.length} anonymous (rate-limited)${missingKeys.length > 0 ? `, ${missingKeys.length} missing` : ""}`);
   if (usableKeys.length > 0) {
     lines.push(`    usable: ${usableKeys.join(", ")}`);
   }
   if (anonymousKeys.length > 0) {
     lines.push(`    anonymous: ${anonymousKeys.join(", ")}`);
+  }
+  if (verbose && missingKeys.length > 0) {
+    lines.push(`    missing: ${missingKeys.join(", ")} (set env or codewhip auth login)`);
   }
 
   // 6. Policy file check — show both files
@@ -1304,6 +1318,56 @@ function cmdTrust(): void {
 
   // Summary — achievable PASS criteria
   const allGood = chainClean && baseDenies > 0 && hasMemory && usableKeys.length > 0;
+  
+  if (jsonOutput) {
+    const output = {
+      trust: allGood ? "PASS" : "NEEDS_WORK",
+      auditChain: {
+        status: chainClean ? "INTACT" : "BROKEN",
+        total: v.total,
+        signed: v.signed,
+        unsigned: v.unsigned,
+        keyPresent: v.keyPresent,
+        problems: chainClean ? [] : v.problems,
+      },
+      policy: {
+        baseDenies,
+        promotedDenies: promotedDenies.length,
+        codewhipPolicyYaml: baseDenies > 0,
+        policyMd: hasPromotedDenies,
+      },
+      polishGate: {
+        status: polishGatePassed ? "PASS" : (polishRuns.length > 0 ? "OPEN" : "UNEVALUATED"),
+        detail: polishGateStatus,
+        runsEvaluated: polishRuns.length,
+      },
+      memory: {
+        rememberedRules: remembered.length,
+        hasMemory,
+      },
+      keys: {
+        usable: usableKeys.length,
+        anonymous: anonymousKeys.length,
+        missing: missingKeys.length,
+        usableList: usableKeys,
+        anonymousList: anonymousKeys,
+        missingList: verbose ? missingKeys : [],
+      },
+      nextSteps: issues.length > 0 ? issues.map((i) => {
+        switch (i) {
+          case "audit": return "codewhip audit --verify";
+          case "policy": return "codewhip init (creates base policy with 3 denies)";
+          case "polish": return "codewhip run --class polish \"...\" (prove <$0.05)";
+          case "memory": return "codewhip run ... (answer 'a' to remember a tool shape)";
+          case "keys": return "codewhip auth login <provider> (or set env var)";
+          default: return "";
+        }
+      }).filter(Boolean) : [],
+    };
+    console.log(JSON.stringify(output, null, 2));
+    return;
+  }
+
   lines.push("");
   lines.push(allGood ? "TRUST: PASS" : "TRUST: NEEDS WORK");
   if (!allGood) {
@@ -1384,7 +1448,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "trust") {
-    cmdTrust();
+    cmdTrust(args.slice(1));
     return;
   }
   if (command === "verdict") {
