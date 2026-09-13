@@ -91,14 +91,6 @@ function matchRmDeny(tokens: string[]): string | null {
   const force = flags.has("f") || flags.has("force");
   if (flags.has("no-preserve-root")) return "rm --no-preserve-root";
   if (!recursive || !force) return null;
-  const scope = tokens.some(
-    (t) =>
-      t === "/" || t === "~" || t === "/*" ||
-      t.startsWith("~/") || t.startsWith("/*") ||
-      /^[a-z]:[\\/]/i.test(t) || t.startsWith("\\\\") || t.startsWith("/") ||
-      t === "-rf" || t === "-fr"
-  );
-  void scope;
   // Recursive+force rm is denied only for wide scope (/, ~, absolute,
   // expanding targets) — relative cleanup like `rm -rf ./build` stays
   // ask-gated. The flag spelling is normalized above, so -rfv-style
@@ -224,15 +216,16 @@ export function checkPermission(tool: ToolName, commandPreview: string, promoted
       reason: "read-only tools are allow by default",
     };
   }
-  // Delegation grants no authority beyond read/search/webfetch (children are
-  // plan-mode read-only and depth-capped — the harness refuses everything
-  // else before the ladder), so the act of delegating is allow-class and
-  // every child call stays individually auditable under the child's runId.
+  // Delegation grants no authority beyond read/search (children are
+  // plan-mode read-only AND have no network — webfetch included — all
+  // refused pre-ladder by the harness), so the act of delegating is
+  // allow-class and every child call stays individually auditable under
+  // the child's runId.
   if (tool === "delegate" || tool === "delegate_many") {
     return {
       decision: "allow",
       ruleId: "delegate:read-only",
-      reason: "subagents are read-only (read/search/webfetch, no delegation) — delegation grants no extra authority",
+      reason: "subagents are read-only (read/search only, no network, no delegation) — delegation grants no extra authority",
     };
   }
   const norm = normalize(commandPreview);

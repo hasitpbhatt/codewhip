@@ -9,14 +9,15 @@ import { listRules } from "./remember-store.js";
  * Declarative subagents: read-only child runs behind the `delegate` tools.
  *
  * Trust model (why this doesn't dilute the harness): children run with
- * plan-mode semantics (edit/write/bash/delegate refused pre-ladder), a fresh
- * transcript (no parent history leaks in), and a summary-only return — the
- * child's final text, redacted and capped on the parent's normal tool path.
- * Every child tool call lands on the global hash-chained audit log under the
- * child's own runId, and the child writes its own outcome record — fully
- * auditable, individually rollback-able, honestly metered (usage folds into
- * the parent's receipt buckets). Delegation grants zero authority beyond
- * read/search/webfetch, which are allow-class already.
+ * plan-mode semantics (edit/write/bash/delegate/webfetch refused pre-ladder
+ * — a child has NO network: it sees only the workspace the parent already
+ * has), a fresh transcript (no parent history leaks in), and a summary-only
+ * return — the child's final text, redacted and capped on the parent's
+ * normal tool path. Every child tool call lands on the global hash-chained
+ * audit log under the child's own runId, and the child writes its own
+ * outcome record (parent_run_id-attributed) — fully auditable, honestly
+ * metered (usage folds into the parent's receipt and budget). Delegation
+ * grants zero authority beyond read/search, which are allow-class already.
  *
  * Agent files: `.codewhip/agents/<name>.md` — flat frontmatter + prompt body.
  * Name comes from the filename; a file overrides a built-in of the same name.
@@ -26,6 +27,12 @@ export const CHILD_DEFAULT_MAX_STEPS = 10;
 export const CHILD_MAX_STEPS_CAP = 25;
 /** Depth 1: children cannot delegate (the union's hard ceiling for v1). */
 export const MAX_DELEGATION_DEPTH = 1;
+
+/** The one delegation predicate — every guard (loop, both tools, this
+ * runner) derives from it so the cap can't drift out of sync. */
+export function canDelegate(depth: number): boolean {
+  return depth + 1 <= MAX_DELEGATION_DEPTH;
+}
 
 export type AgentDef = {
   name: string;
@@ -124,7 +131,7 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
     maxSteps = n;
   }
   const model = fields.get("model");
-  if (model !== undefined && model.length === 0) {
+  if (model !== undefined && model.trim().length === 0) {
     return { error: `${fileName}: model must be a non-empty string` };
   }
   if (body.length === 0) {
@@ -139,7 +146,7 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
       description,
       systemPrompt: body,
       maxSteps,
-      ...(model === undefined ? {} : { model }),
+      ...(model === undefined ? {} : { model: model.trim() }),
     },
   };
 }
@@ -207,6 +214,8 @@ export type ChildRunOptions = {
   parentRunId?: string;
   /** Progress lines, already prefixed with the agent name. */
   onEvent?: (text: string) => void;
+  /** Per-child wall clock — the child's signal aborts when it fires. */
+  deadlineMs?: number;
 };
 
 export type ChildRunResult =
@@ -220,14 +229,14 @@ export type ChildRunResult =
  * static graph stays acyclic — same idiom as the demo's lazy demo.js load.
  */
 export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResult> {
-  if (opts.depth + 1 > MAX_DELEGATION_DEPTH) {
+  if (!canDelegate(opts.depth)) {
     return { ok: false, error: `delegation depth cap is ${MAX_DELEGATION_DEPTH}`, usageByModel: [] };
   }
   const childModel = opts.agent.model ?? opts.model;
   const childArgs: LoopArgs = {
     prompt: opts.task,
     model: childModel,
-    label: opts.label as LoopArgs["label"],
+    label: opts.label,
     cwd: opts.cwd,
     maxSteps: opts.agent.maxSteps,
     yolo: false,
@@ -250,7 +259,35 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
       : { onEvent: (e) => opts.onEvent?.(`[${opts.agent.name}] ${e.text}`) }),
   };
   const { agentLoop } = await import("./loop.js");
-  const r = await agentLoop(childArgs);
+  // Per-child deadline: abort the child's OWN signal so the loop settles
+  // naturally — its outcome record still writes and its usage still folds
+  // (a timed-out child is paid-for work, never an orphan).
+  const ctrl = new AbortController();
+  const onOuterAbort = (): void => ctrl.abort();
+  if (opts.signal?.aborted === true) {
+    ctrl.abort();
+  } else if (opts.signal !== undefined) {
+    opts.signal.addEventListener("abort", onOuterAbort, { once: true });
+  }
+  let deadlineFired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (opts.deadlineMs !== undefined) {
+    timer = setTimeout(() => {
+      deadlineFired = true;
+      ctrl.abort();
+    }, opts.deadlineMs);
+  }
+  let r: Awaited<ReturnType<typeof agentLoop>>;
+  try {
+    r = await agentLoop({ ...childArgs, signal: ctrl.signal });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (opts.signal !== undefined) opts.signal.removeEventListener("abort", onOuterAbort);
+  }
+  if (deadlineFired) {
+    const partial = r.text.length > 0 ? ` — partial: ${r.text.slice(0, 500)}` : "";
+    return { ok: false, error: `subagent timed out after ${opts.deadlineMs}ms${partial}`, usageByModel: r.usageByModel };
+  }
   if (r.error !== undefined && r.text.length === 0) {
     return { ok: false, error: r.error, usageByModel: r.usageByModel };
   }

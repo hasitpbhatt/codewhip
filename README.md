@@ -285,9 +285,11 @@ built-in.
 
 Why this doesn't dilute the trust model:
 
-- children are **read-only** (read/search/webfetch only, refused
-  pre-ladder — nothing inside a child can prompt, mutate, or delegate) and
-  depth-capped: subagents cannot spawn subagents;
+- children are **read-only and network-free** (read/search only —
+  edit/write/bash/delegate/webfetch refused pre-ladder; nothing inside a
+  child can prompt, mutate, delegate, or reach the network — the parent
+  fetches and passes content) and depth-capped: subagents cannot spawn
+  subagents;
 - every child tool call lands on the **global hash-chained audit log**
   under the child's own runId, and the child writes its own
   `outcomes.jsonl` record — nothing is a black box;
@@ -300,8 +302,9 @@ Why this doesn't dilute the trust model:
   the parent's folded check is the hard stop.)
 - children inherit the run's 429 defenses (`--models` rotation,
   `--retry-wait`) so a parallel fan-out on a rate-limited provider rotates
-  instead of dying — and they share remembered `webfetch` grants (a host
-  you already approved this run is the same grant a child uses);
+  instead of dying; the fan-out's aggregate budget is honest — the parent's
+  remaining `--token-budget` is **split across entries**, each child
+  enforcing its share live;
 - child progress streams into your terminal prefixed `[<agent>]`, and the
   parent sees only the child's final report — its context stays clean.
 

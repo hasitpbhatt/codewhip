@@ -19,6 +19,7 @@ import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
+import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
 import { isVerdict, resolveRunPrefix, setVerdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import {
@@ -31,6 +32,9 @@ import {
 
 const require = createRequire(import.meta.url);
 const pkg: { version: string } = require("../package.json");
+
+/** Built-in agent names, for the [builtin]/[file] source tag in `codewhip agents`. */
+const BUILTIN_AGENT_NAMES = new Set<string>(BUILTIN_AGENTS.map((a) => a.name));
 
 type RunOptions = {
   prompt: string;
@@ -141,6 +145,10 @@ function printCommandHelp(topic: string): boolean {
       console.log("  --verbose  show missing keys list (default: hidden)");
       console.log("  One command for a team lead to hand to an intern at 2am: does this repo pass the trust test?");
       return true;
+    case "agents":
+      console.log("codewhip agents — list the delegable read-only subagents (built-ins + .codewhip/agents/*.md) with validation errors surfaced.");
+      console.log("  Custom agent file: .codewhip/agents/<name>.md — frontmatter description (required), model, max_steps; body = system prompt.");
+      return true;
     case "verdict":
       console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
       console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
@@ -169,7 +177,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth models free provider rollback audit metrics stats trust verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth agents models free provider rollback audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -190,6 +198,7 @@ function printHelp(): void {
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  stats [provider]     per-provider/model request health (ok/auth/quota/timeout/network/bad_model/other)");
+  console.log("  agents               list delegable read-only subagents (built-ins + .codewhip/agents/)");
   console.log("  trust                print a single trust certificate (chain, violations, polish, memory, keys, policy)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
   console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
@@ -1193,6 +1202,26 @@ function cmdStats(args: string[]): void {
   console.log(renderProviderHealth(summary));
 }
 
+/** Inspect the delegable subagent roster: built-ins + .codewhip/agents/*.md. */
+function cmdAgents(): void {
+  const cwd = process.cwd();
+  const { agents, errors } = listAgentsWithErrors(cwd);
+  if (errors.length > 0) {
+    console.log(`agents: ${errors.length} file(s) SKIPPED (fix or remove — they never load):`);
+    for (const e of errors) {
+      console.log(`  ! ${e}`);
+    }
+    console.log("");
+  }
+  console.log(`agents: ${agents.length} delegable (read-only subagents; spawn via delegate / delegate_many):`);
+  for (const a of agents) {
+    const src = BUILTIN_AGENT_NAMES.has(a.name) ? "builtin" : "file";
+    console.log(`  ${a.name.padEnd(12)} [${src}] max_steps=${a.maxSteps}${a.model !== undefined ? ` model=${a.model}` : ""}`);
+    console.log(`    ${a.description}`);
+  }
+  console.log("custom: .codewhip/agents/<name>.md — frontmatter: description (required), model, max_steps (1..25); body = the subagent's system prompt. A file overrides a same-name builtin.");
+}
+
 function cmdTrust(args: string[]): void {
   const cwd = process.cwd();
   const jsonOutput = args.includes("--json");
@@ -1449,6 +1478,10 @@ async function main(): Promise<void> {
   }
   if (command === "trust") {
     cmdTrust(args.slice(1));
+    return;
+  }
+  if (command === "agents") {
+    cmdAgents();
     return;
   }
   if (command === "verdict") {

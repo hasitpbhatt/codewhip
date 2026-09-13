@@ -1,15 +1,17 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
-import { findAgent, runChildAgent, MAX_DELEGATION_DEPTH } from "../subagents.js";
+import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
 
 /**
  * The `delegate` tool: spawn one read-only subagent with a fresh context and
  * return its final report. Permission-wise delegation grants no new authority
- * (children are read/search/webfetch-only — already allow-class), so policy
+ * (children are read/search-only — already allow-class, no network) so policy
  * allows it and every child call still lands on the audit chain under the
  * child's own runId. The depth guard lives in the loop (pre-ladder) AND here
- * (direct-call safety): children can never delegate.
+ * (direct-call safety): children can never delegate. A per-child deadline
+ * aborts the child's own signal so a timed-out child still settles, writes
+ * its outcome, and folds its usage — never an orphan.
  */
 
 export const DELEGATE_TIMEOUT_MS = 600_000;
@@ -49,7 +51,7 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
   if (!loopContextReady(ctx)) {
     return { ok: false, output: "delegate: only available inside an agent run (no provider context)" };
   }
-  if (ctx.depth + 1 > MAX_DELEGATION_DEPTH) {
+  if (!canDelegate(ctx.depth)) {
     return { ok: false, output: "delegate: subagents cannot delegate (depth cap)" };
   }
   const agent = findAgent(ctx.cwd, args.agent);
@@ -59,6 +61,9 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
   if (args.task.length > MAX_TASK_CHARS) {
     return { ok: false, output: `delegate: task too long (${args.task.length} chars, max ${MAX_TASK_CHARS}) — split the work` };
   }
+  // Visible start (the child's own events follow, prefixed [agent]) so the
+  // user never watches silent silence between provider turns.
+  ctx.onChildEvent?.(`[${agent.name}] started: ${args.task.slice(0, 120)}`);
   const r = await runChildAgent({
     cwd: ctx.cwd,
     agent,
@@ -73,6 +78,7 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
     models: ctx.rotationModels,
     retryWait: ctx.retryWait,
     parentRunId: ctx.parentRunId,
+    deadlineMs: DELEGATE_TIMEOUT_MS,
     ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
   });
   ctx.onChildUsage?.(r.usageByModel);
@@ -85,7 +91,11 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
 export const delegateTool: ToolDef = {
   name: "delegate",
   spec: delegateSpec(),
-  timeoutMs: DELEGATE_TIMEOUT_MS,
+  // withTimeout is the net, not the mechanism: the per-child deadline
+  // (DELEGATE_TIMEOUT_MS) aborts the child's own signal so it settles and
+  // folds its usage; the net sits one buffer above so it essentially never
+  // fires.
+  timeoutMs: DELEGATE_TIMEOUT_MS + 60_000,
   exec: (ctx, args, signal) =>
     isDelegateArgs(args)
       ? runDelegate(ctx, args, signal)

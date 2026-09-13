@@ -202,6 +202,8 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<boolean> {
 
 /** Central tool-output cap at transcript push time (read lists, bash dumps). */
 const TOOL_OUTPUT_CAP = 4000;
+/** Max agents named in the run's system-message roster (token hygiene). */
+const MAX_ROSTER = 32;
 
 function capOutput(text: string): string {
   if (text.length <= TOOL_OUTPUT_CAP) return text;
@@ -225,17 +227,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let systemContent =
     args.planMode === true
       ? isChild
-        ? `${baseSystem}\n\nREAD-ONLY SUBAGENT RUN: edit/write/bash/delegate are refused by the harness. Investigate freely, then answer with your findings.`
+        ? `${baseSystem}\n\nREAD-ONLY SUBAGENT RUN: edit/write/bash/delegate/webfetch are refused by the harness (no mutations, no network). Investigate the workspace freely, then answer with your findings.`
         : `${baseSystem}\n\nPLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan.`
       : baseSystem;
   if (!isChild) {
     // Delegation roster rides the system message (dynamic per run — agent
     // files are user-authored), keeping the delegate tool spec static. A
     // broken agent file is surfaced, never swallowed silently (emitted once
-    // `emit` exists, right after the transcript seed).
+    // `emit` exists, right after the transcript seed). Roster is capped:
+    // a pile of agent files is a per-turn token cost compaction can't touch.
     const { agents, errors } = listAgentsWithErrors(args.cwd);
     agentFileErrors = errors;
-    const roster = agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
+    const roster = agents.slice(0, MAX_ROSTER).map((a) => `- ${a.name}: ${a.description}`).join("\n");
     if (roster.length > 0) {
       systemContent += `\n\nDelegable subagents (delegate / delegate_many tools):\n${roster}`;
     }
@@ -494,11 +497,19 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       const preview = previewForLog(call.name, parsed);
       // Depth guard (belt): children never see the delegate specs, but a
       // rogue tool call for a non-advertised tool still fails closed here.
+      // Children also have no network — webfetch is the parent's to make.
       if (isChild && (def.name === "delegate" || def.name === "delegate_many")) {
         const out = "delegation depth exhausted: subagents cannot delegate";
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "loop:max-depth", sha256Hex(out), "policy", out);
         emit("tool", `deny ${call.name} (loop:max-depth)`);
+        continue;
+      }
+      if (isChild && def.name === "webfetch") {
+        const out = "subagents have no network access — the parent fetches and passes content";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "loop:child-no-network", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (loop:child-no-network)`);
         continue;
       }
       // Plan mode is run-scoped policy: mutations and delegation are refused

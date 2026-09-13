@@ -176,15 +176,16 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
 
 /**
  * Tool specs by delegation depth: a top-level run (depth 0) sees everything
- * including the delegation tools; a child (depth >= 1) sees ONLY the read-only
- * set — delegate tools are absent (depth guard) and edit/write/bash are absent
- * (children are read-only; advertising tools we refuse would burn child tokens
- * on refused calls). Filter at construction, not per call, so the transcript
- * and failover paths keep their same-specs assumption.
+ * including the delegation tools; a child (depth >= 1) sees ONLY read+search —
+ * delegate tools are absent (depth guard), mutating tools are absent
+ * (children are read-only), and webfetch is absent (children have no network;
+ * the parent fetches and passes content). Advertising tools we refuse would
+ * burn child tokens on refused calls. Filter at construction, not per call,
+ * so the transcript and failover paths keep their same-specs assumption.
  */
 export function toolSpecs(depth = 0): ToolSpec[] {
   if (depth > 0) {
-    return [TOOLS.read.spec, TOOLS.search.spec, TOOLS.webfetch.spec];
+    return [TOOLS.read.spec, TOOLS.search.spec];
   }
   return [
     TOOLS.read.spec,

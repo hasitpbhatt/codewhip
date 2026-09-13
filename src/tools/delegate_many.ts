@@ -1,14 +1,18 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
-import { findAgent, runChildAgent, MAX_DELEGATION_DEPTH } from "../subagents.js";
+import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
 import { DELEGATE_TIMEOUT_MS } from "./delegate.js";
 
 /**
  * The `delegate_many` tool: fan one task out to several read-only subagents
  * concurrently (capped) and return their ordered reports — the multi-perspective
  * exploration/convergence case. Results return in entry order regardless of
- * completion order; each child's usage folds into the parent's receipt.
+ * completion order; each child's usage folds into the parent's receipt. The
+ * fan-out's aggregate budget is honest: the remaining budget is SPLIT across
+ * entries (each child enforces its share live), not handed whole to every
+ * child. Per-child deadlines mean a slow child costs only itself — finished,
+ * paid-for reports are returned, never discarded.
  */
 
 export const MAX_FANOUT = 4;
@@ -66,7 +70,7 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
   if (!loopContextReady(ctx)) {
     return { ok: false, output: "delegate_many: only available inside an agent run (no provider context)" };
   }
-  if (ctx.depth + 1 > MAX_DELEGATION_DEPTH) {
+  if (!canDelegate(ctx.depth)) {
     return { ok: false, output: "delegate_many: subagents cannot delegate (depth cap)" };
   }
   if (args.entries.length > MAX_FANOUT) {
@@ -84,6 +88,13 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
     }
     agents.push({ name: def.name, def, task: e.task });
   }
+  // Aggregate-budget honesty: the parent's remaining budget is split across
+  // the fan-out — each child enforces its share live (per-child budget),
+  // so N concurrent children cannot overspend N x remaining.
+  const share = ctx.remainingBudget === undefined ? undefined : Math.max(1, Math.floor(ctx.remainingBudget / agents.length));
+  for (const { name, task } of agents) {
+    ctx.onChildEvent?.(`[${name}] started: ${task.slice(0, 120)}`);
+  }
   const runs = await Promise.all(
     agents.map(({ def, task }) =>
       runChildAgent({
@@ -95,11 +106,12 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
         label: ctx.label,
         depth: ctx.depth,
         signal,
-        tokenBudget: ctx.remainingBudget,
+        tokenBudget: share,
         compactTokens: ctx.compactTokens,
         models: ctx.rotationModels,
         retryWait: ctx.retryWait,
         parentRunId: ctx.parentRunId,
+        deadlineMs: DELEGATE_TIMEOUT_MS,
         ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
       })
     )
@@ -125,7 +137,9 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
 export const delegateManyTool: ToolDef = {
   name: "delegate_many",
   spec: delegateManySpec(),
-  timeoutMs: DELEGATE_TIMEOUT_MS,
+  // Net above the per-child deadline (see delegateTool) so per-child aborts
+  // settle and fold usage before the tool-level net could ever fire.
+  timeoutMs: DELEGATE_TIMEOUT_MS + 60_000,
   exec: (ctx, args, signal) =>
     isEntries(args)
       ? runDelegateMany(ctx, args, signal)

@@ -84,14 +84,14 @@ describe("subagents", () => {
     }
   });
 
-  it("toolSpecs: depth 0 sees all 8 tools; children see only read/search/webfetch", () => {
+  it("toolSpecs: depth 0 sees all 8 tools; children see only read+search (no network, no delegation)", () => {
     const names0 = toolSpecs(0).map((s) => s.name);
     strictEqual(names0.length, 8);
     ok(names0.includes("delegate") && names0.includes("delegate_many"));
     const names1 = toolSpecs(1).map((s) => s.name);
-    strictEqual(names1.length, 3);
-    ok(names1.includes("read") && names1.includes("search") && names1.includes("webfetch"));
-    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash"));
+    strictEqual(names1.length, 2);
+    ok(names1.includes("read") && names1.includes("search"));
+    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch"));
   });
 
   it("delegate: child runs, audit chain carries the child runId, usage folds into the receipt", async () => {
@@ -118,9 +118,10 @@ describe("subagents", () => {
       ok(childSystem.startsWith("You are the explore subagent"), childSystem.slice(0, 120));
       ok(childSystem.includes("READ-ONLY SUBAGENT RUN"));
       ok(!childSystem.includes("Delegable subagents"));
-      // Child advertised specs are the read-only set; parent saw all 8.
+      // Child advertised specs are read+search (no network, no delegation);
+      // parent saw all 8.
       strictEqual(record[0]?.toolCount, 8);
-      strictEqual(record[1]?.toolCount, 3);
+      strictEqual(record[1]?.toolCount, 2);
       // Usage folds honestly into the parent's totals and buckets.
       strictEqual(r.promptTokens, 100 + 50 + 50 + 10);
       strictEqual(r.completionTokens, 10 + 5 + 5 + 2);
@@ -172,6 +173,57 @@ describe("subagents", () => {
       const deny = child?.tool_calls.find((c) => c.ruleId === "loop:max-depth");
       ok(deny !== undefined && deny.decision === "deny", JSON.stringify(child?.tool_calls));
       strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("children have no network: a child webfetch call is denied (loop:child-no-network)", async () => {
+    const runCwd = tmpDir("codewhip-sub-net-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "fetch docs" })),
+        toolTurn("webfetch", JSON.stringify({ url: "https://example.com" })),
+        textTurn("child done"),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.text, "done");
+      const child = readOutcomeRecords(runCwd).find((o) => o.runId !== r.runId);
+      ok(child !== undefined, "expected child outcome");
+      const deny = child?.tool_calls.find((c) => c.ruleId === "loop:child-no-network");
+      ok(deny !== undefined && deny.decision === "deny", JSON.stringify(child?.tool_calls));
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("delegate_many splits the remaining budget: one overspending child trips its own share", async () => {
+    const runCwd = tmpDir("codewhip-sub-split-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate_many", JSON.stringify({ entries: [{ agent: "explore", task: "burn" }, { agent: "review", task: "light" }] }), { prompt: 100, completion: 0 }),
+        // Child A (explore): one 60-token turn — over its 100/2 = 50 share.
+        textTurn("A over budget", { prompt: 60, completion: 0 }),
+        // Child B (review): well inside its share.
+        textTurn("B report", { prompt: 10, completion: 0 }),
+        textTurn("converged", { prompt: 5, completion: 0 }),
+      ]);
+      const r = await agentLoop({
+        prompt: "fan out", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 4, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], tokenBudget: 200,
+      });
+      strictEqual(r.text, "converged");
+      // Child A tripped its own share (60 > 50) after one turn; its spend is
+      // still folded honestly (100 + 60 + 10 + 5 = 175 < 200).
+      const childA = readOutcomeRecords(runCwd).find((o) => o.runId !== r.runId && o.usage.prompt >= 60);
+      ok(childA !== undefined, "expected the overspending child's record");
+      strictEqual(childA?.usage.prompt, 60);
+      strictEqual(r.promptTokens, 175);
     } finally {
       fs.rmSync(runCwd, { recursive: true, force: true });
     }
