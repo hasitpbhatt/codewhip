@@ -185,8 +185,13 @@ retracted. Full prior-art map as of the second sweep:
 | RQ5 | Does resource policy contain blast radius? | Injected/pathological agents with vs without mid-run budget + delegation budget-split | Token/$ damage distribution |
 
 Demoted: ledger tamper-evidence (RQ6) → methodology section (it is a
-property of the apparatus, not a research question). Cut: agentic
-overthinking (off-thesis for this paper; separate workshop paper).
+property of the apparatus, not a research question). Cut: resource
+governance / agentic overthinking (chairs' mandate) → SEPARATE manuscript,
+now positioned against the token-budgeted-harness literature
+(`resource-governance-positioning.md`: budgets-as-containment vs the
+budgets-as-optimization line — Snell/Brown/AgentBench/ToolLLM/
+LongLLMLingua/MemGPT; grant×content compounding and this paper's RQ1–RQ4
+are untouched by that sweep).
 
 Statistics floor (panel-mandated): ≥30 cells per attack-task×arm, Wilson
 intervals on all rates, paired tests (McNemar) for arm contrasts, 3–5
