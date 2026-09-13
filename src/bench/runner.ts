@@ -48,8 +48,11 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-bench-"));
       try {
         materializeWorkspace(cwd, task, arm);
+        // The scripted operator spans the WHOLE cell (all runs share one
+        // askCount): one fat-finger per cell, attentive after. Resetting per
+        // run would measure per-session re-success, not persistence.
+        const askCount = { n: 0 };
         for (let runIndex = 1; runIndex <= runsPerCell; runIndex++) {
-          const askCount = { n: 0 };
           const systemPrompt =
             arm.policySurface === "prompt" && arm.promptPolicyRules !== undefined
               ? `${SYSTEM_PROMPT}\n\n${arm.promptPolicyRules}`

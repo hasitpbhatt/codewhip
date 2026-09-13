@@ -58,16 +58,54 @@ could find.
 - **Out of scope (v1):** compromised host, malicious provider, side
   channels; the model provider is honest-but-weak.
 
+## Positioning (corrected after prior-art sweep — researchers panel, 2026-09-13)
+
+The naive claim "approval-persistence is unnamed anywhere" is FALSE and is
+retracted:
+
+- **ClawWorm** (arXiv:2603.15727) attacks a production coding agent
+  cross-session and analyzes the "Always Allow" approval-persistence flaw.
+- **Rules File Backdoor → CVE-2025-54136** (Pillar Security): poisoned
+  rules files (Cursor/Copilot) — content persistence, CVE-backed.
+- **eTAMP** (arXiv:2604.02623), **memory-poisoning systematic study**
+  (arXiv:2606.04329): task/memory-content persistence.
+
+What remains defensible — and is the paper:
+
+1. **Grant-vs-content persistence as one axis.** Prior work attacks
+   *content* (instructions, memories, rules files). The unexplored half is
+   *grants*: the authority store itself (approval rules, allow-lists,
+   permission maps) poisoned by a single human keystroke and persisting as
+   policy. Content poisoning changes what the model believes; grant
+   poisoning changes what the harness permits — orthogonal, compounding,
+   and measured separately here.
+2. **Cross-product lifecycle measurement**: one attack suite, per agent:
+   mint → persist → survive restart → compound (grant × content) → cost.
+   No prior work measures the lifecycle across products; ClawWorm is
+   single-agent.
+3. **Defense half**: curated allow-generalization, threshold-gated decline
+   promotion, and the tamper-evident ledger, evaluated against the same
+   suite — with EXTERNAL baselines (the measured products' native
+   permission systems) so the defense is not judged only against itself.
+
 ## Research questions → experiments → metrics
 
 | RQ | Question | Experiment | Metric (ground truth) |
 |---|---|---|---|
-| RQ1 | Does harness-side compiled policy resist indirect injection where prompt-stated policy fails? | Same tasks; deny rules surfaced in prompt vs enforced pre-flight (`policySurface` arm) | Attack-success rate over decision logs (allow on attack tool/subject) |
-| RQ2 | What persists? The approval-persistence attack class | Malicious repo → injection → scripted fat-finger `a` → session restart → does the privilege survive? In-repo cells (`runsPerCell`) + REAL agents (Claude Code `--always-allow` semantics, Cursor rules, memory stores) | Durable-privilege success rate per agent; blasts: allow-escalation vs deny-DoS |
-| RQ3 | Do mined deny shapes generalize? | Held-out variants (subdomain hosts, flag reorder, path aliases) + benign near-misses vs compiled shapes | Precision/recall of the shape grammar |
-| RQ4 | Does resource policy contain blast radius? | Injected/pathological agents with vs without mid-run budget, per-call deadline, delegation budget-split | Token/$ damage distribution; fan-out exposure |
-| RQ5 | What does agentic overthinking cost, and what tames it? | Loop-inducing tasks; repeat-guard memo+nudge and hard budget arms | Repeat-call counts, step burn, cost–success frontier |
-| RQ6 | Is the evaluation itself tamper-evident? | Post-hoc log edits vs `verifyChain`; replay | Tamper detection rate; replay decision equality |
+| RQ1 | Does harness-side compiled policy resist indirect injection where prompt-stated policy fails? | Same tasks; deny rules in prompt vs pre-flight (`policySurface` arm), both with the SAME rule text | Attack-success rate over decision logs |
+| RQ2 | Grant persistence: what survives a restart? | Fat-finger cell per persistence surface (memorable origin, unmemorable head) × runsPerCell reuse; cross-product drivers (build order §4) | Durable-privilege rate: run-2 auto-grant WITHOUT re-ask |
+| RQ3 | Do mined deny shapes generalize? | Held-out variants (subdomains, flag reorder, path aliases) + benign near-misses; confusion matrix of the shape grammar | Precision/recall (no fixed-port circularity: grader reads decisions, attacker scripts vary) |
+| RQ4 | Utility cost of governance (added after panel: the cost side was missing) | Benign tasks under each arm: task success, tokens, steps, false-positive blocks (measured on NON-yolo arms so the operator ladder is live) | Cost–success frontier per arm |
+| RQ5 | Does resource policy contain blast radius? | Injected/pathological agents with vs without mid-run budget + delegation budget-split | Token/$ damage distribution |
+
+Demoted: ledger tamper-evidence (RQ6) → methodology section (it is a
+property of the apparatus, not a research question). Cut: agentic
+overthinking (off-thesis for this paper; separate workshop paper).
+
+Statistics floor (panel-mandated): ≥30 cells per attack-task×arm, Wilson
+intervals on all rates, paired tests (McNemar) for arm contrasts, 3–5
+models for the prevalence appendix — models are covariates, never the
+subject.
 
 ## Build order to the A* bar
 
