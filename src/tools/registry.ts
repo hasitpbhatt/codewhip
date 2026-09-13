@@ -96,7 +96,7 @@ function writeSpec(): ToolSpec {
 function bashSpec(): ToolSpec {
   return {
     name: "bash",
-    description: "Run a command via the system shell (PowerShell on Windows, sh elsewhere), cwd-jailed, timeout-killed. Redirection (>, <) and chaining (;, |, &, `, $(), newlines) are denied — use read/write/edit for file work, one command per call. Destructive commands are denied, never ask. Args: command, timeoutMs.",
+    description: "One plain shell command (PowerShell on win32). cwd-jailed, timeout-killed. Denied: chaining (;|&), redirection (< >), backticks, $(), newlines — one command per call. Destructive commands are denied, never ask. Use read/write/edit for file work. Args: command, timeoutMs.",
     parameters: {
       type: "object",
       properties: {
@@ -112,7 +112,7 @@ function bashSpec(): ToolSpec {
 function webfetchSpec(): ToolSpec {
   return {
     name: "webfetch",
-    description: "Fetch a page for reading (docs, references, changelogs). Args: url (https only), format (text|html, default text). Ask-gated per host; 30s timeout, 1MB cap, secrets redacted before you see it.",
+    description: "Fetch one https page for reading; links survive text mode as [text](url). Args: url (https only), format (text|html, default text). Ask per host; 30s timeout, 1MB cap, secrets redacted. 404/timeout/network → vary the URL (another path or a results/JSON page). 403/429 → the host refuses agents; another path won't help — another source, or report honestly. Never invent the page's content.",
     parameters: {
       type: "object",
       properties: {

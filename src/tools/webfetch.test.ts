@@ -83,6 +83,25 @@ describe("webfetch", () => {
       restore();
     }
   });
+  it("preserves anchors as [text](href) so results pages keep their exits", async () => {
+    const page: StubRes = {
+      ok: true, status: 200, url: "https://s.example/search", contentLength: null,
+      body: '<html><body><a href="https://a.example/x">First result</a> and <a href=\'/rel/path\'>Relative</a> plus <a href="https://b.example">Bare</a><a href="https://c.example"><img src="i.png"></a></body></html>',
+    };
+    const restore = stubFetch(page);
+    try {
+      const r = await webfetchTool({ cwd: "/tmp" }, { url: "https://s.example/search" });
+      strictEqual(r.ok, true);
+      ok(r.output.includes("[First result](https://a.example/x)"), r.output);
+      ok(r.output.includes("[Relative](/rel/path)"), r.output);
+      ok(r.output.includes("[Bare](https://b.example)"), r.output);
+      // An anchor whose text strips to nothing keeps the href as its own text.
+      ok(r.output.includes("[https://c.example](https://c.example)"), r.output);
+      ok(!r.output.includes("<a "), r.output);
+    } finally {
+      restore();
+    }
+  });
   it("passes HTML through in html mode", async () => {
     const restore = stubFetch(OK_PAGE);
     try {
