@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format follows
 [SemVer](https://semver.org/). Every run prints its receipts
 (`tokens / model mix / $`) — cost behavior changes are called out explicitly.
 
-## [Unreleased]
+## [0.2.0] — 2026-09-13
 
 ### Added
 

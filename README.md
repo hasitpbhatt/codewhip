@@ -36,17 +36,18 @@ uses it doesn't ship in H1.
 ```sh
 npm i -g codewhip
 codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
+codewhip demo --deny               # offline wedge demo: 5 disasters refused, $0, no key
 codewhip auth login mistral        # optional; every provider needs a key (see "Provider keys")
 codewhip run "fix the failing test"
 codewhip run "refactor auth" --token-budget 250000
-codewhip run "refactor auth" --share    # + redacted share bundle (.codewhip/share-<runId>.json)
-codewhip audit --last 20           # tail the hash-chained audit log
+codewhip trust                     # the trust certificate: chain, policy, keys, memory — one command
+codewhip remember list             # what the agent auto-runs without asking (revoke: remember forget)
 codewhip audit --verify            # re-walk seq/prev_hash + ed25519 signatures
-codewhip audit --replay 20         # readable action replay (newest last)
-codewhip audit --export            # signed content-addressed bundle for an auditor
 ```
 
-Every run prints receipts: `tokens / model mix / $`.
+Every run prints receipts: `tokens / model mix / $`. Receipts price known
+$0 routes (nvidia and the verified free-chain defaults); unpriced routes
+say `cost untracked` and point at the provider console — never fiction.
 The token budget is **enforced mid-run**, not a preflight fiction — when the
 run crosses it, CodeWhip stops, keeps the partial transcript, and prints the
 receipt anyway.

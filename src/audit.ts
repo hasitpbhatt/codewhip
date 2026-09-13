@@ -212,6 +212,27 @@ export type AuditVerification = {
 };
 
 /**
+ * One interpretation layer, used by `audit --verify`, `demo`, and `trust` so
+ * every surface reports the SAME status. Entries written before the key
+ * existed are legitimately unsigned — `verifyChain` flags them strictly
+ * (it is the integrity tool); interpretation tolerates exactly that pattern
+ * and nothing else. Anything else stays BROKEN.
+ */
+export function interpretVerification(v: AuditVerification): { clean: boolean; status: string; problems: string[] } {
+  const preKeyOnly =
+    v.problems.length > 0 &&
+    v.problems.every((p) => p.includes("entry unsigned while a key exists"));
+  if (preKeyOnly) {
+    return {
+      clean: true,
+      status: "INTACT (entries pre-dating the key are unsigned as expected)",
+      problems: [],
+    };
+  }
+  return { clean: v.valid, status: v.valid ? "INTACT" : "BROKEN", problems: v.problems };
+}
+
+/**
  * Re-walk the chain: seq continuity, prev_hash linking, and (when a key
  * exists) ed25519 signatures. Key deletion is BROKEN, not unsigned:
  * signed entries with no local pubkey fail, and stripping sigs to launder

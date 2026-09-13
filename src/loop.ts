@@ -16,7 +16,7 @@ import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./com
 import { listAgentsWithErrors } from "./subagents.js";
 import type { ProviderId } from "./provider.js";
 
-export type ApprovalAnswer = "yes" | "always" | "no";
+export type ApprovalAnswer = "yes" | "session" | "always" | "no";
 export type AskUser = (question: string) => Promise<ApprovalAnswer>;
 
 export type LoopEvent = {
@@ -607,7 +607,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           } else {
             let answer: ApprovalAnswer = "no";
             try {
-              answer = await args.askUser(`allow ${call.name} ${preview}? [y/N/a] `);
+              answer = await args.askUser(`allow ${call.name} ${preview}? [y/N/s/a] (s = this session only, a = remember) `);
             } catch {
               answer = "no";
             }
@@ -622,6 +622,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
               continue;
             }
             grantActor = "human";
+            // Session scope (UX panel: consent needs a middle rung — one
+            // keystroke less than always, zero persistence). The rule lives
+            // in this run's in-memory list only; the next run asks again.
+            if (answer === "session" && shape !== null && !targetsSelfProtected(shape)) {
+              rules.push({ tool: def.name === "webfetch" ? "webfetch" : def.name === "edit" ? "edit" : def.name === "write" ? "write" : "bash", shape, ts: new Date().toISOString(), runId, preview_hash: sha256Hex(preview) });
+              ruleId = `${verdict.ruleId}+session`;
+            }
             if (answer === "always") {
               if (shape === null) {
                 emit("policy", `not memorable: ${subjectForShape.trim().split(/\s/)[0] ?? ""} — approved once, no rule stored`);
@@ -643,7 +650,15 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                   emit("policy", `remember failed (disk write) — approved once for ${shape}`);
                 } else {
                   rules.push({ tool: toolForRule, shape, ts: new Date().toISOString(), runId, preview_hash: sha256Hex(preview) });
-                  emit("policy", `remembered: ${def.name}:${shape} (.codewhip/remembered.jsonl)`);
+                  // Grant-time coverage (UX panel): the user must be able to
+                  // see what `a` just bought — and revoke it.
+                  const scope =
+                    toolForRule === "bash"
+                      ? `every "${shape.replace(/ \*$/, "")}" command`
+                      : toolForRule === "webfetch"
+                        ? `every fetch to ${shape}`
+                        : `the exact path ${shape}`;
+                  emit("policy", `remembered: ${toolForRule}:${shape} — covers ${scope}, all future runs. Revoke: codewhip remember forget ${toolForRule}:${shape}`);
                 }
                 ruleId = `${verdict.ruleId}+always`;
               }

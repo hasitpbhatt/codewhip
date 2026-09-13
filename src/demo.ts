@@ -1,7 +1,7 @@
 import { agentLoop } from "./loop.js";
 import { listRules } from "./remember-store.js";
 import { makeFakePort, textTurn, toolTurn } from "./testkit/fakePort.js";
-import { verifyChain } from "./audit.js";
+import { interpretVerification, verifyChain } from "./audit.js";
 
 export type DenyDemoResult = {
   runId: string;
@@ -45,12 +45,12 @@ export async function runDenyDemo(cwd: string): Promise<DenyDemoResult> {
     if (t.policy.startsWith("deny")) denied += 1;
     else if (t.policy.startsWith("allow")) allowed += 1;
   }
-  const v = verifyChain(cwd);
+  const v = interpretVerification(verifyChain(cwd));
   return {
     runId: r.runId,
     allowed,
     denied,
-    auditValid: v.valid,
+    auditValid: v.clean,
     receipt: `receipt: ${r.promptTokens} prompt + ${r.completionTokens} completion tokens / demo-fake / $0.0000 (offline demo)`,
   };
 }

@@ -14,12 +14,13 @@ import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
-import { appendEntry, auditPath, buildBundle, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
+import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
+import { removeRule } from "./remember-store.js";
 import { isVerdict, resolveRunPrefix, setVerdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import {
@@ -79,7 +80,6 @@ function printRunOptions(): void {
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
-  console.log("  -v, --version        print version");
 }
 
 function printKeysHelp(): void {
@@ -104,13 +104,16 @@ function printCommandHelp(topic: string): boolean {
       console.log('codewhip run "<prompt>" [options] — run an agent session (headless; no prompt on a TTY = REPL).');
       printRunOptions();
       console.log("  No key yet? codewhip demo --deny (offline, $0) — or --provider llm7 (keyless, rate-limited).");
+      console.log("  Key consoles and keyless tiers: codewhip help keys");
+      return true;
+    case "keys":
       printKeysHelp();
       return true;
     case "auth":
       console.log("codewhip auth login <provider>   — store a key (hidden prompt, 0600 file; env still wins)");
       console.log("codewhip auth logout <provider>  — forget the stored key");
       console.log("codewhip auth status [provider]  — set/missing per provider (keys are never printed)");
-      printKeysHelp();
+      console.log("  key consoles and keyless tiers: codewhip help keys");
       return true;
     case "models":
       console.log("codewhip models [provider] — list served models with agency tags (default: nvidia).");
@@ -149,6 +152,11 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip agents — list the delegable read-only subagents (built-ins + .codewhip/agents/*.md) with validation errors surfaced.");
       console.log("  Custom agent file: .codewhip/agents/<name>.md — frontmatter description (required), model, max_steps; body = system prompt.");
       return true;
+    case "remember":
+      console.log('codewhip remember list               — grants the agent auto-runs, with what each covers');
+      console.log('codewhip remember forget "<tool:shape>" — revoke one grant (future runs ask again; audited)');
+      console.log("  Grants come from answering `a` at an approval prompt; `s` scopes one to the session only.");
+      return true;
     case "verdict":
       console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
       console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
@@ -177,7 +185,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth agents models free provider rollback audit metrics stats trust verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider rollback audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -199,6 +207,7 @@ function printHelp(): void {
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  stats [provider]     per-provider/model request health (ok/auth/quota/timeout/network/bad_model/other)");
   console.log("  agents               list delegable read-only subagents (built-ins + .codewhip/agents/)");
+  console.log("  remember             inspect/revoke auto-run grants (list/forget \"<tool:shape>\")");
   console.log("  trust                print a single trust certificate (chain, violations, polish, memory, keys, policy)");
   console.log("  verdict <run> <v>    record human judgment: accepted|edited|reverted|rejected (prefix ok)");
   console.log("  demo --deny          offline wedge demo: five disasters refused on the $0 fake port");
@@ -490,6 +499,7 @@ function promptApproval(question: string): Promise<ApprovalAnswer> {
       rl.close();
       const a = answer.trim().toLowerCase();
       if (a === "a" || a === "always") resolve("always");
+      else if (a === "s" || a === "session") resolve("session");
       else if (a === "y" || a === "yes") resolve("yes");
       else resolve("no");
     });
@@ -956,14 +966,15 @@ function cmdAudit(args: string[]): void {
       console.log("audit: no chain yet (.codewhip/audit.log missing) — nothing to verify.");
       return;
     }
-    const v = verifyChain(cwd);
+    const raw = verifyChain(cwd);
+    const v = interpretVerification(raw);
     console.log(
-      `audit: ${v.total} entries — hash chain ${v.valid ? "INTACT" : "BROKEN"} (${v.signed} signed / ${v.unsigned} unsigned, ${v.keyPresent ? "key present" : "no local key"})`
+      `audit: ${raw.total} entries — hash chain ${v.status} (${raw.signed} signed / ${raw.unsigned} unsigned, ${raw.keyPresent ? "key present" : "no local key"})`
     );
     for (const p of v.problems) {
       console.log(`  ! ${p}`);
     }
-    if (!v.valid) {
+    if (!v.clean) {
       process.exitCode = 1;
     }
     return;
@@ -1224,45 +1235,86 @@ function cmdAgents(): void {
   console.log("custom: .codewhip/agents/<name>.md — frontmatter: description (required), model, max_steps (1..25); body = the subagent's system prompt. A file overrides a same-name builtin.");
 }
 
+/** Inspect and revoke remembered grants (consent must be revocable). */
+function cmdRemember(args: string[]): void {
+  const cwd = process.cwd();
+  const sub = args[0] ?? "list";
+  if (sub === "list") {
+    const rules = listRules(cwd);
+    if (rules.length === 0) {
+      console.log("remember: no rules stored (.codewhip/remembered.jsonl) — every ask-class call prompts.");
+      return;
+    }
+    console.log(`remember: ${rules.length} rule(s) — the agent auto-runs these without asking (revoke: codewhip remember forget <tool:shape>):`);
+    for (const r of rules) {
+      const scope =
+        r.tool === "bash"
+          ? `every "${r.shape.replace(/ \*$/, "")}" command`
+          : r.tool === "webfetch"
+            ? `every fetch to ${r.shape}`
+            : `the exact path ${r.shape}`;
+      console.log(`  ${r.tool}:${r.shape}  (granted ${r.ts.slice(0, 10)} in run ${r.runId.slice(0, 8)} — covers ${scope})`);
+    }
+    return;
+  }
+  if (sub === "forget") {
+    const raw = args[1] ?? "";
+    const sep = raw.indexOf(":");
+    const tool = raw.slice(0, sep);
+    const shape = raw.slice(sep + 1);
+    if (sep <= 0 || shape.length === 0) {
+      console.error('usage: codewhip remember forget "<tool:shape>"  (see: codewhip remember list)');
+      process.exitCode = 1;
+      return;
+    }
+    if (removeRule(cwd, tool, shape)) {
+      console.log(`remember: revoked ${tool}:${shape} — future runs ask again (the revocation lands on the audit trail)`);
+      appendEntry(cwd, {
+        runId: "revocation",
+        actor: "human",
+        tool: "remember",
+        args_hash: sha256Hex(`${tool}:${shape}`),
+        result_hash: sha256Hex("revoked"),
+        policy: "allow:remember-revoke",
+      });
+    } else {
+      console.error(`remember: no rule "${raw}" found (see: codewhip remember list)`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+  console.log("Usage: codewhip remember [list|forget \"<tool:shape>\"]");
+}
+
 function cmdTrust(args: string[]): void {
   const cwd = process.cwd();
   const jsonOutput = args.includes("--json");
   const verbose = args.includes("--verbose");
   const lines: string[] = ["codewhip trust — single-command trust certificate"];
-  const issues: string[] = [];
+  const broken: string[] = []; // things that are WRONG (fail closed)
+  const unproven: string[] = []; // things merely not yet evidenced
 
-  // 1. Audit chain — fresh init generates key after demo entries, which is correct.
-  // Treat "unsigned while key exists" for pre-key entries as expected, not broken.
-  const v = verifyChain(cwd);
-  let chainStatus = v.valid ? "INTACT" : "BROKEN";
-  let chainClean = v.valid;
-  if (!v.valid) {
-    // Check if the only problems are pre-key entries being unsigned
-    const preKeyProblems = v.problems.filter((p) =>
-      p.includes("entry unsigned while a key exists")
-    );
-    if (preKeyProblems.length === v.problems.length && v.keyPresent) {
-      // All problems are just the expected pre-key state
-      chainStatus = "INTACT (pre-key entries unsigned as expected)";
-      chainClean = true;
-    }
-  }
-  lines.push(`  audit chain: ${chainStatus} (${v.total} entries, ${v.signed} signed, ${v.unsigned} unsigned${v.keyPresent ? ", key present" : ", no local key"})`);
+  // 1. Audit chain — ONE interpretation shared with `audit --verify` and
+  // `demo` (product panel: two verifiers must never disagree).
+  const raw = verifyChain(cwd);
+  const v = interpretVerification(raw);
+  const chainClean = v.clean;
+  lines.push(`  audit chain: ${v.status} (${raw.total} entries, ${raw.signed} signed, ${raw.unsigned} unsigned${raw.keyPresent ? ", key present" : ", no local key"})`);
   if (!chainClean) {
     for (const p of v.problems) {
       lines.push(`    ! ${p}`);
     }
-    issues.push("audit");
+    broken.push("audit");
   }
 
   // 2. Base policy (codewhip-policy.yaml) + promoted denies (policy.md)
   const basePolicyPath = path.join(cwd, "codewhip-policy.yaml");
   let baseDenies = 0;
   if (fs.existsSync(basePolicyPath)) {
-    const raw = fs.readFileSync(basePolicyPath, "utf8");
+    const rawYaml = fs.readFileSync(basePolicyPath, "utf8");
     // YAML format: deny: followed by - "command" lines
     let inDenySection = false;
-    for (const line of raw.split("\n")) {
+    for (const line of rawYaml.split("\n")) {
       const t = line.trim();
       if (t === "deny:") {
         inDenySection = true;
@@ -1278,13 +1330,13 @@ function cmdTrust(args: string[]): void {
     }
   }
   const promotedDenies = loadPromotedDenies(cwd);
-  const hasPromotedDenies = promotedDenies.length > 0;
-  lines.push(`  policy: ${baseDenies} base deny(es) + ${promotedDenies.length} promoted deny(es) active`);
-  if (baseDenies === 0 && !hasPromotedDenies) {
-    issues.push("policy");
+  const denyWord = (n: number): string => `den${n === 1 ? "y" : "ies"}`;
+  lines.push(`  policy: ${baseDenies} base ${denyWord(baseDenies)} + ${promotedDenies.length} promoted ${denyWord(promotedDenies.length)} active`);
+  if (baseDenies === 0 && promotedDenies.length === 0) {
+    broken.push("policy");
   }
 
-  // 3. Polish gate — evaluate from last polish run's actual cost
+  // 3. Polish gate — evaluate from the last polish run's actual cost
   const outcomes = readOutcomeRecords(cwd);
   const polishRuns = outcomes.filter((r) => {
     // Polished runs route to sensenova (cheapest inference)
@@ -1294,22 +1346,24 @@ function cmdTrust(args: string[]): void {
   let polishGatePassed = false;
   if (polishRuns.length > 0) {
     const lastPolish = polishRuns[polishRuns.length - 1];
-    const cost = estimateCost(lastPolish.model.split(":")[0] as any, lastPolish.model.split(":")[1] ?? "", lastPolish.usage.prompt, lastPolish.usage.completion);
+    const [prov, pmodel] = lastPolish.model.split(":");
+    const cost = estimateCost(prov as ProviderId, pmodel ?? "", lastPolish.usage.prompt, lastPolish.usage.completion);
     const gate = polishGate(cost);
     polishGatePassed = gate.pass;
     polishGateStatus = gate.pass ? `PASS (${gate.reason})` : `OPEN (${gate.reason})`;
   }
   lines.push(`  polish gate: ${polishGateStatus}`);
-  if (!polishGatePassed && polishRuns.length > 0) {
-    issues.push("polish");
+  if (!polishGatePassed) {
+    unproven.push("polish");
   }
 
-  // 4. Memory accruing — at least 1 remembered rule for PASS
+  // 4. Memory accruing — evidence of the compounding loop, never a nudge to
+  // press `a` (the UX panel: a trust certificate must not farm grants).
   const remembered = listRules(cwd);
   const hasMemory = remembered.length > 0;
-  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing`);
+  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing${hasMemory ? " — inspect: codewhip remember list" : ""}`);
   if (!hasMemory) {
-    issues.push("memory");
+    unproven.push("memory");
   }
 
   // 5. Keys — separate usable (env/file) from anonymous/rate-limited
@@ -1342,30 +1396,41 @@ function cmdTrust(args: string[]): void {
   if (verbose && missingKeys.length > 0) {
     lines.push(`    missing: ${missingKeys.join(", ")} (set env or codewhip auth login)`);
   }
+  if (usableKeys.length === 0 && anonymousKeys.length === 0) {
+    broken.push("keys");
+  }
 
   // 6. Policy file check — show both files
   lines.push(`  codewhip-policy.yaml: ${baseDenies > 0 ? "active (has base denies)" : "empty or missing"}`);
-  lines.push(`  policy.md: ${hasPromotedDenies ? `${promotedDenies.length} promoted deny(es)` : "no promoted denies"}`);
+  lines.push(`  policy.md: ${promotedDenies.length > 0 ? `${promotedDenies.length} promoted ${denyWord(promotedDenies.length)}` : "no promoted denies"}`);
 
-  // Summary — achievable PASS criteria
-  const allGood = chainClean && baseDenies > 0 && hasMemory && usableKeys.length > 0;
-  
+  // Summary — three tiers (product panel): BROKEN things fail; a clean repo
+  // with missing evidence is UNPROVEN, not NEEDS WORK.
+  const verdict = broken.length > 0 ? "NEEDS WORK" : unproven.length > 0 ? "UNPROVEN" : "PASS";
+  const allGood = verdict === "PASS";
+
   if (jsonOutput) {
+    const nextSteps: string[] = [];
+    if (broken.includes("audit")) nextSteps.push("codewhip audit --verify");
+    if (broken.includes("policy")) nextSteps.push("codewhip init (creates base policy with 3 denies)");
+    if (broken.includes("keys")) nextSteps.push("codewhip auth login <provider> (or set env var)");
+    if (unproven.includes("memory")) nextSteps.push("codewhip remember list (inspect stored rules)");
+    if (unproven.includes("polish") && polishRuns.length > 0) nextSteps.push('codewhip run --class polish "..." (prove <$0.05)');
     const output = {
-      trust: allGood ? "PASS" : "NEEDS_WORK",
+      trust: verdict.replace(" ", "_"),
       auditChain: {
         status: chainClean ? "INTACT" : "BROKEN",
-        total: v.total,
-        signed: v.signed,
-        unsigned: v.unsigned,
-        keyPresent: v.keyPresent,
-        problems: chainClean ? [] : v.problems,
+        total: raw.total,
+        signed: raw.signed,
+        unsigned: raw.unsigned,
+        keyPresent: raw.keyPresent,
+        problems: chainClean ? [] : raw.problems,
       },
       policy: {
         baseDenies,
         promotedDenies: promotedDenies.length,
         codewhipPolicyYaml: baseDenies > 0,
-        policyMd: hasPromotedDenies,
+        policyMd: promotedDenies.length > 0,
       },
       polishGate: {
         status: polishGatePassed ? "PASS" : (polishRuns.length > 0 ? "OPEN" : "UNEVALUATED"),
@@ -1384,35 +1449,24 @@ function cmdTrust(args: string[]): void {
         anonymousList: anonymousKeys,
         missingList: verbose ? missingKeys : [],
       },
-      nextSteps: issues.length > 0 ? issues.map((i) => {
-        switch (i) {
-          case "audit": return "codewhip audit --verify";
-          case "policy": return "codewhip init (creates base policy with 3 denies)";
-          case "polish": return "codewhip run --class polish \"...\" (prove <$0.05)";
-          case "memory": return "codewhip run ... (answer 'a' to remember a tool shape)";
-          case "keys": return "codewhip auth login <provider> (or set env var)";
-          default: return "";
-        }
-      }).filter(Boolean) : [],
+      nextSteps,
     };
     console.log(JSON.stringify(output, null, 2));
     return;
   }
 
   lines.push("");
-  lines.push(allGood ? "TRUST: PASS" : "TRUST: NEEDS WORK");
-  if (!allGood) {
-    const suggestions: string[] = [];
-    if (!chainClean) suggestions.push("codewhip audit --verify");
-    if (baseDenies === 0) suggestions.push("codewhip init (creates base policy with 3 denies)");
-    if (!hasMemory) suggestions.push("codewhip run ... (answer 'a' to remember a tool shape)");
-    if (usableKeys.length === 0) suggestions.push("codewhip auth login <provider> (or set env var)");
-    if (polishRuns.length > 0 && !polishGatePassed) suggestions.push("codewhip run --class polish \"...\" (prove <$0.05)");
-    if (suggestions.length > 0) {
-      lines.push("  next: " + suggestions.join(" | "));
-    }
+  lines.push(`TRUST: ${verdict}`);
+  const suggestions: string[] = [];
+  if (broken.includes("audit")) suggestions.push("codewhip audit --verify");
+  if (broken.includes("policy")) suggestions.push("codewhip init (creates base policy with 3 denies)");
+  if (broken.includes("keys")) suggestions.push("codewhip auth login <provider> (or set env var)");
+  if (unproven.includes("memory")) suggestions.push("codewhip remember list (see what the agent may auto-run)");
+  if (unproven.includes("polish") && polishRuns.length > 0) suggestions.push('codewhip run --class polish "..." (prove <$0.05)');
+  if (suggestions.length > 0) {
+    lines.push("  next: " + suggestions.join(" | "));
   }
-
+  void allGood;
   console.log(lines.join("\n"));
 }
 
@@ -1484,6 +1538,10 @@ async function main(): Promise<void> {
   }
   if (command === "agents") {
     cmdAgents();
+    return;
+  }
+  if (command === "remember") {
+    cmdRemember(args.slice(1));
     return;
   }
   if (command === "verdict") {
