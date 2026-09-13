@@ -58,35 +58,50 @@ could find.
 - **Out of scope (v1):** compromised host, malicious provider, side
   channels; the model provider is honest-but-weak.
 
-## Positioning (corrected after prior-art sweep — researchers panel, 2026-09-13)
+## Positioning (corrected after prior-art sweep — researchers panel, 2026-09-13; second sweep 2026-09-13)
 
 The naive claim "approval-persistence is unnamed anywhere" is FALSE and is
-retracted:
+retracted. Full prior-art map as of the second sweep:
 
-- **ClawWorm** (arXiv:2603.15727) attacks a production coding agent
-  cross-session and analyzes the "Always Allow" approval-persistence flaw.
+- **ClawWorm** (arXiv:2603.15727): cross-session attack on ONE production
+  coding agent, incl. "Always Allow" analysis — single-agent.
 - **Rules File Backdoor → CVE-2025-54136** (Pillar Security): poisoned
   rules files (Cursor/Copilot) — content persistence, CVE-backed.
 - **eTAMP** (arXiv:2604.02623), **memory-poisoning systematic study**
   (arXiv:2606.04329): task/memory-content persistence.
+- **PoisonedSkills** (arXiv:2604.03081): supply-chain poisoning of skills,
+  tested against permission systems — content-side, framework-level.
+- **Do Coding Agents Understand Least-Privilege Authorization?**
+  (arXiv:2605.14859): measures whether agents *comprehend and follow*
+  permission labels — the model's behavior, not the grant store's life.
+- **How User Invocation Shapes Coding Agent Vulnerability**
+  (arXiv:2608.30686): invocation modes (incl. permission policies) vs
+  vulnerability — adjacent; no grant lifecycle.
+- **Authority Is Not a String: Capability-Scoped Harness**
+  (arXiv:2609.08371): proposes capability-scoped permission mediation —
+  an engineered defense; ours is mined from interaction.
+- **IssueTrojanBench** (arXiv:2607.20759), **SoK agentic coding injection**
+  (arXiv:2601.17548): injection benchmarks/systematization — content-side.
 
-What remains defensible — and is the paper:
+### The defensible claim (sharpened)
 
-1. **Grant-vs-content persistence as one axis.** Prior work attacks
-   *content* (instructions, memories, rules files). The unexplored half is
-   *grants*: the authority store itself (approval rules, allow-lists,
-   permission maps) poisoned by a single human keystroke and persisting as
-   policy. Content poisoning changes what the model believes; grant
-   poisoning changes what the harness permits — orthogonal, compounding,
-   and measured separately here.
-2. **Cross-product lifecycle measurement**: one attack suite, per agent:
-   mint → persist → survive restart → compound (grant × content) → cost.
-   No prior work measures the lifecycle across products; ClawWorm is
-   single-agent.
-3. **Defense half**: curated allow-generalization, threshold-gated decline
-   promotion, and the tamper-evident ledger, evaluated against the same
-   suite — with EXTERNAL baselines (the measured products' native
-   permission systems) so the defense is not judged only against itself.
+1. **The grant lifecycle as the unit of measurement.** Prior work measures
+   the model's compliance (2605.14859) or demonstrates one agent's flaw
+   (ClawWorm). Nobody measures the *grant store lifecycle across products*:
+   mint (one operator keystroke) → persist (session restart) → honor
+   (auto-grant, no ask) → compound (grant × poisoned content) → blast
+   radius. One attack suite, N real agents, restart semantics, grant-vs-
+   content as separate arms.
+2. **Mined policy as the defense contrast.** Capability-scoped designs
+   (2609.08371) are engineered a priori; ours is compiled from raw operator
+   decisions with thresholds + curation — and we measure the generalization
+   of mined shapes (RQ3: where origin-exact and head-glob grammars fail),
+   which no engineered-capability paper needs to answer.
+3. **Resource governance as containment.** Mid-run budgets, delegation
+   budget-splitting, repeat-call memoization measured as blast-radius
+   control for compromised agents — unclaimed in the entire sweep.
+4. **Tamper-evident evaluation** (methodology): the measurement trail is
+   itself hash-chained and replayable.
 
 ## Research questions → experiments → metrics
 
