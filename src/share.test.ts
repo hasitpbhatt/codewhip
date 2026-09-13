@@ -23,8 +23,8 @@ const input = (over: Partial<ShareInput> = {}): ShareInput => ({
   prompt: "fix the bug with key sk-abcDEF123xyz",
   resultText: "done, see admin@example.com",
   trace: [
-    { seq: 1, tool: "bash", policy: "deny:denylist:rm-rf", actor: "policy", preview: "denied by denylist" },
-    { seq: 2, tool: "read", policy: "allow:default:read:allow", actor: "policy", preview: "DATABASE_URL=postgres://u:p@h/db" },
+    { seq: 1, tool: "bash", policy: "deny:denylist:rm-rf", actor: "policy", preview: "denied by denylist", subject: "rm -rf /" },
+    { seq: 2, tool: "read", policy: "allow:default:read:allow", actor: "policy", preview: "DATABASE_URL=postgres://u:p@h/db", subject: ".env" },
   ],
   promptTokens: 10,
   completionTokens: 5,

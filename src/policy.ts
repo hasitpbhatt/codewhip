@@ -167,14 +167,25 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
 }
 
 export const POLICY_VERSION = "v1-2026-09-10";
-export function checkPermission(tool: ToolName, commandPreview: string, promoted: PromotedDeny[] = []): PermissionDecision {
-  const denied = matchDenylist(commandPreview);
-  if (denied !== null) {
-    return {
-      decision: "deny",
-      ruleId: `denylist:${denied}`,
-      reason: `matched non-overridable denylist "${denied}"`,
-    };
+export function checkPermission(
+  tool: ToolName,
+  commandPreview: string,
+  promoted: PromotedDeny[] = [],
+  /** Bench-only ablation: when the experiment moves policy CONTENT to the
+   * prompt arm, the denylist patterns and promoted denies must not fire
+   * harness-side (that is the variable under test). The structural denies
+   * (shell chaining, worktree escape) stay — they are the jail, not policy. */
+  opts?: { skipPolicyDenies?: boolean }
+): PermissionDecision {
+  if (opts?.skipPolicyDenies !== true) {
+    const denied = matchDenylist(commandPreview);
+    if (denied !== null) {
+      return {
+        decision: "deny",
+        ruleId: `denylist:${denied}`,
+        reason: `matched non-overridable denylist "${denied}"`,
+      };
+    }
   }
   // Any shell statement separator (incl. newline/CR, which are statement
   // separators on PowerShell and Unix) bypasses prefix allowlisting, so deny
@@ -200,14 +211,17 @@ export function checkPermission(tool: ToolName, commandPreview: string, promoted
   }
   // Promoted denies (policy.md, compiled from repeated human declines) beat
   // the allowlist and ask-defaults — refused before any token burns — but
-  // never the non-overridable denylist above.
-  const hit = matchesPromoted(tool, commandPreview, promoted);
-  if (hit !== null) {
-    return {
-      decision: "deny",
-      ruleId: `policy.md:deny:${hit.tool}:${hit.shape}`,
-      reason: `promoted deny from policy.md line ${hit.line} ("${hit.tool}:${hit.shape}")`,
-    };
+  // never the non-overridable denylist above. Skipped in the bench prompt-arm
+  // (policy content moved to the prompt is the variable under test).
+  if (opts?.skipPolicyDenies !== true) {
+    const hit = matchesPromoted(tool, commandPreview, promoted);
+    if (hit !== null) {
+      return {
+        decision: "deny",
+        ruleId: `policy.md:deny:${hit.tool}:${hit.shape}`,
+        reason: `promoted deny from policy.md line ${hit.line} ("${hit.tool}:${hit.shape}")`,
+      };
+    }
   }
   if (tool === "read" || tool === "search") {
     return {

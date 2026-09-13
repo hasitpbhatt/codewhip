@@ -94,6 +94,16 @@ export type LoopArgs = {
   /** Set on child runs: the delegating parent's runId (outcomes attribution —
    * child spend is folded into the parent's record; aggregators de-dup on this). */
   parentRunId?: string;
+  /**
+   * Bench-only ablation: "prompt" moves policy CONTENT (denylist patterns +
+   * promoted denies) out of the harness into the system prompt, which the
+   * bench composes. Structural denies (shell chaining, worktree escape) and
+   * the ask ladder stay harness-side in every arm. Default "harness".
+   */
+  policySurface?: "harness" | "prompt";
+  /** Bench-only ablation: false disables the run's idempotent-call memo and
+   * repeat nudge (RQ5 overthinking arm). Default true. */
+  repeatGuard?: boolean;
 };
 
 export type LoopTraceCall = {
@@ -103,6 +113,9 @@ export type LoopTraceCall = {
   actor: AuditActor;
   /** Redacted output/deny preview (capped) — safe to embed in a share bundle. */
   preview: string;
+  /** Permission subject (command/path/origin) for decision-log grading; ""
+   * for bad calls where no subject could be parsed. */
+  subject: string;
 };
 
 export type LoopResult = {
@@ -472,6 +485,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         parsed = null;
       }
       const hash = argsHash(parsed ?? call.argsJson);
+      let subjectVal = "";
       const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string, shape?: string): void => {
         calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId, ...(shape === undefined ? {} : { shape }) });
         // Per-call flush (P0): a crash loses at most one entry, never the trail.
@@ -485,7 +499,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             policy: `${decision}:${ruleId}`,
           });
         } catch { /* appendEntry never throws; belt-and-braces */ }
-        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500) });
+        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500), subject: subjectVal });
       };
       if (def === null || parsed === null) {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
@@ -526,7 +540,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       const subject = permissionSubject(def.name, parsed, preview);
-      const verdict = checkPermission(def.name, subject, promoted);
+      subjectVal = subject;
+      const verdict = checkPermission(def.name, subject, promoted, {
+        skipPolicyDenies: args.policySurface === "prompt",
+      });
       if (verdict.decision === "deny") {
         const out = `denied by ${verdict.ruleId}: ${verdict.reason}`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -630,7 +647,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // generation is served from the memo. Permission was still evaluated
       // above, so repeats stay visible on the audit trail, not hidden.
       const memoKey = `${def.name}:${hash}`;
-      if (IDEMPOTENT_TOOLS.has(def.name)) {
+      const guardOn = args.repeatGuard !== false;
+      if (guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
         const hit = memo.get(memoKey);
         if (hit !== undefined) {
           hit.repeats += 1;
@@ -686,7 +704,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (result.ok && (def.name === "edit" || def.name === "write")) {
         // The tree moved: every memoized read/search is now potentially stale.
         memo.clear();
-      } else if (result.ok && IDEMPOTENT_TOOLS.has(def.name)) {
+      } else if (result.ok && guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
         memo.set(memoKey, { output: result.output, repeats: 0 });
       }
       const redacted = redactSecrets(result.output);
