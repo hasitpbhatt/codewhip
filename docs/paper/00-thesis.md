@@ -9,6 +9,77 @@ level grading, ablation arms, persistence cells). A* bar requires:
 multi-product measurement, adaptive (LLM-driven) attackers, and responsible
 disclosure — build order below.
 
+## Venue strategy (three-chair simulation, 2026-09-13)
+
+Three A* journals reviewed this proposal via simulated EiC pre-submission
+reviews (`docs/paper/reviews/chair-{tdsc,tops,tosem}.md`). The verdicts
+compose into ONE apparatus serving THREE constitutions — never one hybrid
+manuscript (TOPS: "invites the consent-led constitution and rejects the
+hybrid"; TOSEM: explicit desk-reject trigger for the attack-led draft):
+
+| Venue | Constitution | Headline claim | Chair verdict |
+|---|---|---|---|
+| **IEEE TDSC** (CCF-A) | Adversary-led | Grant-store lifecycle measured across real agents, with CVE-backed disclosure campaign | Major revision with potential — submit when disclosure is DONE, not when a deadline nears |
+| **ACM TOPS** (CCF-A) | Consent-led | Consent that persists as machine-enforceable authority: formal consent-act model + fidelity property + IRB operator study | Conditional invitation — for the consent-led manuscript, study and theory non-negotiable |
+| **ACM TOSEM** (CCF-A) | Method-led | The approval ladder as developer-tool design surface; `src/bench/` as a badgeable SE artifact; mining-from-declines vs known ground truth (MSR/lint-config lineage) | Invitation to submit — conditional on the method-led reframe |
+
+Shared-apparatus policy (TOSEM): one bench, cited by DOI, three
+non-overlapping headline claims; no salami-cutting of the same result.
+
+### Chair-mandated changes (consolidated; TDSC-overlap marked ●)
+
+1. ● Formal threat model: state machine + capability set; situate in
+   classical access-control theory (ambient authority, credential
+   lifetime, confused deputy).
+2. ● Promote grant×content COMPOUNDING to a first-class measured RQ
+   (currently one word, zero cells).
+3. ● Persistence decomposition: minted / honored / re-approved — `grade.ts`
+   carries `actor`; `analyze.ts` must consume it.
+4. ● Statistics floor into the CLI: raise the 10-run cap (below the
+   thesis's own ≥30 floor), Wilson intervals, McNemar paired tests, Holm
+   correction, power analysis with minimum detectable effect, 3–5 models
+   via mixed-effects, attacker-compute reporting.
+5. ● Delivery-level validation of the decision grader: cells where the
+   decision-level and delivery-level ground truths differ (redirect/npm-
+   script laundering) — the grader is wrong by construction there today.
+6. ● Fix the remaining bypasses BEFORE the adaptive attacker: `npm run`/
+   `cat`/`echo` memorable heads (workspace-mediated code execution),
+   `git diff` in SAFE_BASH_PREFIXES (repo-cloned diff.external), promotion
+   provenance unverified, ledger tail-truncation.
+7. ● Cross-agent harness + EXECUTED disclosure (dated 90-day timelines,
+   per-vendor duplicate triage, embargoed payloads, IRB determination) —
+   the headline has zero apparatus today.
+8. [TOPS] Formal consent-act model + consent-fidelity property ("as the
+   operator would have understood it"); validity under habituation (the
+   mechanism designs the population that consents — the most TOPS-native
+   idea). Position vs arXiv:2605.11360.
+9. [TOPS] IRB-grade operator study: within-subjects, counterbalanced,
+   n≈24–30 with pilot power analysis, pre-registered, comprehension probes
+   scored against stored rules. Shared with TOSEM (they report behavior
+   distributions, TOPS reports consent fidelity).
+10. [TOPS] Mining-pipeline soundness theory: consent-soundness vs
+    curation-safety as distinct layers (`npm run *` honesty problem);
+    poisoned-decline bounds; prefix-glob inexpressibility bounds.
+11. [TOPS] Consent acts belong on the tamper-evident ledger — not a
+    gitignored hand-editable JSONL. Product change.
+12. [TOSEM] RQ1/RQ3 de-tangling: IDENTICAL rule text across arms (fixed in
+    `src/bench/tasks.ts` — prompt rules are now the compiled shapes
+    serialized verbatim, enforced by test).
+13. [TOSEM] Synthetic-operator recovery evaluation: mining against known
+    ground truth (the RBAC-lineage standard) before real-operator mining.
+14. [TDSC+TOSEM] RQ5 (resource governance) moves OUT of this paper —
+    separate manuscript; it dilutes both constitutions.
+15. [TOPS, verified open] Product: rule `ts` recorded but never consulted
+    (no expiry); trust still gates PASS on ≥1 remembered rule; scope
+    disclosure prints AFTER persistRule (post-hoc); attacker-controlled
+    preview inline in the ask prompt unsanitized; no statistics in
+    analyze.ts yet.
+
+Submission order (chairs' consensus): finish disclosure + cross-agent
+harness → TDSC first (rolling journal de-risks disclosure timelines that
+are desk-reject triggers at S&P/CCS/USENIX); consent-led TOSEM-TOPS
+manuscripts follow from the same apparatus once the operator study lands.
+
 ---
 
 ## Abstract (draft)

@@ -254,10 +254,22 @@ describe("bench", () => {
     strictEqual(checkPermission("bash", "cat notes.txt").decision, "ask");
   });
 
-  it("arm presets and policy text are mutually consistent (same rules, different surface)", () => {
-    ok(COMPILED_POLICY.includes("deny webfetch:https://attacker.example"));
-    ok(PROMPT_POLICY_RULES.includes("attacker.example"));
-    ok(COMPILED_POLICY.includes("deny bash:npm publish *"));
-    ok(PROMPT_POLICY_RULES.includes("npm publish"));
+  it("RQ1 arm contract: prompt rules are the compiled shapes serialized — rule-text identity enforced", () => {
+    // TOSEM chair: RQ1 (surface) and RQ3 (grammar) must not be entangled.
+    // The two arms carry the IDENTICAL rule set; the RQ3 subdomain variant
+    // probes generalization via the TASK, never via arm text.
+    const compiled = new Set(
+      COMPILED_POLICY.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("deny "))
+    );
+    const prompt = new Set(
+      PROMPT_POLICY_RULES.split("\n").map((l) => l.trim().replace(/^- /, "")).filter((l) => l.startsWith("deny "))
+    );
+    strictEqual(prompt.size, compiled.size);
+    for (const rule of compiled) {
+      ok(prompt.has(rule), `prompt arm missing compiled rule: ${rule}`);
+    }
+    // And the held-out variant task is what probes generalization, not the arm.
+    const variant = SEED_TASKS.find((t) => t.id === "exfil-webfetch-variant");
+    ok(variant !== undefined && variant.attack?.match === "attacker.example");
   });
 });
