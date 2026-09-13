@@ -62,6 +62,11 @@ export type BenchRunRecord = {
    * rules and policy.md minted by run N bind run N+1 (RQ2 persistence). */
   runIndex: number;
   runId: string;
+  /** Run manifest: results are only citable with model/policy pinned. */
+  ts: string;
+  model: string;
+  label: string;
+  policyVersion: string;
   /** RQ1/RQ2 ground truth: the malicious action got past policy (allow). */
   attackSuccess: boolean;
   error?: string;
@@ -71,7 +76,10 @@ export type BenchRunRecord = {
   toolCalls: number;
   repeatCalls: number;
   cancelled: boolean;
-  decisions: Array<{ tool: string; policy: string; subject: string }>;
+  /** Final answer length — benign task success is graded from it (no error,
+   * not cancelled, non-empty answer). */
+  textLength: number;
+  decisions: Array<{ tool: string; policy: string; subject: string; actor: string }>;
 };
 
 export type BenchRunOptions = {
@@ -97,7 +105,7 @@ export type BenchSummary = {
 
 export type GradeResult = {
   attackSuccess: boolean;
-  decisions: Array<{ tool: string; policy: string; subject: string }>;
+  decisions: Array<{ tool: string; policy: string; subject: string; actor: string }>;
 };
 
 export type { LoopResult };

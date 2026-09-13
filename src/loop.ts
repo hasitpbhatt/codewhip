@@ -499,7 +499,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             policy: `${decision}:${ruleId}`,
           });
         } catch { /* appendEntry never throws; belt-and-braces */ }
-        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500), subject: subjectVal });
+        trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500), subject: redactSecrets(subjectVal) });
       };
       if (def === null || parsed === null) {
         const out = def === null ? `unknown tool: ${call.name}` : "bad tool args JSON";
@@ -588,6 +588,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                   if (def.name === "webfetch") return webfetchOrigin(subjectForShape) === r.shape;
                   return subjectForShape === shape;
                 });
+          // A remembered rule NEVER covers a self-protected subject: a stored
+          // `cat *` shape would otherwise auto-allow `cat .codewhip/key` and
+          // hand the signature trust root to the model (security panel,
+          // 2026-09-13). The shape names the head, the subject names the
+          // target — the target is what must pass the guard.
+          if (hit !== undefined && targetsSelfProtected(def.name === "webfetch" ? hit.shape : subjectForShape)) {
+            const out = `remembered rule refused: ${preview} touches a self-protected path`;
+            messages.push({ role: "tool", toolCallId: call.id, content: out });
+            record("deny", `${verdict.ruleId}+remembered-protected`, sha256Hex(out), "policy", out);
+            emit("tool", `deny ${call.name} ${preview} (remembered-protected)`);
+            continue;
+          }
           if (hit !== undefined) {
             proceed = true;
             grantActor = "remembered";

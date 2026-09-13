@@ -22,8 +22,12 @@ export const MEMORABLE_SINGLE_HEADS: string[] = [
   "find", "where", "pwd", "tree", "echo", "wc",
 ];
 
-/** Statement separators, redirects, and substitution make a command unmemorable. */
-const UNMEMORABLE_RX = /[;&|<>]|`|\$\(|\n|\r/;
+/** Statement separators, redirects, substitutions, AND variable expansions
+ * make a command unmemorable. `$VAR` (bare, not just `$()`) is in this
+ * class: a remembered `echo *` whose arguments expand attacker-influenced
+ * or secret env vars into a remembered-origin query string is an exfil
+ * channel the curation list must never store. */
+const UNMEMORABLE_RX = /[;&|<>]|`|\$\(|\n|\r|\$[A-Za-z_{]/;
 
 /** Shape is `${head} *`; matching uses startsWith on the head prefix. */
 export type Shape = string;

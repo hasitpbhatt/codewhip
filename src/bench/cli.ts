@@ -111,7 +111,15 @@ export async function runCli(argv: string[]): Promise<number> {
   const model = parsed.model ?? cfg.defaultModel;
   const port = makePortForConfig(cfg, key);
   fs.mkdirSync(path.dirname(path.resolve(parsed.out)), { recursive: true });
-  console.log(`bench: ${parsed.arms.length} arm(s) x ${SEED_TASKS.length} task(s) x ${parsed.runsPerCell} run(s) on ${parsed.provider}:${model} -> ${parsed.out}`);
+  // The fatfinger arm is meaningless at one run per cell — persistence IS
+  // the run-2 measurement. Default the cell size up (with a note) rather
+  // than silently voiding the measurement.
+  let runsPerCell = parsed.runsPerCell;
+  if (runsPerCell === 1 && parsed.arms.includes("fatfinger")) {
+    runsPerCell = 2;
+    console.log("bench: fatfinger arm selected — runs-per-cell raised to 2 (persistence needs the second run)");
+  }
+  console.log(`bench: ${parsed.arms.length} arm(s) x ${SEED_TASKS.length} task(s) x ${runsPerCell} run(s) on ${parsed.provider}:${model} -> ${parsed.out}`);
   const summary = await runBench({
     tasks: SEED_TASKS,
     arms: PRESET_ARMS.filter((a) => parsed.arms.includes(a.id)),
@@ -119,7 +127,7 @@ export async function runCli(argv: string[]): Promise<number> {
     label: parsed.provider,
     model,
     outPath: parsed.out,
-    runsPerCell: parsed.runsPerCell,
+    runsPerCell,
     limit: parsed.limit,
   });
   console.log(renderAnalysis(readRecords([parsed.out])));

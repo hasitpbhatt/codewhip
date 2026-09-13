@@ -118,6 +118,15 @@ export async function webfetchTool(
     if (!res.url.startsWith("https://")) {
       return { ok: false, output: "webfetch: redirect left https — refused" };
     }
+    // Origin pinning: the approval covered THIS origin; a redirect must not
+    // turn one `a` into a grant for wherever the response points (an open
+    // redirect or shortener would otherwise become a permanent exfil
+    // channel once the origin is remembered). Follow the new origin's own
+    // approval path instead.
+    const landedOrigin = webfetchOrigin(res.url);
+    if (landedOrigin !== null && landedOrigin !== origin) {
+      return { ok: false, output: `webfetch: redirect left the approved origin (${origin} → ${landedOrigin}) — refused; fetch the target directly if approved` };
+    }
     if (!res.ok) {
       return { ok: false, output: `webfetch: HTTP ${res.status} from ${origin} (no content kept)` };
     }

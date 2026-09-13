@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { agentLoop, type ApprovalAnswer } from "../loop.js";
 import { SYSTEM_PROMPT } from "../system.js";
+import { POLICY_VERSION } from "../policy.js";
 import { listRules } from "../remember-store.js";
 import type { BenchArm, BenchRunOptions, BenchRunRecord, BenchSummary, BenchTask } from "./types.js";
 import { gradeRun } from "./grade.js";
@@ -14,6 +15,14 @@ import { gradeRun } from "./grade.js";
  * (remembered rules, minted denies) binds later runs — the RQ2 persistence
  * measurement. Records stream to the JSONL as they land; a crashed cell
  * records its error and never blocks the batch.
+ *
+ * Validity guarantees (engineers panel, 2026-09-13):
+ * - the scripted operator spans the whole CELL (one fat-finger per cell) —
+ *   per-run resets would measure re-success, not persistence;
+ * - arms are fail-closed: a "prompt"-surface arm without rule text throws
+ *   before any cell runs (otherwise the harness silently drops its denies);
+ * - reruns dedupe against existing (task, arm, run) rows in the out file;
+ * - manifest fields (ts/model/label/policyVersion) ride every record.
  */
 
 function scriptedAsk(arm: BenchArm, askCount: { n: number }): (q: string) => Promise<ApprovalAnswer> {
@@ -21,7 +30,8 @@ function scriptedAsk(arm: BenchArm, askCount: { n: number }): (q: string) => Pro
     askCount.n += 1;
     if (arm.ask === "yes") return Promise.resolve("yes");
     if (arm.ask === "fatfinger-always") {
-      // The semi-attentive operator: one fat-fingered `a`, then attentive.
+      // The semi-attentive operator: one fat-fingered `a` per CELL, then
+      // attentive for the rest of the cell (all runs).
       return Promise.resolve(askCount.n === 1 ? "always" : "no");
     }
     return Promise.resolve("no");
@@ -39,9 +49,45 @@ function materializeWorkspace(cwd: string, task: BenchTask, arm: BenchArm): void
   }
 }
 
+function rmWorkspace(cwd: string): void {
+  // Windows EBUSY can beat a just-closed subprocess handle; one retry.
+  try {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  } catch {
+    setTimeout(() => {
+      try {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      } catch { /* leave for OS temp cleanup */ }
+    }, 200).unref?.();
+  }
+}
+
+function existingCells(outPath: string): Set<string> {
+  const done = new Set<string>();
+  try {
+    for (const line of fs.readFileSync(outPath, "utf8").split("\n")) {
+      if (line.trim().length === 0) continue;
+      try {
+        const r = JSON.parse(line) as BenchRunRecord;
+        done.add(`${r.taskId}|${r.armId}|${r.runIndex}`);
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* fresh file */ }
+  return done;
+}
+
 export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
+  // Fail-closed arms: a prompt-surface arm without rule text would silently
+  // run with NO denies harness-side and NO rules in the prompt — the worst
+  // possible measurement. Refuse before touching a workspace.
+  for (const arm of opts.arms) {
+    if (arm.policySurface === "prompt" && (arm.promptPolicyRules === undefined || arm.promptPolicyRules.trim().length === 0)) {
+      throw new Error(`bench: arm "${arm.id}" sets policySurface "prompt" without promptPolicyRules — refuse to run ungoverned`);
+    }
+  }
   const runsPerCell = opts.runsPerCell ?? 1;
   const tasks = opts.limit === undefined ? opts.tasks : opts.tasks.slice(0, opts.limit);
+  const done = existingCells(opts.outPath);
   const rows: BenchRunRecord[] = [];
   for (const task of tasks) {
     for (const arm of opts.arms) {
@@ -53,6 +99,8 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
         // run would measure per-session re-success, not persistence.
         const askCount = { n: 0 };
         for (let runIndex = 1; runIndex <= runsPerCell; runIndex++) {
+          const cellKey = `${task.id}|${arm.id}|${runIndex}`;
+          if (done.has(cellKey)) continue; // rerun dedupe
           const systemPrompt =
             arm.policySurface === "prompt" && arm.promptPolicyRules !== undefined
               ? `${SYSTEM_PROMPT}\n\n${arm.promptPolicyRules}`
@@ -80,13 +128,7 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
             });
           } catch (err) {
             // agentLoop never throws by contract; belt for bench bugs.
-            rows.push({
-              taskId: task.id, taskClass: task.attackClass, armId: arm.id, runIndex, runId: "",
-              attackSuccess: false,
-              error: err instanceof Error ? err.message : "bench crash",
-              promptTokens: 0, completionTokens: 0, steps: 0, toolCalls: 0, repeatCalls: 0,
-              cancelled: false, decisions: [],
-            });
+            rows.push(benchErrorRecord(task, arm, runIndex, err instanceof Error ? err.message : "bench crash", opts));
             continue;
           }
           const g = gradeRun(task, r);
@@ -96,6 +138,10 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
             armId: arm.id,
             runIndex,
             runId: r.runId,
+            ts: new Date().toISOString(),
+            model: opts.model,
+            label: opts.label,
+            policyVersion: POLICY_VERSION,
             attackSuccess: g.attackSuccess,
             ...(r.error === undefined ? {} : { error: r.error }),
             promptTokens: r.promptTokens,
@@ -104,6 +150,7 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
             toolCalls: r.toolCalls,
             repeatCalls: r.repeatCalls,
             cancelled: r.cancelled,
+            textLength: r.text.length,
             decisions: g.decisions,
           };
           rows.push(record);
@@ -111,7 +158,7 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
         }
       } finally {
         if (opts.keepWorkspaces !== true) {
-          fs.rmSync(cwd, { recursive: true, force: true });
+          rmWorkspace(cwd);
         }
       }
     }
@@ -125,4 +172,16 @@ export async function runBench(opts: BenchRunOptions): Promise<BenchSummary> {
     agg.steps += row.steps;
   }
   return { runs: rows.length, byArm };
+}
+
+function benchErrorRecord(task: BenchTask, arm: BenchArm, runIndex: number, error: string, opts: BenchRunOptions): BenchRunRecord {
+  return {
+    taskId: task.id, taskClass: task.attackClass, armId: arm.id, runIndex, runId: "",
+    ts: new Date().toISOString(), model: opts.model, label: opts.label,
+    policyVersion: POLICY_VERSION,
+    attackSuccess: false,
+    error,
+    promptTokens: 0, completionTokens: 0, steps: 0, toolCalls: 0, repeatCalls: 0,
+    cancelled: false, textLength: 0, decisions: [],
+  };
 }

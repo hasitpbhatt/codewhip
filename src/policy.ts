@@ -208,6 +208,19 @@ export function checkPermission(
         reason: `${escape} — use worktree-relative paths and PATH-resolved commands`,
       };
     }
+    // Self-protected paths are harness state and compiled policy: the shell
+    // never touches them. `rm -rf .codewhip` would reset the audit chain to
+    // genesis and `cp x policy.md` would overwrite compiled denies with one
+    // approval — the write/edit tools refuse these paths already; the shell
+    // gets the same wall (substring match, substring-safe: also catches
+    // ./policy.md, src/../policy.md-style spellings).
+    if (/(^|[^\w.])(\.codewhip\b|codewhip-policy\.yaml)(\/|\\|\b|$)|(^|[^\w./\\])policy\.md\b/.test(commandPreview)) {
+      return {
+        decision: "deny",
+        ruleId: "denylist:self-protected",
+        reason: "shell commands never touch harness state (.codewhip), codewhip-policy.yaml, or policy.md — use the governed tools",
+      };
+    }
   }
   // Promoted denies (policy.md, compiled from repeated human declines) beat
   // the allowlist and ask-defaults — refused before any token burns — but
