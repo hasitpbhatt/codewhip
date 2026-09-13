@@ -19,7 +19,7 @@ import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "lepton" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -45,7 +45,6 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "sambanova",
   "chutes",
   "hyperbolic",
-  "lepton",
   "xai",
   "huggingface",
   "upstage",
@@ -59,6 +58,27 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "minimax",
   "stepfun",
   "ppio",
+  // Free-tier candidates harvested 2026-09-13 (freellm.net + peer directories,
+  // each cross-checked against a second source). All are free-key hops: none
+  // carries an anonymousKey, so none joins the chain without a stored key.
+  "cloudflare",
+  "modelscope",
+  "ovhcloud",
+  "ollama",
+  "cohere",
+  "siliconflow",
+  "aionlabs",
+  "agnes",
+  "requesty",
+  "inference",
+  "hetzner",
+  "venice",
+  "scaleway",
+  "friendli",
+  "nscale",
+  "nebius",
+  "ai21",
+  "coze",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -281,7 +301,12 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     envVar: "CEREBRAS_API_KEY",
     keyUrl: "https://cloud.cerebras.ai",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
-    rateLimitedHint: "free-tier numbers unpublished — wait and retry",
+    // Was a no-card free tier; Cerebras announced a move to a points/credit
+    // model (Aug 2026) — the grant requires a verified payment method and
+    // expires after 30 days, then bills pay-go. Deliberately NOT in FREE_CHAIN
+    // (see free-providers.ts): a --free run must never bill. Re-probe before
+    // restoring it there.
+    rateLimitedHint: "no forever-free tier: $5 credits need a verified card and expire in 30 days, then pay-go billing",
   },
   openrouter: {
     id: "openrouter",
@@ -365,14 +390,21 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
   chutes: {
     id: "chutes",
     brand: "chutes",
-    baseUrl: "https://api.chutes.ai",
+    // Chutes' own pricing page documents llm.chutes.ai as the inference host
+    // and lists no free tier (pay per 1M tokens, no subscription). The older
+    // api.chutes.ai host stays as a fallback so a stored key issued against it
+    // still resolves.
+    baseUrl: "https://llm.chutes.ai",
+    fallbackBaseUrls: ["https://api.chutes.ai"],
     chatPath: "/v1/chat/completions",
     modelsPath: "/v1/models",
     defaultModel: "deepseek-ai/DeepSeek-V3",
     envVar: "CHUTES_API_KEY",
     keyUrl: "https://chutes.ai",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
-    rateLimitedHint: "rate-limited free tier (Bittensor decentralized)",
+    // The sponsored free tier (~20B tokens/day via OpenRouter) was retired in
+    // 2026-03; pricing is now per-token. Removed from FREE_CHAIN accordingly.
+    rateLimitedHint: "pay-per-token, no free tier since 2026-03 — this provider bills",
   },
   hyperbolic: {
     id: "hyperbolic",
@@ -385,18 +417,6 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://hyperbolic.xyz",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "free daily credits",
-  },
-  lepton: {
-    id: "lepton",
-    brand: "lepton",
-    baseUrl: "https://api.lepton.ai",
-    chatPath: "/v1/chat/completions",
-    modelsPath: "/v1/models",
-    defaultModel: "llama3-70b",
-    envVar: "LEPTON_API_KEY",
-    keyUrl: "https://lepton.ai",
-    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
-    rateLimitedHint: "free quota on hosted open models",
   },
   xai: {
     id: "xai",
@@ -562,6 +582,245 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "free trial credits",
   },
+  // === Free-tier candidates harvested 2026-09-13 ===
+  // Sources: freellm.net/providers, awesome-freellm-apis, nejib1/Free-LLM,
+  // freellmpool, free-llm.com — every row confirmed on >=2 independent lists,
+  // with base URLs additionally checked against the @yola/client and aichat
+  // provider registries. Default models are best-known slugs, NOT live-probed:
+  // confirm with `codewhip models <id>` before relying on one.
+  cloudflare: {
+    id: "cloudflare",
+    brand: "cloudflare",
+    // Account-scoped: Workers AI serves the OpenAI-compatible surface under
+    // /accounts/<id>/ai, so the row carries a {PLACEHOLDER} resolved from the
+    // environment at call time (see resolveBaseUrl). Cloudflare's console calls
+    // the credential an "API token"; the env var follows this repo's *_API_KEY
+    // convention so `auth` and the test suite stay uniform.
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    envVar: "CLOUDFLARE_API_KEY",
+    keyUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free allowance is 10k neurons/day, shared across all models",
+  },
+  modelscope: {
+    id: "modelscope",
+    brand: "modelscope",
+    baseUrl: "https://api-inference.modelscope.cn",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "Qwen/Qwen3-32B",
+    envVar: "MODELSCOPE_API_KEY",
+    keyUrl: "https://modelscope.cn/my/myaccesstoken",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "2,000 requests/day total, <=500/day per model — requires real-name verification",
+  },
+  ovhcloud: {
+    id: "ovhcloud",
+    brand: "ovhcloud",
+    // OVH also serves an anonymous tier at 2 req/min; too slow to be a useful
+    // chain hop, so this row is keyed (400 req/min authenticated).
+    baseUrl: "https://oai.endpoints.kepler.ai.cloud.ovh.net",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "Meta-Llama-3_3-70B-Instruct",
+    envVar: "OVHCLOUD_API_KEY",
+    keyUrl: "https://endpoints.ai.cloud.ovh.net",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier: 2 req/min anonymous, 400 req/min authenticated — service is in beta",
+  },
+  ollama: {
+    id: "ollama",
+    brand: "ollama-cloud",
+    baseUrl: "https://ollama.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-oss:120b",
+    envVar: "OLLAMA_API_KEY",
+    keyUrl: "https://ollama.com/settings/keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "light usage tier: 1 concurrent model, session + weekly caps reset on a rolling window",
+  },
+  cohere: {
+    id: "cohere",
+    brand: "cohere",
+    // Cohere's OpenAI compatibility layer lives under /compatibility/v1 — the
+    // native /v2 surface is a different request shape and is not used here.
+    baseUrl: "https://api.cohere.com",
+    chatPath: "/compatibility/v1/chat/completions",
+    modelsPath: "/compatibility/v1/models",
+    defaultModel: "command-a-03-2025",
+    envVar: "COHERE_API_KEY",
+    keyUrl: "https://dashboard.cohere.com/api-keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "trial key: 20 req/min and ~1,000 req/month shared across models",
+  },
+  siliconflow: {
+    id: "siliconflow",
+    brand: "siliconflow",
+    baseUrl: "https://api.siliconflow.cn",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "Qwen/Qwen3-8B",
+    envVar: "SILICONFLOW_API_KEY",
+    keyUrl: "https://cloud.siliconflow.cn/account/ak",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free models: 30 req/min, 60k tokens/min — identity verification required. Global keys use api.siliconflow.com",
+  },
+  aionlabs: {
+    id: "aionlabs",
+    brand: "aionlabs",
+    baseUrl: "https://api.aionlabs.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "aion-labs/aion-1.0-mini",
+    envVar: "AIONLABS_API_KEY",
+    keyUrl: "https://aionlabs.ai/app/api-keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier ~15 req/min and ~20k tokens/day; no card required",
+  },
+  agnes: {
+    id: "agnes",
+    brand: "agnes",
+    baseUrl: "https://apihub.agnes-ai.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "agnes-2.0-flash",
+    envVar: "AGNES_API_KEY",
+    keyUrl: "https://platform.agnes-ai.com/settings/apiKeys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier ~30 req/min",
+  },
+  requesty: {
+    id: "requesty",
+    brand: "requesty",
+    baseUrl: "https://router.requesty.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    // Router: model ids are namespaced "<vendor>/<model>".
+    defaultModel: "openai/gpt-4o-mini",
+    envVar: "REQUESTY_API_KEY",
+    keyUrl: "https://app.requesty.ai/api-keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free models: 60 req/min, 200 req/day",
+  },
+  inference: {
+    id: "inference",
+    brand: "inference.net",
+    baseUrl: "https://api.inference.net",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "meta-llama/llama-3.1-70b-instruct",
+    envVar: "INFERENCE_API_KEY",
+    keyUrl: "https://inference.net",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier ~30 req/min under a fair-use policy",
+  },
+  hetzner: {
+    id: "hetzner",
+    brand: "hetzner",
+    // Experimental product: no SLA, and Hetzner has said billing may be
+    // introduced once it leaves the experimental phase.
+    baseUrl: "https://inference.hetzner.com",
+    chatPath: "/api/v1/chat/completions",
+    modelsPath: "/api/v1/models",
+    defaultModel: "Qwen/Qwen3.6-35B-A3B",
+    envVar: "HETZNER_API_KEY",
+    keyUrl: "https://experiments.hetzner.com/inference",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "experimental + EU-hosted, no SLA: 3M in / 60k out tokens per 60s",
+  },
+  venice: {
+    id: "venice",
+    brand: "venice",
+    baseUrl: "https://api.venice.ai",
+    chatPath: "/api/v1/chat/completions",
+    modelsPath: "/api/v1/models",
+    defaultModel: "llama-3.3-70b",
+    envVar: "VENICE_API_KEY",
+    keyUrl: "https://venice.ai/settings/api",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier 10 req/min; provider advertises no prompt logging",
+  },
+  scaleway: {
+    id: "scaleway",
+    brand: "scaleway",
+    baseUrl: "https://api.scaleway.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "llama-3.3-70b-instruct",
+    envVar: "SCALEWAY_API_KEY",
+    keyUrl: "https://console.scaleway.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "1M free tokens (one-time, per model) — EU/GDPR-hosted",
+  },
+  friendli: {
+    id: "friendli",
+    brand: "friendli",
+    baseUrl: "https://inference.friendli.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "meta-llama/Llama-3.3-70B-Instruct",
+    envVar: "FRIENDLI_API_KEY",
+    keyUrl: "https://suite.friendli.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "$10 one-time trial credits; ~60 req/min",
+  },
+  nscale: {
+    id: "nscale",
+    brand: "nscale",
+    baseUrl: "https://inference.api.nscale.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "meta-llama/Llama-3.3-70B-Instruct",
+    envVar: "NSCALE_API_KEY",
+    keyUrl: "https://console.nscale.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "$5 one-time signup credit (no card), then fair-use metering",
+  },
+  nebius: {
+    id: "nebius",
+    brand: "nebius",
+    // Token Factory is the OpenAI-compatible surface; the older
+    // api.studio.nebius.com host serves the same models under the same key.
+    baseUrl: "https://api.tokenfactory.nebius.com",
+    fallbackBaseUrls: ["https://api.studio.nebius.com"],
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "meta-llama/Llama-3.3-70B-Instruct",
+    envVar: "NEBIUS_API_KEY",
+    keyUrl: "https://studio.nebius.com/settings/api-keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "~60 req/min; the free grant is $1 and requires a card on file",
+  },
+  ai21: {
+    id: "ai21",
+    brand: "ai21",
+    baseUrl: "https://api.ai21.com",
+    chatPath: "/studio/v1/chat/completions",
+    modelsPath: "/studio/v1/models",
+    defaultModel: "jamba-large-1.7",
+    envVar: "AI21_API_KEY",
+    keyUrl: "https://studio.ai21.com/account/api-key",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "$10 trial credits expiring after 3 months; 200 req/min, 10 req/s",
+  },
+  coze: {
+    id: "coze",
+    brand: "coze",
+    // ByteDance's Coze is bot-oriented: the OpenAI-compatible route proxies a
+    // hosted bot, so model ids are coarse and quota is token-based per day.
+    baseUrl: "https://api.coze.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o",
+    envVar: "COZE_API_KEY",
+    keyUrl: "https://www.coze.com/open/oauth/pats",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier is token-metered with daily resets — limits vary per proxied model",
+  },
 };
 
 export function parseProviderId(value: string | undefined): BuiltinProviderId | null {
@@ -570,12 +829,41 @@ export function parseProviderId(value: string | undefined): BuiltinProviderId | 
     : null;
 }
 
+/**
+ * Some providers scope their API by a per-user id in the path — Cloudflare
+ * Workers AI serves the OpenAI-compatible surface under
+ * `/accounts/<account_id>/ai`. The id is not a secret but it is per-user, so a
+ * row carries a `{ENV_VAR}` placeholder resolved from the environment when the
+ * URL is built rather than being hardcoded.
+ *
+ * Substitution happens ONLY at URL construction. `candidateBaseUrls()` and the
+ * `host` recorded in provider-stats.jsonl keep the template, so no account id
+ * is ever written to disk or into the stats log.
+ */
+const BASE_URL_PLACEHOLDER = /\{([A-Z][A-Z0-9_]*)\}/g;
+
+/** Env var names a base URL still needs before it can be called (empty = ready). */
+export function unresolvedBaseUrlVars(baseUrl: string): string[] {
+  const missing: string[] = [];
+  for (const match of baseUrl.matchAll(BASE_URL_PLACEHOLDER)) {
+    if ((process.env[match[1]] ?? "").length === 0) {
+      missing.push(match[1]);
+    }
+  }
+  return missing;
+}
+
+/** Fill `{ENV_VAR}` placeholders from the environment. Unset vars become "". */
+export function resolveBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(BASE_URL_PLACEHOLDER, (_whole, name: string) => process.env[name] ?? "");
+}
+
 export function chatUrlFor(cfg: ProviderConfig): string {
-  return `${cfg.baseUrl}${cfg.chatPath}`;
+  return `${resolveBaseUrl(cfg.baseUrl)}${cfg.chatPath}`;
 }
 
 export function modelsUrlFor(cfg: ProviderConfig): string {
-  return `${cfg.baseUrl}${cfg.modelsPath}`;
+  return `${resolveBaseUrl(cfg.baseUrl)}${cfg.modelsPath}`;
 }
 
 /**
@@ -912,6 +1200,13 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
     if (apiKey.length === 0) {
       return { ok: false, error: "missing api key", retryable: "other" };
     }
+    // Fail loudly on an account-scoped base URL whose id env var is unset:
+    // otherwise the empty path segment turns into a confusing 404 that reads
+    // as "unknown model".
+    const missingVars = unresolvedBaseUrlVars(cfg.baseUrl);
+    if (missingVars.length > 0) {
+      return { ok: false, error: `${brand} needs ${missingVars.join(", ")} set (account-scoped base url)`, retryable: "other" };
+    }
     if (model.length === 0 || model.length > 200) {
       return { ok: false, error: "bad model id (empty or >200 chars)", retryable: "other" };
     }
@@ -977,7 +1272,7 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
       const hosts = candidateBaseUrls(cfg);
       let lastFailure: PortFailure | null = null;
       for (let i = 0; i < hosts.length; i++) {
-        const url = `${hosts[i]}${cfg.chatPath}`;
+        const url = `${resolveBaseUrl(hosts[i])}${cfg.chatPath}`;
         let useStream = wantStream;
         let attempts = 0;
         // One streaming attempt, then at most one non-streaming retry on the

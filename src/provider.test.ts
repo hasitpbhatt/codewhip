@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
-import { chatUrlFor, modelsUrlFor, makePort, makePortForConfig, parseProviderId, isBuiltinProviderId, PROVIDERS, PROVIDER_IDS, DEFAULT_CHAT_TIMEOUT_MS, setStreamingEnabled } from "./provider.js";
+import { chatUrlFor, modelsUrlFor, makePort, makePortForConfig, parseProviderId, isBuiltinProviderId, PROVIDERS, PROVIDER_IDS, DEFAULT_CHAT_TIMEOUT_MS, setStreamingEnabled, unresolvedBaseUrlVars } from "./provider.js";
 import { parseRetryAfter } from "./provider.js";
 
 /** Build a Response whose body is the given SSE text, one chunk per string. */
@@ -149,6 +149,63 @@ describe("provider", () => {
     strictEqual(PROVIDERS.gemini.anonymousKey, undefined);
     strictEqual(PROVIDERS.zai.anonymousKey, undefined);
   });
+  it("free-tier candidates harvested 2026-09-13 ride their verified endpoints", () => {
+    const expected: Array<[string, string, string]> = [
+      ["modelscope", "https://api-inference.modelscope.cn/v1/chat/completions", "https://api-inference.modelscope.cn/v1/models"],
+      ["ovhcloud", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models"],
+      ["ollama", "https://ollama.com/v1/chat/completions", "https://ollama.com/v1/models"],
+      ["cohere", "https://api.cohere.com/compatibility/v1/chat/completions", "https://api.cohere.com/compatibility/v1/models"],
+      ["siliconflow", "https://api.siliconflow.cn/v1/chat/completions", "https://api.siliconflow.cn/v1/models"],
+      ["aionlabs", "https://api.aionlabs.ai/v1/chat/completions", "https://api.aionlabs.ai/v1/models"],
+      ["agnes", "https://apihub.agnes-ai.com/v1/chat/completions", "https://apihub.agnes-ai.com/v1/models"],
+      ["requesty", "https://router.requesty.ai/v1/chat/completions", "https://router.requesty.ai/v1/models"],
+      ["inference", "https://api.inference.net/v1/chat/completions", "https://api.inference.net/v1/models"],
+      ["hetzner", "https://inference.hetzner.com/api/v1/chat/completions", "https://inference.hetzner.com/api/v1/models"],
+      ["venice", "https://api.venice.ai/api/v1/chat/completions", "https://api.venice.ai/api/v1/models"],
+      ["scaleway", "https://api.scaleway.ai/v1/chat/completions", "https://api.scaleway.ai/v1/models"],
+      ["friendli", "https://inference.friendli.ai/v1/chat/completions", "https://inference.friendli.ai/v1/models"],
+      ["nscale", "https://inference.api.nscale.com/v1/chat/completions", "https://inference.api.nscale.com/v1/models"],
+      ["nebius", "https://api.tokenfactory.nebius.com/v1/chat/completions", "https://api.tokenfactory.nebius.com/v1/models"],
+      ["ai21", "https://api.ai21.com/studio/v1/chat/completions", "https://api.ai21.com/studio/v1/models"],
+      ["coze", "https://api.coze.com/v1/chat/completions", "https://api.coze.com/v1/models"],
+    ];
+    for (const [id, chat, models] of expected) {
+      strictEqual(chatUrlFor(PROVIDERS[id as keyof typeof PROVIDERS]), chat, id);
+      strictEqual(modelsUrlFor(PROVIDERS[id as keyof typeof PROVIDERS]), models, id);
+    }
+    // None of the new batch may fake keyless access: they are keyed hops only.
+    for (const id of ["cloudflare", "modelscope", "ovhcloud", "ollama", "cohere", "siliconflow", "aionlabs", "agnes", "requesty", "inference", "hetzner", "venice", "scaleway", "friendli", "nscale", "nebius", "ai21", "coze"] as const) {
+      strictEqual(PROVIDERS[id].anonymousKey, undefined, id);
+    }
+  });
+  it("account-scoped base urls resolve {ENV} placeholders and refuse to run unset", async () => {
+    strictEqual(PROVIDERS.cloudflare.baseUrl, "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai");
+    const prev = process.env.CLOUDFLARE_ACCOUNT_ID;
+    try {
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      strictEqual(unresolvedBaseUrlVars(PROVIDERS.cloudflare.baseUrl).join(","), "CLOUDFLARE_ACCOUNT_ID");
+      // A ready provider reports no missing vars.
+      strictEqual(unresolvedBaseUrlVars(PROVIDERS.nvidia.baseUrl).length, 0);
+      // Unset placeholder collapses to an empty segment rather than throwing…
+      strictEqual(chatUrlFor(PROVIDERS.cloudflare), "https://api.cloudflare.com/client/v4/accounts//ai/v1/chat/completions");
+      // …but the port refuses the call with a pointed error, not a 404.
+      const port = makePort("cloudflare", "test-key");
+      const res = await port({ model: "m", messages: [], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      ok(res.error.includes("CLOUDFLARE_ACCOUNT_ID"), res.error);
+      // With the id set, the template resolves and the call is allowed through.
+      process.env.CLOUDFLARE_ACCOUNT_ID = "acct-123";
+      strictEqual(chatUrlFor(PROVIDERS.cloudflare), "https://api.cloudflare.com/client/v4/accounts/acct-123/ai/v1/chat/completions");
+      strictEqual(unresolvedBaseUrlVars(PROVIDERS.cloudflare.baseUrl).length, 0);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      } else {
+        process.env.CLOUDFLARE_ACCOUNT_ID = prev;
+      }
+    }
+  });
   it("every registered provider builds a valid port and config", () => {
     for (const id of PROVIDER_IDS) {
       const cfg = PROVIDERS[id];
@@ -160,7 +217,7 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 34);
+    strictEqual(PROVIDER_IDS.length, 51);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");

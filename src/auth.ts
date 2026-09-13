@@ -29,7 +29,9 @@ type StoredCreds = {
   sambanovaApiKey?: unknown;
   chutesApiKey?: unknown;
   hyperbolicApiKey?: unknown;
-  leptonApiKey?: unknown;
+  // lepton removed 2026-09-13: Lepton AI ceased operations 2025-05-20 after
+  // the NVIDIA acquisition and api.lepton.ai no longer resolves. A leftover
+  // leptonApiKey in an existing credentials.json is simply ignored.
   xaiApiKey?: unknown;
   huggingfaceApiKey?: unknown;
   upstageApiKey?: unknown;
@@ -43,6 +45,25 @@ type StoredCreds = {
   minimaxApiKey?: unknown;
   stepfunApiKey?: unknown;
   ppioApiKey?: unknown;
+  // Free-tier candidates harvested 2026-09-13.
+  cloudflareApiKey?: unknown;
+  modelscopeApiKey?: unknown;
+  ovhcloudApiKey?: unknown;
+  ollamaApiKey?: unknown;
+  cohereApiKey?: unknown;
+  siliconflowApiKey?: unknown;
+  aionlabsApiKey?: unknown;
+  agnesApiKey?: unknown;
+  requestyApiKey?: unknown;
+  inferenceApiKey?: unknown;
+  hetznerApiKey?: unknown;
+  veniceApiKey?: unknown;
+  scalewayApiKey?: unknown;
+  friendliApiKey?: unknown;
+  nscaleApiKey?: unknown;
+  nebiusApiKey?: unknown;
+  ai21ApiKey?: unknown;
+  cozeApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -69,7 +90,6 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   sambanova: "sambanovaApiKey",
   chutes: "chutesApiKey",
   hyperbolic: "hyperbolicApiKey",
-  lepton: "leptonApiKey",
   xai: "xaiApiKey",
   huggingface: "huggingfaceApiKey",
   upstage: "upstageApiKey",
@@ -83,6 +103,25 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   minimax: "minimaxApiKey",
   stepfun: "stepfunApiKey",
   ppio: "ppioApiKey",
+  // Free-tier candidates harvested 2026-09-13.
+  cloudflare: "cloudflareApiKey",
+  modelscope: "modelscopeApiKey",
+  ovhcloud: "ovhcloudApiKey",
+  ollama: "ollamaApiKey",
+  cohere: "cohereApiKey",
+  siliconflow: "siliconflowApiKey",
+  aionlabs: "aionlabsApiKey",
+  agnes: "agnesApiKey",
+  requesty: "requestyApiKey",
+  inference: "inferenceApiKey",
+  hetzner: "hetznerApiKey",
+  venice: "veniceApiKey",
+  scaleway: "scalewayApiKey",
+  friendli: "friendliApiKey",
+  nscale: "nscaleApiKey",
+  nebius: "nebiusApiKey",
+  ai21: "ai21ApiKey",
+  coze: "cozeApiKey",
 };
 
 function customFieldFor(provider: string): string {

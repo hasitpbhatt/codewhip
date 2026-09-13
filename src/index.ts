@@ -219,7 +219,9 @@ function costNote(provider: string, model?: string): string {
   // are $0 only on their free-suffixed models; empero's endpoint is openly
   // free but logs prompts). Everything else bills or caps in provider-
   // specific ways — point at their console, not fiction.
-  if (provider === "nvidia" || provider === "groq" || provider === "cerebras" || provider === "gemini" || provider === "zai") {
+  // cerebras was removed here 2026-09-13: its grant needs a verified card and
+  // expires in 30 days, so "$0 (cerebras free tier)" became a fiction.
+  if (provider === "nvidia" || provider === "groq" || provider === "gemini" || provider === "zai") {
     return `$0.0000 (${provider} free tier)`;
   }
   if (provider === "empero") {

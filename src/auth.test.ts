@@ -15,8 +15,8 @@ for (const p of PROVIDER_IDS) {
 process.env[envKey] = dir;
 
 describe("auth", () => {
-  it("registry supports all sixteen builtin providers", () => {
-    strictEqual(PROVIDER_IDS.length, 34);
+  it("registry supports every builtin provider", () => {
+    strictEqual(PROVIDER_IDS.length, 51);
   });
   it("keyless free tiers fall back to their verified anonymous keys", () => {
     strictEqual(resolveKey("kilo").source, "anonymous");

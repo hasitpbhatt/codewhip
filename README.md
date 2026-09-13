@@ -361,10 +361,27 @@ key at all**:
 | opencode | yes — Zen's anonymous `public` key + identity headers, handled by codewhip | `OPENCODE_API_KEY` (optional) | https://opencode.ai/zen |
 | empero | yes — openly free endpoint (`free` placeholder key) | `EMPERO_API_KEY` (optional) | https://free.empero.org |
 | groq | free key required | `GROQ_API_KEY` | https://console.groq.com/keys |
-| cerebras | free key required | `CEREBRAS_API_KEY` | https://cloud.cerebras.ai |
+| cerebras | ⚠ no longer free — see note below | `CEREBRAS_API_KEY` | https://cloud.cerebras.ai |
 | openrouter | free key required | `OPENROUTER_API_KEY` | https://openrouter.ai/keys |
 | gemini | free key required | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | zai | free key required | `ZAI_API_KEY` | https://z.ai |
+
+A further **18 free-key tiers** joined the registry on 2026-09-13 (harvested
+from freellm.net and peer directories, each cross-checked against a second
+source): `cloudflare`, `modelscope`, `ovhcloud`, `ollama`, `cohere`,
+`siliconflow`, `aionlabs`, `agnes`, `requesty`, `inference`, `hetzner`,
+`venice`, `scaleway`, `friendli`, `nscale`, `nebius`, `ai21`, `coze`. All 18
+require a key — none runs keyless — so they join a `--free` run only once you
+add one. Their `defaultModel` values are catalog-derived rather than
+live-probed (confirm with `codewhip models <id>`), and `cloudflare` additionally
+needs `CLOUDFLARE_ACCOUNT_ID`, because Workers AI scopes its API by account id.
+
+Three rows were repaired the same day because they had stopped being truthful:
+`cerebras` (now needs a verified card, grant expires in 30 days) and `chutes`
+(pay-per-token since 2026-03) both left the free chain — a `--free` run must
+never bill — and `lepton` was removed outright (Lepton AI ceased operations
+2025-05-20; `api.lepton.ai` no longer resolves). `cerebras` and `chutes` stay
+usable via `--provider`; they are simply no longer *free*.
 
 Every free-tier default is priced `$0` on the receipt — never fiction-priced,
 and non-free models on the same gateway print `cost untracked`.

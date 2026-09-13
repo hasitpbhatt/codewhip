@@ -46,7 +46,10 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   parity path (free-tier slice shipped 2026-09-11: 8 free gateways — 4 keyless
   (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain;
   SSE streaming + first-byte/idle timeouts + timeout-classification fix shipped
-  2026-09-12).
+  2026-09-12; +18 free-key tiers and the lepton/chutes/cerebras rot repair
+  shipped 2026-09-13 — 51 builtins, 44 free-chain hops). Still open: the
+  local-model parity path — `routeFor("private")` returns "not wired", so the
+  router's `private` class has no local provider behind it.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

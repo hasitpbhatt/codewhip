@@ -69,6 +69,11 @@ describe("router", () => {
     strictEqual(estimateCost("nvidia", "moonshotai/kimi-k3", 10000, 5000), 0);
     strictEqual(estimateCost("sensenova", "sensenova-6.8-flash-lite", 10000, 5000), null);
   });
+  it("stops pricing cerebras $0 once its free tier required a card (rot repair 2026-09-13)", () => {
+    // Regression: the $0 sticker was a fiction after Cerebras moved to
+    // card-bound credits. Unpriced is the honest answer.
+    strictEqual(estimateCost("cerebras", "qwen-3-coder-480b", 1000, 1000), null);
+  });
   it("prices every free-chain default $0 (not null)", () => {
     const pairs: Array<[string, string]> = [
       ["groq", "openai/gpt-oss-120b"],
@@ -76,7 +81,6 @@ describe("router", () => {
       ["kilo", "cohere/north-mini-code:free"],
       ["openrouter", "nvidia/nemotron-3-super-120b-a12b:free"],
       ["gemini", "gemini-2.5-flash"],
-      ["cerebras", "qwen-3-coder-480b"],
       ["zai", "glm-5.3-flash"],
       ["empero", "glm-5.3-flash"],
     ];

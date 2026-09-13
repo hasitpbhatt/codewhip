@@ -1,4 +1,4 @@
-import { candidateBaseUrls, pinHost } from "./provider.js";
+import { candidateBaseUrls, pinHost, resolveBaseUrl, unresolvedBaseUrlVars } from "./provider.js";
 import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
 import { getProviderConfig } from "./custom-providers.js";
 
@@ -139,12 +139,18 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
   if (cfg === null) {
     return { ok: false, error: `unknown provider "${provider}" (see: codewhip provider list)` };
   }
+  // Account-scoped base URLs (Cloudflare) need their id env var before the
+  // path is valid — say so instead of returning a 404-shaped model error.
+  const missingVars = unresolvedBaseUrlVars(cfg.baseUrl);
+  if (missingVars.length > 0) {
+    return { ok: false, error: `${provider} needs ${missingVars.join(", ")} set (account-scoped base url)` };
+  }
   // Try each candidate host; fall back to the next only on auth rejection, and
   // pin the first host that serves a model list (sticky across runs).
   const hosts = candidateBaseUrls(cfg);
   let lastError = "";
   for (const host of hosts) {
-    const url = `${host}${cfg.modelsPath}`;
+    const url = `${resolveBaseUrl(host)}${cfg.modelsPath}`;
     let res: Response;
     try {
       res = await fetch(url, {

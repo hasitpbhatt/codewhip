@@ -94,7 +94,8 @@ const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> =
   "openrouter:nvidia/nemotron-3-super-120b-a12b:free": { input: 0, output: 0 },
   "gemini:gemini-2.5-flash": { input: 0, output: 0 },
   "groq:openai/gpt-oss-120b": { input: 0, output: 0 },
-  "cerebras:qwen-3-coder-480b": { input: 0, output: 0 },
+  // cerebras dropped 2026-09-13: its grant now needs a verified card and
+  // expires in 30 days, so a $0 sticker would be fiction.
   "zai:glm-5.3-flash": { input: 0, output: 0 },
   "empero:glm-5.3-flash": { input: 0, output: 0 },
 };
