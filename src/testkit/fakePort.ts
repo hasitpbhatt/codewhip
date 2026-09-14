@@ -48,6 +48,10 @@ export function timeoutFailure(): ChatPortResponse {
 export function authFailure(): ChatPortResponse {
   return { ok: false, error: "invalid key", retryable: "auth" };
 }
+/** Shorthand: an upstream 5xx — joins the rotation path, like a timeout. */
+export function serverFailure(status = 503): ChatPortResponse {
+  return { ok: false, error: `test api error ${status}. upstream maintenance`, retryable: "server" };
+}
 /** Shorthand: a non-retryable failure. */
 export function otherFailure(): ChatPortResponse {
   return { ok: false, error: "something else", retryable: "other" };

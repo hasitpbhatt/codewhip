@@ -64,6 +64,13 @@ type StoredCreds = {
   nebiusApiKey?: unknown;
   ai21ApiKey?: unknown;
   cozeApiKey?: unknown;
+  /** id is "1min"; the field is `onemin…` to pair with ONEMIN_API_KEY (a
+   *  POSIX env name cannot begin with a digit). */
+  oneminApiKey?: unknown;
+  /** id is "hcnsec" (api.hcnsec.cn) — a New API gateway. */
+  hcnsecApiKey?: unknown;
+  /** id is "hashneuron" (hashneuron.space) — the RouteOpen gateway. */
+  hashneuronApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -122,6 +129,9 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   nebius: "nebiusApiKey",
   ai21: "ai21ApiKey",
   coze: "cozeApiKey",
+  "1min": "oneminApiKey",
+  hcnsec: "hcnsecApiKey",
+  hashneuron: "hashneuronApiKey",
 };
 
 function customFieldFor(provider: string): string {

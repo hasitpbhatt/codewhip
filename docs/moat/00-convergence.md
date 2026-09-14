@@ -147,3 +147,15 @@ P1 — trust that spreads:
   outcome records with `parent_run_id` for metrics de-dup) — delegation
   grants no authority beyond read/search/webfetch and widens the audit
   surface. Full reasoning and committee re-review: `docs/moat/*-subagents-review.md`.
+
+- 2026-09-14 — **Sessions schema v1 (multi-turn, opt-in).** `src/sessions.ts`
+  persists one `{ v: 1, ts, runId, provider, model, messages }` object per run
+  at `.codewhip/sessions/<runId>.json`, rewritten (not appended) at end of
+  each `--continue` run. `outcomes.jsonl` keeps `prompt_hash` only; the
+  session file holds raw prompts by design, so writes happen exclusively
+  under an explicit `--continue` arm (banner + `raw prompts on disk` notice),
+  with `redactSecrets` at write time, `mkdir 0o700` / file `0o600`, and the
+  system message stripped (rebuilt fresh on resume — roster/plan banner
+  drift between runs). `share.ts` bundles never sweep `sessions/`; the REPL
+  threads one in-memory transcript and saves once on `.exit`. Session-scoped
+  (`s`) approvals stay per-invocation in v1 — noted follow-up, no scope creep.

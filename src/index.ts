@@ -5,13 +5,15 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
-import { addCustomProvider, getProviderConfig, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
+import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
 import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
+import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
+import { listSessions, loadSession, saveSession } from "./sessions.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
@@ -23,6 +25,7 @@ import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
 import { removeRule } from "./remember-store.js";
 import { isVerdict, resolveRunPrefix, setVerdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
+import type { ServeOptions } from "./serve.js";
 import {
   clearKey,
   configDir,
@@ -55,6 +58,14 @@ type RunOptions = {
   plan: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
+  /**
+   * Opt-in conversation memory: resume a prior session (bare = most recent,
+   * else that prefix) and persist the new transcript on exit. Implies
+   * persistence — raw prompts land on disk (secrets redacted).
+   */
+  continue: boolean;
+  /** Prefix for --continue (undefined = most recent). */
+  continuePrefix?: string;
   /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
   timeoutMs?: number;
   /** Disable SSE streaming (whole-body responses) — escape hatch per run. */
@@ -67,7 +78,7 @@ type RunOptions = {
 function printRunOptions(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
-  console.log(`  --models <a,b,c>     rotate models in order on rate-limit/timeout, each once per run (default: off)`);
+  console.log(`  --models <a,b,c>     rotate models in order on rate-limit/timeout/5xx, each once per run (default: off)`);
   console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
   console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
@@ -75,10 +86,11 @@ function printRunOptions(): void {
   console.log(`  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})`);
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
-  console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout per run (default: off; may bill pay-go)");
-  console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
+  console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout/5xx per run (default: off; may bill pay-go)");
+  console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
+  console.log("  --continue [prefix]  resume a prior session (bare = most recent, prefix >=4 chars) and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
 }
 
@@ -128,6 +140,17 @@ function printCommandHelp(topic: string): boolean {
     case "free":
       console.log("codewhip free — list the free-provider chain (read-only: no key, no network).");
       console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
+      return true;
+    case "serve":
+      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>]");
+      console.log("  Exposes the provider registry as an OpenAI-compatible HTTP server:");
+      console.log("    POST /v1/chat/completions   stream and non-stream; model = \"<provider>:<model>\"");
+      console.log("    GET  /v1/models             every provider as \"<provider>:<default-model>\"");
+      console.log("    GET  /health");
+      console.log("  Defaults to llm7 (keyless) so it works with no setup. Any OpenAI client can point at it,");
+      console.log("  including the ones that cannot speak to a non-OpenAI provider such as 1min.");
+      console.log("  Binds 127.0.0.1 unless --host is given; a non-loopback bind REQUIRES --token.");
+      console.log("  This proxies models only — it runs no tools, applies no policy, and writes no audit entries.");
       return true;
     case "audit":
       console.log("codewhip audit [--verify|--last <n>|--replay <runId>|--export <file>] — inspect the hash-chained log.");
@@ -179,13 +202,18 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip rollback --list         — runs with checkpoints (newest first).");
       console.log("  Every edit/write is snapshotted automatically (sha256-verified before the restore touches anything).");
       return true;
+    case "sessions":
+      console.log("codewhip sessions — list saved conversation transcripts (newest first; opt-in via --continue only).");
+      console.log('  Resume: codewhip run "<prompt>" --continue [prefix] (bare = most recent, prefix >=4 chars, unique).');
+      console.log("  Each row: prefix, timestamp, provider:model, message count, first-prompt preview (redacted, 60 chars).");
+      return true;
     default:
       return false;
   }
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider rollback audit metrics stats trust verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider serve rollback sessions audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -202,7 +230,9 @@ function printHelp(): void {
   console.log("  models [provider]    list served models with agency tags (default: nvidia)");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
   console.log("  free                 list the free-provider chain (keyless rows first, limits, key consoles)");
+  console.log("  serve                expose the providers as an OpenAI-compatible HTTP server (--port/--token)");
   console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
+  console.log("  sessions             list saved conversation transcripts (newest first; --continue to resume)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
   console.log("  metrics              aggregate outcomes into the H1 bars (blocks/100, $/task, memory/week)");
   console.log("  stats [provider]     per-provider/model request health (ok/auth/quota/timeout/network/bad_model/other)");
@@ -244,7 +274,16 @@ function costNote(provider: string, model?: string): string {
   } else if (provider === "opencode" && m.endsWith("-free")) {
     return "$0.0000 (free model)";
   }
-  const keyUrl = getProviderConfig(provider)?.keyUrl;
+  // A loopback local runtime is genuinely $0 marginal and has NO console to
+  // check, so "cost untracked (see provider console)" there sends the user
+  // looking for a bill that cannot exist. Keep this branch in step with
+  // `estimateCost()` in router.ts — the receipt and the polish gate read the
+  // same route through two different functions, so they can silently disagree.
+  const cfg = getProviderConfig(provider);
+  if (cfg !== null && isLoopbackBaseUrl(cfg.baseUrl)) {
+    return "$0.0000 (local runtime — your own machine)";
+  }
+  const keyUrl = cfg?.keyUrl;
   return keyUrl !== undefined && keyUrl.length > 0
     ? `cost untracked (see ${keyUrl})`
     : "cost untracked (see provider console)";
@@ -303,6 +342,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let plan = false;
   let share = false;
   let noStream = false;
+  let cont = false;
+  let continuePrefix: string | undefined;
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
@@ -381,6 +422,20 @@ function parseRunArgs(args: string[]): RunOptions | null {
       noStream = true;
     } else if (a === "--share") {
       share = true;
+    } else if (a === "--continue" || a.startsWith("--continue=")) {
+      cont = true;
+      const eq = a.indexOf("=");
+      if (eq !== -1) {
+        const v = a.slice(eq + 1);
+        if (v.length === 0) return fail("--continue needs a prefix >=4 chars or nothing (bare = most recent)");
+        continuePrefix = v;
+      } else {
+        const v = args[i + 1];
+        if (v !== undefined && !v.startsWith("-")) {
+          continuePrefix = v;
+          i++;
+        }
+      }
     } else if (!a.startsWith("-")) {
       positional.push(a);
     } else {
@@ -394,6 +449,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share,
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
+    continue: cont,
+    ...(continuePrefix === undefined ? {} : { continuePrefix }),
   };
 }
 
@@ -506,7 +563,34 @@ function promptApproval(question: string): Promise<ApprovalAnswer> {
   });
 }
 
-async function cmdRun(opts: RunOptions): Promise<void> {
+type ReplState = {
+  history: LoopMsg[];
+  provider: ProviderId;
+  model: string;
+  lastRunId: string | null;
+};
+
+async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
+  const cwd = process.cwd();
+  // --continue: opt-in transcript persistence. Load once (single-shot) or
+  // reuse the REPL's shared in-memory history (per-line saves deferred to
+  // .exit so one REPL session writes one file, not one per line).
+  let history: LoopMsg[] = [];
+  let replMode = false;
+  if (replState !== undefined) {
+    replMode = true;
+    history = replState.history;
+  } else if (opts.continue) {
+    const loaded = loadSession(cwd, opts.continuePrefix);
+    if (!loaded.ok) {
+      console.error(`codewhip: ${loaded.error}`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    history = loaded.record.messages.filter((m) => m.role !== "system");
+    console.log(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+  }
   // --free arms the free chain: head = the explicit --provider (must be a
   // free-catalog id) or the first free candidate with a usable key (env,
   // stored file, or the row's anonymousKey — kilo/opencode/empero/llm7 are
@@ -530,7 +614,9 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       .filter((id) => id !== head && resolveKey(id).key.length > 0)
       .flatMap((id) => {
         const cfg = getProviderConfig(id);
-        return cfg === null ? [] : [{ label: cfg.id, model: cfg.defaultModel, port: makePortForConfig(cfg, resolveKey(id).key) }];
+        if (cfg === null) return [];
+        const { key, source } = resolveKey(id);
+        return [{ label: cfg.id, model: cfg.defaultModel, port: makePortForConfig(cfg, key, undefined, source) }];
       });
     opts = { ...opts, provider: head, model: headModel };
   }
@@ -569,7 +655,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
   }
   console.log(`model: ${opts.provider}:${opts.model}`);
   if (opts.models.length > 1) {
-    console.log(`!! rotation armed: on rate-limit/timeout walk ${opts.models.join(" -> ")} (each once per run)`);
+    console.log(`!! rotation armed: on rate-limit/timeout/5xx walk ${opts.models.join(" -> ")} (each once per run)`);
   }
   const runCfg = getProviderConfig(opts.provider);
   if (runCfg === null) {
@@ -589,13 +675,20 @@ async function cmdRun(opts: RunOptions): Promise<void> {
     return;
   }
   if (keySource === "anonymous") {
-    console.log(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
+    // A loopback local runtime resolves the same placeholder source as a
+    // keyless free tier, but "rate-limited, log in for higher limits" is
+    // simply false there — there is no quota and no key to log in with.
+    if (isLoopbackBaseUrl(runCfg.baseUrl)) {
+      console.log(`auth: ${opts.provider} local runtime at ${runCfg.baseUrl} — no credential needed, nothing is billed`);
+    } else {
+      console.log(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
+    }
   }
   let failoverTargets: FailoverTarget[] = [];
   if (opts.free) {
     failoverTargets = freeChain;
     if (failoverTargets.length > 0) {
-      console.log(`!! --free armed: on rate-limit/timeout walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
+      console.log(`!! --free armed: on rate-limit/timeout/5xx walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
     } else {
       console.log("!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
     }
@@ -622,11 +715,12 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       return;
     }
     const targetModel = nextCfg.defaultModel;
-    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout. May bill ${next} pay-go.`);
+    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout/5xx. May bill ${next} pay-go.`);
+    const { key: failoverKey, source: failoverSource } = resolveKey(next);
     failoverTargets = [{
       label: next,
       model: targetModel,
-      port: makePortForConfig(nextCfg, resolveKey(next).key),
+      port: makePortForConfig(nextCfg, failoverKey, undefined, failoverSource),
     }];
   }
   const ctrl = new AbortController();
@@ -643,7 +737,7 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
       stdinIsTTY: process.stdin.isTTY === true,
-      port: makePortForConfig(runCfg, apiKey, opts.timeoutMs),
+      port: makePortForConfig(runCfg, apiKey, opts.timeoutMs, keySource),
       signal: ctrl.signal,
       askUser: promptApproval,
       remembered: listRules(process.cwd()),
@@ -652,8 +746,19 @@ async function cmdRun(opts: RunOptions): Promise<void> {
       failovers: failoverTargets,
       models: opts.models,
       tokenBudget: opts.tokenBudget,
+      history,
       onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`),
     });
+    // Thread the transcript forward: single-shot saves below; REPL feeds it
+    // back in-memory and saves once on .exit (no per-line files).
+    const continued = result.messages.slice(1);
+    if (replMode && replState !== undefined) {
+      replState.history.length = 0;
+      replState.history.push(...continued);
+      replState.provider = opts.provider;
+      replState.model = opts.model;
+      replState.lastRunId = result.runId;
+    }
     if (result.cancelled) {
       console.log("cancelled — partial transcript kept.");
     }
@@ -709,16 +814,81 @@ async function cmdRun(opts: RunOptions): Promise<void> {
         console.log(`share: ${shared.path} (sha256:${shared.hash.slice(0, 16)}…)`);
       }
     }
+    // Opt-in persistence lands on every loop exit path (success/error/cancel):
+    // the saved transcript is the post-compaction one — honest. System is
+    // stripped (rebuilt fresh on resume); secrets redacted at write time.
+    if (opts.continue && !replMode) {
+      const ok = saveSession(process.cwd(), {
+        v: 1,
+        ts: new Date().toISOString(),
+        runId: result.runId,
+        provider: opts.provider,
+        model: opts.model,
+        messages: continued,
+      });
+      if (!ok) {
+        console.error("codewhip: session save failed (disk write) — transcript kept in memory only");
+      } else {
+        console.log(`session: ${result.runId} (${continued.length} messages) — continue: codewhip run "…" --continue ${result.runId.slice(0, 8)}`);
+      }
+    }
   } finally {
     process.removeListener("SIGINT", onSigint);
   }
 }
 
+function cmdSessions(): void {
+  const rows = listSessions(process.cwd());
+  if (rows.length === 0) {
+    console.log("sessions: no saved sessions yet (run once with --continue to save one).");
+    return;
+  }
+  console.log(`sessions: ${rows.length} saved (newest first; resume: codewhip run "…" --continue [prefix]):`);
+  for (const r of rows) {
+    const who = r.provider.length > 0 && r.model.length > 0 ? `${r.provider}:${r.model}` : r.model || r.provider || "unknown";
+    console.log(`  ${r.runId.slice(0, 8)}  ${r.ts.slice(0, 19)}  ${who}  ${r.messages} msgs  ${r.preview}`);
+  }
+}
+
 function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
+  const cwd = process.cwd();
+  const shared: ReplState = { history: [], provider: defaults.provider, model: defaults.model, lastRunId: null };
+  if (defaults.continue) {
+    const loaded = loadSession(cwd, defaults.continuePrefix);
+    if (!loaded.ok) {
+      console.error(`codewhip: ${loaded.error}`);
+      process.exitCode = 1;
+      printStubReceipt(defaults.model, defaults.provider);
+      return;
+    }
+    shared.history.push(...loaded.record.messages.filter((m) => m.role !== "system"));
+    if (loaded.record.provider.length > 0) shared.provider = loaded.record.provider as ProviderId;
+    if (loaded.record.model.length > 0) shared.model = loaded.record.model;
+    console.log(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${shared.history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   console.log("codewhip repl (preview) — type a prompt, .exit to quit.");
   rl.setPrompt("codewhip> ");
   rl.prompt();
+  let saved = false;
+  const saveOnExit = (): void => {
+    if (saved || !defaults.continue) return;
+    saved = true;
+    // Nothing new this REPL session: no file, no noise.
+    if (shared.lastRunId === null) return;
+    const runId = shared.lastRunId;
+    const ok = saveSession(cwd, {
+      v: 1,
+      ts: new Date().toISOString(),
+      runId,
+      provider: shared.provider,
+      model: shared.model,
+      messages: [...shared.history],
+    });
+    if (ok) {
+      console.log(`session: ${runId} (${shared.history.length} messages) — continue: codewhip run "…" --continue ${runId.slice(0, 8)}`);
+    }
+  };
   rl.on("line", (line: string) => {
     const trimmed = line.trim();
     if (trimmed === ".exit" || trimmed === ".quit") {
@@ -726,13 +896,19 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
       return;
     }
     if (trimmed.length > 0) {
-      void cmdRun({ ...defaults, prompt: trimmed }).finally(() => rl.prompt());
+      // continue:false here: persistence is deferred to .exit (one file for
+      // the whole REPL), while history threads in-memory via shared.
+      void cmdRun({ ...defaults, prompt: trimmed, continue: false }, shared).finally(() => rl.prompt());
       return;
     }
     rl.prompt();
   });
   rl.on("close", () => {
-    printStubReceipt(defaults.model, defaults.provider);
+    saveOnExit();
+    printStubReceipt(shared.model, shared.provider);
+  });
+  rl.on("SIGINT", () => {
+    rl.close();
   });
 }
 
@@ -919,7 +1095,11 @@ function cmdProvider(args: string[]): void {
       return;
     }
     console.log(`provider: added "${result.id}" (${baseUrl}, default ${model})`);
-    console.log(`  next: set a key via $env:${envVar} = "…" or: codewhip auth login ${result.id}`);
+    if (isLoopbackBaseUrl(baseUrl)) {
+      console.log("  local runtime: no credential needed — the router's `private` class routes here");
+    } else {
+      console.log(`  next: set a key via $env:${envVar} = "…" or: codewhip auth login ${result.id}`);
+    }
     return;
   }
   if (sub === "remove") {
@@ -1470,6 +1650,57 @@ function cmdTrust(args: string[]): void {
   console.log(lines.join("\n"));
 }
 
+async function cmdServe(args: string[]): Promise<void> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const rawPort = flag("--port") ?? "8787";
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error(`serve: bad --port "${rawPort}" (need an integer 0..65535)`);
+    process.exitCode = 1;
+    return;
+  }
+  // llm7 is the default on purpose: it is keyless, so `codewhip serve` works
+  // with no setup at all. Point it anywhere else with --provider.
+  const provider = flag("--provider") ?? "llm7";
+  const cfg = getProviderConfig(provider);
+  if (cfg === null) {
+    console.error(`serve: unknown provider "${provider}" (see: codewhip provider list)`);
+    process.exitCode = 1;
+    return;
+  }
+  const opts: ServeOptions = {
+    port,
+    host: flag("--host") ?? "127.0.0.1",
+    provider,
+    model: flag("--model") ?? cfg.defaultModel,
+  };
+  const token = flag("--token");
+  if (token !== undefined) opts.token = token;
+  const { createShutdown, startServe } = await import("./serve.js");
+  try {
+    const server = startServe(opts);
+    // Idempotent by construction — see createShutdown. Repeated signals must
+    // not stack close listeners, and idle keep-alive sockets must not hold the
+    // process open (that hang is what makes an operator press Ctrl-C again).
+    const controller = createShutdown(server, (code) => process.exit(code));
+    const onSignal = (): void => {
+      if (!controller.isShuttingDown()) {
+        console.log("");
+        console.log("serve: shutting down (press Ctrl-C again to force)");
+      }
+      controller.shutdown();
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+  } catch (err) {
+    console.error(`serve: ${err instanceof Error ? err.message : "failed to start"}`);
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -1552,6 +1783,10 @@ async function main(): Promise<void> {
     cmdRollback(args.slice(1));
     return;
   }
+  if (command === "sessions") {
+    cmdSessions();
+    return;
+  }
   if (command === "demo") {
     if (args[1] !== "--deny") {
       console.error("usage: codewhip demo --deny  (offline, $0, no key needed)");
@@ -1587,9 +1822,20 @@ async function main(): Promise<void> {
     cmdFree();
     return;
   }
+  if (command === "serve") {
+    await cmdServe(args.slice(1));
+    return;
+  }
   console.error(`unknown command: ${command}`);
   console.error('try: codewhip help');
   process.exitCode = 1;
 }
 
-void main();
+// Exported for unit tests (sessions --continue parsing). Guarded so importing
+// this module never runs the CLI as a side effect.
+export { parseRunArgs, cmdRun, cmdSessions, cmdRepl };
+
+const entry = process.argv[1] ?? "";
+if (entry.endsWith("index.ts") || entry.endsWith("index.js")) {
+  void main();
+}

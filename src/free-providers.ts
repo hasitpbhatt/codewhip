@@ -36,11 +36,17 @@ export type FreeProviderRow = FreeProviderEntry & {
  * operations 2025-05-20; api.lepton.ai no longer resolves). A --free run must
  * never bill pay-go, so a provider whose "free" tier now requires a payment
  * method does not belong here even while it still answers.
+ *
+ * `1min` (added 2026-09-13) is a builtin but is deliberately absent from this
+ * chain: it is credit/subscription-metered from the first call, with no free
+ * allowance to spend. Reachable via `--provider 1min` only. Same reasoning as
+ * the rot repair above — the invariant is about money, not about whether the
+ * endpoint answers.
  */
 export const FREE_CHAIN: readonly FreeProviderEntry[] = [
   { id: "kilo", freeOffer: "Kilo gateway ':free' models — anonymous, no key, no headers", keyNeeded: "no", limits: "free-model daily caps unpublished — wait and retry" },
   { id: "opencode", freeOffer: "OpenCode Zen free models — anonymous ('public' key + identity headers, handled by codewhip)", keyNeeded: "no", limits: "small per-IP anonymous quota (FreeUsageLimitError on 429); published quotas none" },
-  { id: "empero", freeOffer: "Empero free endpoint (glm-5.3-flash) — no signup; prompts may be logged", keyNeeded: "no", limits: "unpublished; endpoint was in maintenance at the 2026-09-11 probe" },
+  { id: "empero", freeOffer: "Empero free endpoint (glm-5.3-flash) — no signup; prompts may be logged", keyNeeded: "no", limits: "unpublished; declared maintenance since >= 2026-09-11 (503 'maintenance' on re-probe 2026-09-14) — model set changing, re-verify on return" },
   { id: "pollinations", freeOffer: "Pollinations.ai — anonymous, no key, no signup (OpenAI-compatible text+image)", keyNeeded: "no", limits: "per-IP rate-limited (~1 req/s) — back off and retry" },
   { id: "groq", freeOffer: "Groq free tier on open models", keyNeeded: "free-key", limits: "~30 req/min per model, ~14.4k req/day" },
   { id: "openrouter", freeOffer: "OpenRouter :free models", keyNeeded: "free-key", limits: "50 req/day without credits; 1000/day after a $10 credit purchase" },

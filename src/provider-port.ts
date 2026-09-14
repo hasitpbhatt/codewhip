@@ -35,7 +35,15 @@ export type ChatPortResult = {
   usageEstimated?: boolean;
 };
 
-export type RetryableKind = "rate-limited" | "timeout" | "auth" | "other";
+/**
+ * Failure classes the loop acts on. `rate-limited` and `timeout` rotate;
+ * `server` (5xx/408) joins them because an upstream 5xx is transient and
+ * server-side by definition — it is what a free tier returns under load or in
+ * a maintenance window, so treating it as terminal would strand the chain on
+ * exactly the failure the chain exists to survive. `auth` and `other` stay
+ * terminal: retrying them only repeats the same error.
+ */
+export type RetryableKind = "rate-limited" | "timeout" | "server" | "auth" | "other";
 
 export type PortFailure = {
   ok: false;

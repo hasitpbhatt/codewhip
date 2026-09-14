@@ -1,6 +1,18 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { classify, estimateCost, polishGate, resolveRoute, routeFor } from "./router.js";
+import { addCustomProvider } from "./custom-providers.js";
+import { CONFIG_DIR_ENV } from "./config-dir.js";
+
+/**
+ * Pinned empty config dir. `private` now consults registered local providers,
+ * so without this these assertions would depend on whether the machine running
+ * the suite happens to have one — a test that passes or fails by environment.
+ */
+const noLocalDir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-empty-"));
 
 describe("router", () => {
   it("classifies private signals first (safety wins)", () => {
@@ -10,6 +22,60 @@ describe("router", () => {
   it("classifies polish signals", () => {
     strictEqual(classify("fix typo in README").taskClass, "polish");
     strictEqual(classify("format and lint the new module").taskClass, "polish");
+  });
+  it("catches .env in the ordinary phrasings, not just word-glued (regression 2026-09-13)", () => {
+    // `\b\.env\b` could never match before a literal "." — only "foo.env"
+    // fired. These are the phrasings people actually type.
+    strictEqual(classify("read the .env file and summarize it").taskClass, "private");
+    strictEqual(classify(".env is missing, recreate it").taskClass, "private");
+    strictEqual(classify("the .env file has a bad value").taskClass, "private");
+    strictEqual(classify("check foo.env for stale vars").taskClass, "private");
+  });
+  it("catches PLURALS of the private keywords, not just the singular (regression 2026-09-14)", () => {
+    // `\bcredential\b` cannot match "credentials", `\bsecret\b` cannot match
+    // "secrets", `\bapi[-_ ]?key\b` cannot match "api keys" — so the whole
+    // plural family, which is how people actually write, fell through to
+    // `implement` and routed to a cloud free tier.
+    for (const p of [
+      "rotate the credentials for the staging database",
+      "where are the secrets stored?",
+      "list the api keys currently in use",
+      "update the passwords in the config",
+      "check the ssh private keys",
+      "remove the hardcoded credentials",
+      "the production database passwords rotated",
+    ]) {
+      strictEqual(classify(p).taskClass, "private", p);
+    }
+  });
+  it("catches credential synonyms the original keyword list never had (2026-09-14)", () => {
+    for (const p of [
+      "the JWT signing key needs rotating",
+      "add validation to the passphrase field",
+      "the bearer token is hardcoded in the client",
+      "encrypt the payload with the master key",
+      "the database connection string is wrong",
+      "the auth token expiry is too long",
+      "read the AWS access key id",
+      "the service account json is committed",
+      "the kubeconfig for prod is world-readable",
+      "the encryption key must not be logged",
+      "the session cookie value leaks",
+      "the recovery phrase is in the repo",
+      "the wallet private key was pasted into a test",
+    ]) {
+      strictEqual(classify(p).taskClass, "private", p);
+    }
+  });
+  it("still routes ordinary work as implement/polish (no classifier over-reach)", () => {
+    // A false positive is not free — it refuses the run until --provider is
+    // passed. The everyday phrasings must keep their real classes.
+    strictEqual(classify("add retry logic to the provider port").taskClass, "implement");
+    strictEqual(classify("refactor the provider registry").taskClass, "implement");
+    strictEqual(classify("fix the typo in README").taskClass, "polish");
+    strictEqual(classify("format and lint the new module").taskClass, "polish");
+    strictEqual(classify("sort the results by key").taskClass, "implement");
+    strictEqual(classify("raise the token budget to 500000").taskClass, "implement");
   });
   it("defaults to implement", () => {
     const c = classify("add retry logic to the provider port");
@@ -21,7 +87,7 @@ describe("router", () => {
     ok(!("error" in impl) && impl.provider === "nvidia");
     const pol = routeFor("polish");
     ok(!("error" in pol) && pol.provider === "sensenova");
-    const priv = routeFor("private");
+    const priv = routeFor("private", noLocalDir);
     ok("error" in priv && (priv as { error: string }).error.includes("local provider"));
   });
   it("explicit --provider/--model always win (auto=false)", () => {
@@ -49,7 +115,12 @@ describe("router", () => {
     }
   });
   it("refuses private prompts without an explicit provider", () => {
-    const r = resolveRoute({ prompt: "read the production db password", defaultProvider: "nvidia", defaultModel: "moonshotai/kimi-k3" });
+    const r = resolveRoute({
+      prompt: "read the production db password",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+      dir: noLocalDir,
+    });
     ok("error" in r);
   });
   it("explicit provider consents to cloud routing for private prompts", () => {
@@ -94,9 +165,86 @@ describe("router", () => {
     ok(polishGate(cost).pass);
     strictEqual(estimateCost("groq", "some-paid-model", 1000, 1000), null);
   });
+  it("prices a loopback runtime $0, not 'untracked' (there is no console to check)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-cost-"));
+    addCustomProvider({ id: "local-gw", baseUrl: "http://127.0.0.1:11434", defaultModel: "default", envVar: "LOCAL_GW_API_KEY" }, dir);
+    addCustomProvider({ id: "remote-gw", baseUrl: "https://gateway.example.com", defaultModel: "m", envVar: "REMOTE_GW_API_KEY" }, dir);
+    const prev = process.env[CONFIG_DIR_ENV];
+    process.env[CONFIG_DIR_ENV] = dir;
+    try {
+      strictEqual(estimateCost("local-gw", "default", 1000, 1000), 0);
+      // A remote custom provider stays honestly untracked — we cannot know.
+      strictEqual(estimateCost("remote-gw", "m", 1000, 1000), null);
+    } finally {
+      if (prev === undefined) delete process.env[CONFIG_DIR_ENV];
+      else process.env[CONFIG_DIR_ENV] = prev;
+    }
+  });
   it("polish gate passes only on priced <$0.05", () => {
     ok(polishGate(0).pass);
     ok(!polishGate(null).pass);
     ok(!polishGate(0.06).pass);
+  });
+  it("routes private → the one registered local runtime, loopback only", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-one-"));
+    const added = addCustomProvider(
+      { id: "ollama-local", baseUrl: "http://127.0.0.1:11434", defaultModel: "qwen3:35b", envVar: "OLLAMA_LOCAL_API_KEY" },
+      dir
+    );
+    strictEqual(added.ok, true);
+    const r = routeFor("private", dir);
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.provider, "ollama-local");
+      strictEqual(r.model, "qwen3:35b");
+      ok(r.note.includes("loopback"));
+    }
+  });
+  it("private stays a refusal when several local runtimes are registered (ambiguous, not a guess)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-many-"));
+    strictEqual(
+      addCustomProvider({ id: "ollama-a", baseUrl: "http://127.0.0.1:11434", defaultModel: "m", envVar: "OLLAMA_A_API_KEY" }, dir).ok,
+      true
+    );
+    strictEqual(
+      addCustomProvider({ id: "vllm-b", baseUrl: "http://localhost:8000", defaultModel: "m", envVar: "VLLM_B_API_KEY" }, dir).ok,
+      true
+    );
+    const r = routeFor("private", dir);
+    ok("error" in r && (r as { error: string }).error.includes("pass --provider"));
+  });
+  it("a registered remote https provider is NOT a private destination", () => {
+    // Only loopback http counts as local. A remote gateway — even a legitimate
+    // one — must never be auto-selected for a secret-bearing prompt.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-remote-"));
+    addCustomProvider({ id: "remote-gw", baseUrl: "https://gateway.example.com", defaultModel: "m", envVar: "REMOTE_GW_API_KEY" }, dir);
+    ok("error" in routeFor("private", dir));
+  });
+  it("auto-routes a private prompt to local once one is registered", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-auto-"));
+    addCustomProvider({ id: "ollama-local", baseUrl: "http://127.0.0.1:11434", defaultModel: "qwen3:35b", envVar: "OLLAMA_LOCAL_API_KEY" }, dir);
+    const r = resolveRoute({ prompt: "read the production db password", defaultProvider: "nvidia", defaultModel: "moonshotai/kimi-k3", dir });
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.provider, "ollama-local");
+      strictEqual(r.taskClass, "private");
+      strictEqual(r.auto, true);
+    }
+  });
+  it("an explicit --provider still wins over the local runtime", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-override-"));
+    addCustomProvider({ id: "ollama-local", baseUrl: "http://127.0.0.1:11434", defaultModel: "qwen3:35b", envVar: "OLLAMA_LOCAL_API_KEY" }, dir);
+    const r = resolveRoute({
+      prompt: "read the production db password",
+      provider: "mistral",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+      dir,
+    });
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.provider, "mistral");
+      strictEqual(r.taskClass, "private");
+    }
   });
 });

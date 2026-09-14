@@ -1,5 +1,5 @@
 import { PROVIDERS, type ProviderId } from "./provider.js";
-import { getProviderConfig } from "./custom-providers.js";
+import { getProviderConfig, isLoopbackBaseUrl, listLocalProviders } from "./custom-providers.js";
 
 export type TaskClass = "implement" | "polish" | "private";
 
@@ -10,7 +10,29 @@ export type Route = {
   note: string;
 };
 
-const PRIVATE_RX = /\b(password|passwd|secret|credential|private key|api[-_ ]?key|\.env\b|ssn|credit card|prod(uction)?\b.*\b(db|database|password)|salary|internal only)\b/i;
+/**
+ * Two dead-branch bugs have been fixed here, both of which silently routed
+ * secret-touching prompts to a cloud free tier as `implement`:
+ *
+ * 1. `.env` sat OUTSIDE the leading `\b` group. A `\b` cannot match immediately
+ *    before a literal ".", so `\b\.env\b` only ever fired when the dot was glued
+ *    to a preceding word char ("foo.env") and missed every ordinary phrasing —
+ *    "read the .env file", ".env is missing". Standalone `\.env\b` allows any
+ *    preceding character.
+ * 2. Every keyword was pinned to its SINGULAR form. `\bcredential\b` cannot
+ *    match "credentials", `\bsecret\b` cannot match "secrets", `\bapi[-_ ]?key\b`
+ *    cannot match "api keys" — so the plural, which is how people actually
+ *    write, fell through. Hence the trailing `s?`.
+ *
+ * Measured 2026-09-14 against a 31-prompt corpus of secret-touching phrasings:
+ * 13/31 caught before, 31/31 after. Both bugs were invisible to the old tests
+ * because each one had an assertion that passed via a *different* alternative.
+ *
+ * Erring toward `private` is deliberate: a false negative leaks a secret to a
+ * cloud model, while a false positive only refuses a run and says to pass
+ * `--provider`. Regression-tested in router.test.ts.
+ */
+const PRIVATE_RX = /\b(password|passwd|passphrase|secret|credential|private key|api[-_ ]?key|access key|signing key|encryption key|master key|ssn|credit card|salary|internal only)s?\b|\b(bearer|auth|access|refresh|session)[-_ ]?tokens?\b|\bprod(uction)?\b.*\b(db|database|password)\b|\b(kubeconfig|connection string|recovery phrase|session cookie|service account)\b|\.env\b/i;
 const POLISH_RX = /\b(typo|spelling|format(ting)?|lint|comment(s)?|rename|docs?|readme|polish|grammar|punctuation|whitespace|indent(ation)?)\b/i;
 
 /**
@@ -29,19 +51,48 @@ export function classify(prompt: string): { taskClass: TaskClass; reason: string
 }
 
 /**
- * Class → provider:model. Implement rides the free capable tier; polish
- * rides the cheapest inference; private wants local — which isn't wired,
- * so it refuses cloud routing unless the user explicitly names a provider
- * (override = informed consent, logged on the receipt line).
+ * Class → provider:model. Implement rides the free capable tier; polish rides
+ * the cheapest inference; private NEVER falls back to the cloud — it routes to
+ * a local runtime the user registered, or it refuses.
+ *
+ * The refusal is the feature: the only way a secret-bearing prompt reaches a
+ * remote model is an explicit `--provider`, which is informed consent and is
+ * logged on the receipt line.
  */
-export function routeFor(taskClass: TaskClass): Route | { error: string } {
+export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: string } {
   if (taskClass === "implement") {
     return { provider: "nvidia", model: PROVIDERS.nvidia.defaultModel, note: "implement → frontier free tier" };
   }
   if (taskClass === "polish") {
     return { provider: "sensenova", model: PROVIDERS.sensenova.defaultModel, note: "polish → cheapest inference" };
   }
-  return { error: "private class needs a local provider (not wired) — pass --provider explicitly to consent to cloud routing" };
+  return localRoute(dir);
+}
+
+/**
+ * The `private` destination. Exactly one registered loopback provider is
+ * unambiguous; several is not, and guessing which of them should see your
+ * secrets is not a decision this classifier gets to make — so it asks.
+ */
+function localRoute(dir?: string): Route | { error: string } {
+  const locals = listLocalProviders(dir);
+  if (locals.length === 1) {
+    const only = locals[0];
+    return {
+      provider: only.id,
+      model: only.defaultModel,
+      note: "private → local runtime (loopback, never leaves this machine)",
+    };
+  }
+  if (locals.length > 1) {
+    const ids = locals.map((c) => c.id).join(", ");
+    return { error: `private class found ${locals.length} local providers (${ids}) — pass --provider to choose one` };
+  }
+  return {
+    error:
+      "private class needs a local provider and none is registered — add one with `codewhip provider add ollama-local " +
+      "--base-url http://127.0.0.1:11434 --model qwen3:35b`, or pass --provider explicitly to consent to cloud routing",
+  };
 }
 
 export type RouteResolution =
@@ -59,6 +110,8 @@ export function resolveRoute(opts: {
   model?: string;
   defaultProvider: ProviderId;
   defaultModel: string;
+  /** Config dir for the local-provider lookup; tests inject a temp dir. */
+  dir?: string;
 }): RouteResolution {
   if (opts.provider !== undefined || opts.model !== undefined) {
     const pid = opts.provider ?? opts.defaultProvider;
@@ -71,7 +124,7 @@ export function resolveRoute(opts: {
     };
   }
   const taskClass = opts.taskClass ?? classify(opts.prompt).taskClass;
-  const routed = routeFor(taskClass);
+  const routed = routeFor(taskClass, opts.dir);
   if ("error" in routed) {
     return routed;
   }
@@ -103,6 +156,13 @@ const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> =
 export function estimateCost(provider: ProviderId, model: string, prompt: number, completion: number): number | null {
   const p = PRICE_PER_1K[`${provider}:${model}`];
   if (p === undefined) {
+    // A loopback runtime is not "untracked" — it genuinely costs nothing
+    // marginal, and there is no provider console to go and check. Reporting
+    // untracked there would send the user looking for a bill that cannot exist.
+    const cfg = getProviderConfig(provider);
+    if (cfg !== null && isLoopbackBaseUrl(cfg.baseUrl)) {
+      return 0;
+    }
     return null;
   }
   return (prompt / 1000) * p.input + (completion / 1000) * p.output;

@@ -217,7 +217,7 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 51);
+    strictEqual(PROVIDER_IDS.length, 54);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");
@@ -232,6 +232,20 @@ describe("provider", () => {
     for (const id of PROVIDER_IDS) {
       strictEqual(PROVIDERS[id].timeoutMs, DEFAULT_CHAT_TIMEOUT_MS, id);
     }
+  });
+  it("1min rides its own port and every other builtin rides the openai one", () => {
+    // The discriminator is what routes makePortForConfig; if it silently
+    // reverted to undefined, 1min would be sent an OpenAI body it cannot read.
+    strictEqual(PROVIDERS["1min"].port, "onemin");
+    strictEqual(makePort("1min", "test-key") !== undefined, true);
+    for (const id of PROVIDER_IDS) {
+      if (id === "1min") continue;
+      strictEqual(PROVIDERS[id].port, undefined, id);
+    }
+    // A POSIX shell cannot export an identifier starting with a digit, so the
+    // env var must not be derived from the id here.
+    strictEqual(PROVIDERS["1min"].envVar, "ONEMIN_API_KEY");
+    strictEqual(parseProviderId("1min"), "1min");
   });
   it("timer expiry is classified by the timer, not by the rejection's name", async () => {
     const realFetch = globalThis.fetch;
@@ -275,6 +289,49 @@ describe("provider", () => {
       if (res.ok) return;
       strictEqual(res.retryable, "other");
       ok(res.error.includes("network error on"), res.error);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+  it("an upstream 5xx (and 408) is typed `server` so the chain can rotate past it", async () => {
+    // Regression 2026-09-14: 5xx used to fall into the terminal `other` class,
+    // so a provider in a maintenance window (empero answered 503) killed a
+    // `--free` run instead of letting it hop to the next free tier.
+    const realFetch = globalThis.fetch;
+    for (const status of [500, 502, 503, 504, 408]) {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "maintenance" } }), {
+            status,
+            headers: { "content-type": "application/json" },
+          })
+        )) as typeof fetch;
+      try {
+        const port = makePortForConfig(PROVIDERS.empero, "test-key", 5000);
+        const res = await port({ model: "m", messages: [], tools: [] });
+        strictEqual(res.ok, false, `HTTP ${status} should fail`);
+        if (res.ok) continue;
+        strictEqual(res.retryable, "server", `HTTP ${status} must be rotatable`);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    }
+  });
+  it("a 4xx stays terminal (`other`) — a bad request repeats wherever it is sent", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "unknown model" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        })
+      )) as typeof fetch;
+    try {
+      const port = makePortForConfig(PROVIDERS.empero, "test-key", 5000);
+      const res = await port({ model: "m", messages: [], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      strictEqual(res.retryable, "other");
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -56,7 +56,7 @@ export type LoopArgs = {
   retryWait?: boolean;
   /**
    * Ordered cross-provider failover chain (off unless armed). On
-   * rate-limited/timeout turns, after same-provider rotation is exhausted,
+   * rate-limited/timeout/server turns, after same-provider rotation is exhausted,
    * the loop hops to the NEXT unused target; each target at most once per
    * run, transcript carries over. Auth/other failures never hop.
    */
@@ -64,7 +64,7 @@ export type LoopArgs = {
   /**
    * Ordered same-provider model candidates, head first (head === model).
    * Empty by default (no rotation). Each candidate is tried at most once
-   * per run, on rate-limited/timeout turns only — never on auth/other failures.
+   * per run, on rate-limited/timeout/server turns only — never on auth/other failures.
    */
   models?: string[];
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
@@ -85,6 +85,13 @@ export type LoopArgs = {
   planMode?: boolean;
   /** Bootstrap list of remembered rules (index.ts loads once; loop appends on `a`). */
   remembered?: RememberedRule[];
+  /**
+   * Prior transcript for `--continue` (system-stripped, post-compaction —
+   * the honest tail). Seeded between the fresh system message and the new
+   * user prompt: system → history → user. Callers strip any stored system
+   * message; the loop trusts what it is given.
+   */
+  history?: LoopMsg[];
   /** Progress listener (index.ts prints). Never throws into the loop. */
   onEvent?: (event: LoopEvent) => void;
   /** Delegation depth: 0 = top-level run (may delegate), >= 1 = subagent (read-only, no delegate tools). */
@@ -137,6 +144,12 @@ export type LoopResult = {
   compact: { events: number; truncated: number; dropped: number };
   /** Identical idempotent calls served from the run memo instead of re-executing. */
   repeatCalls: number;
+  /**
+   * Final transcript (post-compaction) on every exit path — success, error,
+   * cancel. `--continue` persists `messages.slice(1)` (system rebuilt fresh
+   * on resume); the saved copy is exactly what the last provider call saw.
+   */
+  messages: LoopMsg[];
 };
 
 function lookupTool(name: string): ToolDef | null {
@@ -258,6 +271,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   }
   const messages: LoopMsg[] = [
     { role: "system", content: systemContent },
+    ...(args.history ?? []),
     { role: "user", content: args.prompt },
   ];
   const calls: OutcomeToolCall[] = [];
@@ -367,7 +381,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         }
       }
     }
-    // One turn: at most one bounded wait per RUN; each rate-limited/timeout
+    // One turn: at most one bounded wait per RUN; each rate-limited/timeout/server
     // retry consumes at most one rotation candidate or one chain target.
     // Retries never consume maxSteps; a failed turn leaves no message behind.
     let turn: Awaited<ReturnType<ChatPort>> | null = null;
@@ -392,15 +406,21 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         cancelled = true;
         break;
       }
-      if (attempt.retryable !== "rate-limited" && attempt.retryable !== "timeout") {
+      if (
+        attempt.retryable !== "rate-limited" &&
+        attempt.retryable !== "timeout" &&
+        attempt.retryable !== "server"
+      ) {
         error = attempt.error;
         break;
       }
-      // Timeouts join the rotation path: a fresh attempt on a different
-      // model (or provider) beats waiting — waiting helps 429s, not slow
-      // models or stalled connections. Retry-wait stays 429-only.
+      // Timeouts and upstream 5xx join the rotation path: a fresh attempt on a
+      // different model (or provider) beats waiting — waiting helps 429s, not
+      // slow models, stalled connections, or a host that is down. Retry-wait
+      // stays 429-only.
       const timedOut = attempt.retryable === "timeout";
-      const cause = timedOut ? "timed out" : "rate limited";
+      const cause =
+        timedOut ? "timed out" : attempt.retryable === "server" ? "server error" : "rate limited";
       if (
         !timedOut &&
         args.retryWait === true &&
@@ -437,7 +457,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       // Cross-provider chain: hops in armed order, one target per
-      // rate-limited/timeout turn, each target at most once per run.
+      // rate-limited/timeout/server turn, each target at most once per run.
       const target = args.failovers?.[nextTarget];
       if (target !== undefined) {
         nextTarget += 1;
@@ -780,5 +800,6 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     repeatCalls,
     trace,
     cancelled,
+    messages: [...messages],
   };
 }

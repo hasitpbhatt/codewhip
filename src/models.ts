@@ -139,6 +139,12 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
   if (cfg === null) {
     return { ok: false, error: `unknown provider "${provider}" (see: codewhip provider list)` };
   }
+  // 1min.ai's listing is not OpenAI-shaped (`GET /models?feature=…` returns a
+  // different envelope than {data:[{id}]}) and the adapter has no translator
+  // for it, so say so plainly instead of reporting a confusing shape error.
+  if (cfg.port === "onemin") {
+    return { ok: false, error: `${provider} has no model listing — set the id by hand (default: ${cfg.defaultModel})` };
+  }
   // Account-scoped base URLs (Cloudflare) need their id env var before the
   // path is valid — say so instead of returning a 404-shaped model error.
   const missingVars = unresolvedBaseUrlVars(cfg.baseUrl);

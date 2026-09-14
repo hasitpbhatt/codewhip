@@ -32,6 +32,7 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [ ] **Pack honesty** — make starter pack denies fire on both `edit` and `write`, normalize shapes, or drop phantom claims.
 - [ ] **Reporting honesty** — decision buckets (allow/deny/remembered/policy), untracked spend handling, `--last`/`--replay` parity, empty export failure, `missing===2` clarity.
 - [ ] **Drift + hygiene** — settle tool count wording, single-shot vs REPL labeling, receipt legend for $ tracking, gate OPEN label, dead branches, REPL receipt, remove vacuous assertions.
+- [x] **Multi-turn sessions** — `run --continue [prefix]` resumes the newest (bare) or one (≥4-char unique prefix) saved transcript and persists the post-compaction transcript on every loop exit path; `codewhip sessions` lists newest-first with redacted previews; REPL threads one in-memory transcript and saves once on `.exit` *(shipped 2026-09-14 — sessions v1, opt-in, redacted, system-stripped)*
 
 ## H2 backlog (ordered)
 
@@ -47,9 +48,20 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain;
   SSE streaming + first-byte/idle timeouts + timeout-classification fix shipped
   2026-09-12; +18 free-key tiers and the lepton/chutes/cerebras rot repair
-  shipped 2026-09-13 — 51 builtins, 44 free-chain hops). Still open: the
-  local-model parity path — `routeFor("private")` returns "not wired", so the
-  router's `private` class has no local provider behind it.
+  shipped 2026-09-13 — 53 builtins, 44 free-chain hops). 2026-09-13 also added
+  `1min` as the first non-OpenAI-shaped provider (its own `port: "onemin"`
+  adapter: flattened prompt, prompt-injected tool calls, estimated usage) and
+  `codewhip serve`, an OpenAI-compatible HTTP front end over the whole registry
+  — which is what lets a client that cannot speak 1min's schema still use it.
+  `hcnsec` (api.hcnsec.cn, a keyed New API relay) joined 2026-09-14, outside
+  the free chain — as did `hashneuron` (hashneuron.space, the RouteOpen gateway;
+  default model id `default`, which its own console labels "Auto"). Both stay
+  out of the chain because their free grants are quota/prepaid-metered rather
+  than a fixed non-billing tier.
+  The local-model parity path landed 2026-09-14: `custom-providers.ts` now
+  accepts `http://` on loopback only, and `routeFor("private")` routes to a
+  registered loopback provider — still refusing when none is registered, or when
+  several make the choice ambiguous.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

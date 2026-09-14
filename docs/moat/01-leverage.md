@@ -36,10 +36,10 @@ Defer explicitly: `lsp` diagnostics, MCP client, `webfetch`/`websearch`, `task`/
 
 ## Router + cost model (with concrete $/task reasoning)
 
-Three task classes, routed by a 5-line classifier (keyword + file count), overridable by `--model`:
+Three task classes, routed by a keyword classifier, overridable by `--provider`/`--model`:
 - **implement** (multi-file refactor, hard bug): frontier. Sonnet 5 ($3 in / $15 out, intro $2/$10 thru Aug-2026) default. Opus ($5/$25) only on retry or `--effort max`.
 - **polish** (tests, docs, lint, simple edits): cheap. DeepSeek V4-Flash ($0.14 in / $0.28 out, cache-hit $0.0028) or Qwen 3.7 Flash ($0.03/$0.13). Good enough, 10-40x cheaper.
-- **private** (user flags `--local` or path matches secrets): local Ollama/Qwen-35B. $0 marginal, never leaves disk.
+- **private** (prompt matches secret keywords): **routes to a loopback provider you registered** (Ollama/vLLM/LM Studio) — $0 marginal, never leaves the machine. With none registered it refuses, so the only way a secret-bearing prompt reaches a remote model is an explicit `--provider`, which is informed consent, logged on the receipt.
 
 $/task math (modeled session: 1.5M input @90% cache-hit + 40k output):
 - Sonnet @ $3/$15: 1.35M x $0.30 + 150k x $3 + 40k x $15 = ~$1.46/task.

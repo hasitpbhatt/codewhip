@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { agentLoop, withTimeout, type LoopEvent } from "./loop.js";
-import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure, authFailure } from "./testkit/fakePort.js";
+import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure, serverFailure, authFailure, otherFailure } from "./testkit/fakePort.js";
 import { listRules } from "./remember-store.js";
 import type { RememberedRule } from "./remember-store.js";
 import { readAuditLog, verifyChain } from "./audit.js";
@@ -320,6 +320,48 @@ describe("loop", () => {
     ok(r.error.includes("--failover"));
     ok(r.error.includes("--timeout-ms"));
   });
+  it("an upstream 5xx rotates candidates like a 429 (a 503 must not strand the chain)", async () => {
+    // Regression 2026-09-14: `server` is a rotatable class precisely so a free
+    // tier in a maintenance window does not end the run.
+    const ev: string[] = [];
+    const { port, record } = makeFakePort([serverFailure(503), textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", models: ["a", "b"], label: "empero", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.error, undefined);
+    ok(ev.some((t) => t.includes("server error") && t.includes("rotating")), ev.join(" | "));
+    strictEqual(record.map((c) => c.model).join(","), "a,b");
+  });
+  it("an upstream 5xx hops the provider chain, not just the model list", async () => {
+    const primary = makeFakePort([serverFailure(503)]);
+    const t1 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "empero", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "pollinations", model: "mistral", port: t1.port }],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.failovers.length, 1);
+    strictEqual(r.failovers[0]?.from, "empero:m");
+    strictEqual(r.failovers[0]?.to, "pollinations:mistral");
+  });
+  it("a terminal failure still never hops (the rotatable class is not a blanket)", async () => {
+    const primary = makeFakePort([otherFailure()]);
+    const t1 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "groq", model: "m1", port: t1.port }],
+      onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined && r.error.includes("something else"), r.error);
+    strictEqual(r.failovers.length, 0);
+    strictEqual(t1.record.length, 0);
+  });
   it("remembered webfetch host skips approval (one yes covers sibling paths)", async () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = (() =>
@@ -595,5 +637,47 @@ describe("loop", () => {
     strictEqual(r.error, undefined);
     strictEqual(r.failovers.length, 1);
     strictEqual(r.failovers[0]?.to, "groq:m1");
+  });
+  it("history seeds between system and the new user prompt (system → history → user)", async () => {
+    const { port, messagesSeen } = makeFakePort([textTurn("done")]);
+    const history = [
+      { role: "user" as const, content: "old q" },
+      { role: "assistant" as const, content: "old a" },
+    ];
+    const r = await agentLoop({
+      prompt: "new q", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd), history,
+    });
+    strictEqual(r.text, "done");
+    const first = messagesSeen[0] ?? [];
+    // messagesSeen holds the live array reference (the loop pushes the reply
+    // after the call), so assert the seed prefix, not the final length.
+    ok(first.length >= 4, JSON.stringify(first.length));
+    strictEqual(first[0]?.role, "system");
+    strictEqual(first[1]?.content, "old q");
+    strictEqual(first[2]?.content, "old a");
+    strictEqual(first[3]?.content, "new q");
+  });
+  it("result.messages carries the transcript on success", async () => {
+    const { port } = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd),
+    });
+    ok(r.messages.length >= 3, JSON.stringify(r.messages.length));
+    strictEqual(r.messages[0]?.role, "system");
+    strictEqual(r.messages[1]?.role, "user");
+    strictEqual(r.messages[r.messages.length - 1]?.role, "assistant");
+  });
+  it("result.messages carries the partial transcript on a forced-error path", async () => {
+    const { port } = makeFakePort([otherFailure()]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, remembered: listRules(cwd),
+    });
+    ok(r.error !== undefined, "expected an error");
+    ok(r.messages.length >= 2, JSON.stringify(r.messages.length));
+    strictEqual(r.messages[0]?.role, "system");
+    strictEqual(r.messages[1]?.role, "user");
   });
 });

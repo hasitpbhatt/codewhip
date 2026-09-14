@@ -10,6 +10,8 @@ import type {
 } from "./provider-port.js";
 import { configDir } from "./config-dir.js";
 import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
+import { parseRetryAfter, resolveBaseUrl, unresolvedBaseUrlVars } from "./wire-util.js";
+import { oneminPort } from "./onemin.js";
 
 /**
  * Builtin provider registry — adding a builtin is ONE table row, nothing else.
@@ -19,7 +21,7 @@ import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -79,11 +81,28 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "nebius",
   "ai21",
   "coze",
+  // Keyed New API gateway (user-specified 2026-09-14) — NOT in FREE_CHAIN.
+  "hcnsec",
+  // Not OpenAI-shaped — rides its own port (see `PortKind` below and
+  // src/onemin.ts). Credit-based, so it is deliberately NOT in FREE_CHAIN.
+  "1min",
+  // Keyed OpenAI-compatible gateway (user-specified 2026-09-14) — NOT in
+  // FREE_CHAIN: beyond its daily free grant it draws on a prepaid balance.
+  "hashneuron",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
   return (PROVIDER_IDS as readonly string[]).includes(value);
 }
+
+/**
+ * Which wire adapter serves a row. `"openai"` (the default) is the
+ * OpenAI-compatible ChatPort every builtin and custom provider rides.
+ * `"onemin"` is the exception: 1min.ai is not OpenAI-shaped at all — no
+ * `messages[]`, no `tools`, no `usage` — so it needs a real translating
+ * adapter rather than a base-URL row. See src/onemin.ts.
+ */
+export type PortKind = "openai" | "onemin";
 
 export type ProviderConfig = {
   id: string;
@@ -121,6 +140,12 @@ export type ProviderConfig = {
    * The first host that authenticates is pinned in `provider-hosts.json`.
    */
   fallbackBaseUrls?: string[];
+  /**
+   * Wire adapter for this row. Omitted means "openai" (the OpenAI-compatible
+   * path every builtin/custom provider uses). Only set this when a provider
+   * needs its own translation layer.
+   */
+  port?: PortKind;
 };
 
 /**
@@ -356,7 +381,12 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "free endpoint, limits unpublished — wait and retry (prompts may be logged: never send private code)",
     // Openly free: no signup, "free" is the documented placeholder key for
-    // clients that require one. In maintenance (503) at the 2026-09-11 probe.
+    // clients that require one. Still in a DECLARED maintenance window when
+    // re-probed 2026-09-14 (consistent 503, code "maintenance") — it is not
+    // dead the way lepton was, so it stays in FREE_CHAIN; a failing hop just
+    // rotates. Its notice says the served models are changing, so `defaultModel`
+    // and the `empero:glm-5.3-flash` $0 entry in router.ts both need
+    // re-verifying when it returns.
     anonymousKey: "free",
   },
   // === Onboarded free OpenAI-compatible providers (2026-09-11 addendum) ===
@@ -821,6 +851,89 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "free tier is token-metered with daily resets — limits vary per proxied model",
   },
+  "1min": {
+    id: "1min",
+    brand: "1min.ai",
+    // Deliberately not OpenAI-shaped, so it rides `port: "onemin"` and the
+    // adapter in src/onemin.ts does the translating: POST /api/chat-with-ai
+    // with a `type: UNIFY_CHAT_WITH_AI` discriminator, ONE flattened
+    // `promptObject.prompt` string instead of a messages[] array, no `tools`
+    // field, and no `usage` block in the response. chatPath/modelsPath are
+    // the real 1min paths (kept for display/errors), not OpenAI ones.
+    baseUrl: "https://api.1min.ai",
+    chatPath: "/api/chat-with-ai",
+    modelsPath: "/models",
+    defaultModel: "gpt-4o-mini",
+    // Cannot be `1MIN_API_KEY`: POSIX shells reject an identifier starting
+    // with a digit, so `1MIN_API_KEY=x cmd` never reaches the process.
+    envVar: "ONEMIN_API_KEY",
+    keyUrl: "https://docs.1min.ai/docs/api/create-api-key",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    port: "onemin",
+    rateLimitedHint: "credit-metered — every call spends credits from your plan, not a free tier",
+  },
+  // Added 2026-09-14, user-specified endpoint, live-probed: both /v1/models
+  // and /v1/chat/completions answer 401 {"error":{"type":"new_api_error"}}
+  // without a token, confirming an open-source New API gateway sitting on
+  // standard OpenAI paths.
+  //
+  // defaultModel is `auto` rather than a concrete id on purpose: hcnsec is a
+  // relay whose served set is unstable (its own docs report individual models
+  // down at times) and whose docs insist a model id must match the console's
+  // Model Plaza *exactly*. `auto` is the documented smart-routing entry, so it
+  // is the one id that stays valid as the catalog shifts; a guessed concrete
+  // id 404s on the first call. Confirm the live set with `codewhip models
+  // hcnsec` once a key is stored.
+  //
+  // Keyed, and its free allowance is an unpublished console quota rather than
+  // a fixed grant — so like 1min it is NOT in FREE_CHAIN. `--free` must never
+  // bill pay-go. Reach it with `--provider hcnsec`.
+  hcnsec: {
+    id: "hcnsec",
+    brand: "hcnsec",
+    baseUrl: "https://api.hcnsec.cn",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "auto",
+    envVar: "HCNSEC_API_KEY",
+    keyUrl: "https://api.hcnsec.cn/console",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "New API relay — key required; the free allowance is a console-published quota, so confirm it with codewhip models hcnsec",
+  },
+  // Added 2026-09-14, user-specified endpoint, live-probed: both /v1/models and
+  // /v1/chat/completions answer 401 {"error":{"type":"invalid_request_error",
+  // "code":"invalid_api_key"}} without a token, i.e. a plain OpenAI-compatible
+  // gateway — standard Bearer auth and a standard error envelope, so it rides
+  // the generic `openAiPort` and needs no adapter. (Contrast hcnsec, whose 401
+  // says `new_api_error`.)
+  //
+  // defaultModel is the literal id `default`, not a concrete model name. The
+  // console's own model picker maps that id to the label "Auto"
+  // (`id === "default" ? "Auto" : id` in its app.js), so `default` is the
+  // gateway's server-side routing entry and the one id that stays valid as the
+  // served catalog shifts. A guessed concrete id 404s on the first call — the
+  // same trap hcnsec's `auto` avoids. Confirm the live set with `codewhip
+  // models hashneuron` once a key is stored.
+  //
+  // Keyed, and NOT in FREE_CHAIN. Its landing page advertises "500,000 tokens
+  // per day, reset at UTC midnight" for every account, but the same console
+  // sells prepaid token packages and keeps a balance/ledger — so a call beyond
+  // the daily grant draws on a paid balance rather than cleanly rate-limiting.
+  // `--free` promises it never bills pay-go, so that is disqualifying until a
+  // re-audit confirms the free grant is card-free *and* 429s on exhaustion.
+  // Reach it with `--provider hashneuron`.
+  hashneuron: {
+    id: "hashneuron",
+    brand: "RouteOpen",
+    baseUrl: "https://hashneuron.space",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "default",
+    envVar: "HASHNEURON_API_KEY",
+    keyUrl: "https://hashneuron.space/#keys",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "RouteOpen gateway — key required; 500k tokens/day free per account, then it draws on your prepaid balance",
+  },
 };
 
 export function parseProviderId(value: string | undefined): BuiltinProviderId | null {
@@ -830,33 +943,12 @@ export function parseProviderId(value: string | undefined): BuiltinProviderId | 
 }
 
 /**
- * Some providers scope their API by a per-user id in the path — Cloudflare
- * Workers AI serves the OpenAI-compatible surface under
- * `/accounts/<account_id>/ai`. The id is not a secret but it is per-user, so a
- * row carries a `{ENV_VAR}` placeholder resolved from the environment when the
- * URL is built rather than being hardcoded.
- *
- * Substitution happens ONLY at URL construction. `candidateBaseUrls()` and the
- * `host` recorded in provider-stats.jsonl keep the template, so no account id
- * is ever written to disk or into the stats log.
+ * Placeholder resolution and Retry-After parsing live in ./wire-util.ts so
+ * wire adapters can use them without importing this registry back. Re-exported
+ * here because callers (models.ts, tests) have always reached for them on this
+ * module.
  */
-const BASE_URL_PLACEHOLDER = /\{([A-Z][A-Z0-9_]*)\}/g;
-
-/** Env var names a base URL still needs before it can be called (empty = ready). */
-export function unresolvedBaseUrlVars(baseUrl: string): string[] {
-  const missing: string[] = [];
-  for (const match of baseUrl.matchAll(BASE_URL_PLACEHOLDER)) {
-    if ((process.env[match[1]] ?? "").length === 0) {
-      missing.push(match[1]);
-    }
-  }
-  return missing;
-}
-
-/** Fill `{ENV_VAR}` placeholders from the environment. Unset vars become "". */
-export function resolveBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(BASE_URL_PLACEHOLDER, (_whole, name: string) => process.env[name] ?? "");
-}
+export { parseRetryAfter, resolveBaseUrl, unresolvedBaseUrlVars };
 
 export function chatUrlFor(cfg: ProviderConfig): string {
   return `${resolveBaseUrl(cfg.baseUrl)}${cfg.chatPath}`;
@@ -924,10 +1016,26 @@ export function candidateBaseUrls(cfg: ProviderConfig): string[] {
   return ordered;
 }
 
-function genericHint(cfg: ProviderConfig): (status: number, body: string) => string {
+/**
+ * 401/403 message that names the actual culprit source: a stored-file key
+ * can silently shadow a keyless free tier (opencode "free" vs anonymous
+ * "public", seen 2026-09-14), and "get one at <url>" then sends the user
+ * chasing a key they never needed.
+ */
+export function authHint(cfg: ProviderConfig, keySource?: string): string {
+  if (keySource === "file") {
+    return `stored ${cfg.id} key was rejected — clear it with "codewhip auth logout ${cfg.id}" (get a fresh one at ${cfg.keyUrl})`;
+  }
+  if (keySource === "anonymous" && cfg.anonymousKey !== undefined) {
+    return `${cfg.brand} rejected the anonymous ${cfg.anonymousKey} key — per-IP quota or tier change; a real key helps (${cfg.keyUrl})`;
+  }
+  return `invalid or missing ${cfg.envVar} (get one at ${cfg.keyUrl})`;
+}
+
+function genericHint(cfg: ProviderConfig, keySource?: string): (status: number, body: string) => string {
   return (status, body) => {
     if (status === 401 || status === 403) {
-      return `invalid or missing ${cfg.envVar} (get one at ${cfg.keyUrl})`;
+      return authHint(cfg, keySource);
     }
     if (status === 404 || status === 410) {
       return `unknown or retired model (list live ones via "codewhip models ${cfg.id}"). ${body}`;
@@ -991,41 +1099,26 @@ function toLoopToolCalls(raw: Array<NvidiaToolCallMsg> | undefined): LoopToolCal
   return out;
 }
 
-/**
- * Parse a Retry-After header (delay seconds or HTTP-date) into ms,
- * capped at 60s. Undefined when absent, malformed, past, or wild.
- */
-export function parseRetryAfter(header: string | null): number | undefined {
-  if (header === null) {
-    return undefined;
-  }
-  const trimmed = header.trim();
-  if (/^\d+$/.test(trimmed)) {
-    const ms = Number(trimmed) * 1000;
-    if (!Number.isFinite(ms) || ms < 0) {
-      return undefined;
-    }
-    return Math.min(ms, 60000);
-  }
-  const at = Date.parse(trimmed);
-  if (Number.isNaN(at)) {
-    return undefined;
-  }
-  const diff = at - Date.now();
-  if (diff < 0) {
-    return undefined;
-  }
-  return Math.min(diff, 60000);
-}
-
 function httpFailure(
   status: number,
   body: string,
   hint: (status: number, body: string) => string,
   res: Response
 ): PortFailure {
+  // 5xx and 408 are transient *server-side* conditions, so rotating to another
+  // model or provider is the right move rather than giving up. This matters
+  // most for the free chain: free tiers answer 503 under load and during
+  // declared maintenance windows, and classifying that as terminal "other"
+  // stranded the chain on exactly the failure it exists to survive. 4xx stays
+  // terminal — a bad request repeats identically wherever it is sent.
   const retryable: RetryableKind =
-    status === 429 ? "rate-limited" : status === 401 || status === 403 ? "auth" : "other";
+    status === 429
+      ? "rate-limited"
+      : status === 401 || status === 403
+        ? "auth"
+        : status >= 500 || status === 408
+          ? "server"
+          : "other";
   const failure: PortFailure = { ok: false, error: hint(status, body), retryable };
   if (retryable === "rate-limited") {
     const wait = parseRetryAfter(res.headers.get("retry-after"));
@@ -1186,9 +1279,9 @@ function estimateUsage(bodyChars: number, text: string, toolCalls: LoopToolCall[
   return { prompt: Math.ceil(bodyChars / 4), completion: Math.ceil(out / 4) };
 }
 
-function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): ChatPort {
+function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, keySource?: string): ChatPort {
   const brand = cfg.brand;
-  const hint = genericHint(cfg);
+  const hint = genericHint(cfg, keySource);
   const limit = timeoutMs ?? cfg.timeoutMs;
   /**
    * Once this provider is seen rejecting a streaming body, stop paying the
@@ -1423,8 +1516,10 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): Ch
 }
 
 /** Tool-calling adapter for an explicit config (builtins and customs alike). */
-export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number): ChatPort {
-  return openAiPort(cfg, apiKey, timeoutMs);
+export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, keySource?: string): ChatPort {
+  // One branch, keyed by the row's own discriminator — a non-OpenAI provider
+  // never has to be special-cased by id at every call site.
+  return cfg.port === "onemin" ? oneminPort(cfg, apiKey, timeoutMs, keySource) : openAiPort(cfg, apiKey, timeoutMs, keySource);
 }
 
 /** Tool-calling adapter implementing the loop's ChatPort for a builtin provider. */
