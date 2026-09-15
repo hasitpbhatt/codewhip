@@ -142,17 +142,21 @@ function printCommandHelp(topic: string): boolean {
       console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
       return true;
     case "serve":
-      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui]");
+      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui] [--ping-models] [--flag-secrets]");
       console.log("  Exposes the provider registry as an OpenAI-compatible HTTP server:");
       console.log("    POST /v1/chat/completions   stream and non-stream; model = \"<provider>:<model>\"");
       console.log("    GET  /v1/models             every provider as \"<provider>:<default-model>\"");
       console.log("    GET  /health");
+      console.log("    GET  /playground            model playground UI");
       console.log("    GET  /auth                  provider key manager UI (on by default; --no-auth-ui to disable)");
+      console.log("    POST /auth/_custom          register a custom endpoint (same as: codewhip provider add)");
+      console.log("    DELETE /auth/_custom/<id>   remove one (same as: codewhip provider remove <id>)");
       console.log("  Defaults to llm7 (keyless) so it works with no setup. Any OpenAI client can point at it,");
       console.log("  including the ones that cannot speak to a non-OpenAI provider such as 1min.");
       console.log("  Binds 127.0.0.1 unless --host is given; a non-loopback bind REQUIRES --token.");
       console.log("  This proxies models only — it runs no tools, applies no policy, and writes no audit entries.");
-      console.log("  The auth UI lets you store/clear provider keys (env vars still win; keys are never echoed).");
+      console.log("  The auth UI stores/clears provider keys and registers custom endpoints from the browser");
+      console.log("  (env vars still win; keys are never echoed). Registered endpoints join /v1/models at once.");
       return true;
     case "audit":
       console.log("codewhip audit [--verify|--last <n>|--replay <runId>|--export <file>] — inspect the hash-chained log.");
@@ -1682,6 +1686,8 @@ async function cmdServe(args: string[]): Promise<void> {
   const token = flag("--token");
   if (token !== undefined) opts.token = token;
   opts.authUi = args.indexOf("--no-auth-ui") === -1;
+  opts.pingModels = args.includes("--ping-models");
+  opts.flagSecrets = args.includes("--flag-secrets");
   const { createShutdown, startServe } = await import("./serve.js");
   try {
     const server = startServe(opts);

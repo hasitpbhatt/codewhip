@@ -237,6 +237,8 @@ codewhip provider add ollama-local --base-url http://127.0.0.1:11434 --model qwe
 
 Registration is validated (`https://` base — or `http://` on **loopback only** — `UPPER_SNAKE` env var, 5s–120s timeout) and stored keyless in `custom-providers.json` next to the key file — `--failover`, `--provider`, and `models` all see customs. Anything not OpenAI-compatible (`/v1/chat/completions` + Bearer) needs an adapter, not a table row.
 
+You can also add one without the terminal: while `codewhip serve` is running, open `http://127.0.0.1:8787/auth` — the key manager page carries the same form (id / base URL / default model / env var, optional paths and timeout under "optional"). A registered endpoint joins `/v1/models` immediately, and custom rows get a **remove** button. The API behind it is `POST /auth/_custom` and `DELETE /auth/_custom/<id>`; validation is the CLI's, so the two paths cannot disagree.
+
 Loopback `http://` exists for local runtimes (Ollama `:11434`, vLLM `:8000`, LM Studio `:1234`), where the traffic provably cannot leave the machine. Any other host over plain `http://` is still refused — that would put your key on the wire in clear text. A loopback provider gets a placeholder credential, because every call path refuses an empty key while a local runtime wants none. These are also what the router's `private` class routes to, so the id must differ from any builtin: `ollama` is already the *remote* ollama-cloud service, so use e.g. `ollama-local`.
 
 ### Undo anything: automatic checkpoints + `codewhip rollback`
@@ -500,6 +502,11 @@ ids may keep their own (`kilo:cohere/north-mini-code:free`). A bare provider id
 means that provider's default model; a bare model id goes to the server's
 default provider. `GET /v1/models` lists every provider as
 `<provider>:<default-model>`, and `GET /health` needs no auth.
+
+`GET /auth` is a small web page (on by default; `--no-auth-ui` disables it) that
+sets and clears provider keys and registers custom endpoints from the browser —
+`POST /auth/_custom`, `DELETE /auth/_custom/<id>`. It sits behind the same
+loopback-or-token rule as the rest of the server.
 
 The client always receives a well-formed OpenAI SSE stream, even when the
 upstream is non-streaming — 1min's port never streams, and `--no-stream`

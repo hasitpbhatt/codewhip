@@ -1,9 +1,11 @@
 import * as http from "node:http";
 import { randomUUID } from "node:crypto";
-import { getProviderConfig, listAllProviderConfigs } from "./custom-providers.js";
-import { makePortForConfig, PROVIDERS } from "./provider.js";
+import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
+import { isBuiltinProviderId, makePortForConfig, PROVIDERS } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
+import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
+import { redactSecrets } from "./redact.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -45,6 +47,10 @@ export type ServeOptions = {
   token?: string;
   /** Serve the provider key manager UI (HTML + JSON API); off by default. */
   authUi?: boolean;
+  /** When true, /v1/models only lists providers that respond to their models endpoint. */
+  pingModels?: boolean;
+  /** When true, write secret-flagged entries to .codewhip/serve-requests.log */
+  flagSecrets?: boolean;
 };
 
 type OpenAiMessage = {
@@ -149,6 +155,12 @@ export function resolveTarget(requested: string, fallback: { provider: string; m
   if (trimmed.length === 0) {
     return { provider: fallback.provider, model: fallback.model };
   }
+  if (trimmed === "auto") {
+    const configs = listAllProviderConfigs();
+    if (configs.length === 0) return { error: "no providers available for auto selection" };
+    const pick = configs[Math.floor(Math.random() * configs.length)];
+    return { provider: pick.id, model: pick.defaultModel };
+  }
   const colon = trimmed.indexOf(":");
   if (colon > 0) {
     const provider = trimmed.slice(0, colon);
@@ -202,6 +214,38 @@ function readBody(req: http.IncomingMessage): Promise<string | { error: string }
     });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", () => resolve({ error: "failed to read request body" }));
+  });
+}
+
+type CappedBody = { ok: true; body: string } | { ok: false; error: string };
+
+/**
+ * Read a small body with its own cap. Never rejects: an oversized or broken
+ * request resolves as an error value, because every caller here must answer
+ * the client rather than fall into a rejection nobody is awaiting.
+ */
+function readCappedBody(req: http.IncomingMessage, cap: number, tooLarge: string): Promise<CappedBody> {
+  return new Promise((resolve) => {
+    let size = 0;
+    let over = false;
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > cap) {
+        over = true;
+        resolve({ ok: false, error: tooLarge });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      // 'end' still fires after destroy(); the first resolve wins.
+      if (!over) resolve({ ok: true, body: Buffer.concat(chunks).toString("utf8") });
+    });
+    req.on("error", () => {
+      if (!over) resolve({ ok: false, error: "failed to read request body" });
+    });
   });
 }
 
@@ -277,48 +321,466 @@ function writeSyntheticStream(
   res.write("data: [DONE]\n\n");
 }
 
-function modelList(): Record<string, unknown> {
+async function modelList(opts: ServeOptions): Promise<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000);
-  const rows = listAllProviderConfigs().map((cfg) => ({
+  const cfgs = listAllProviderConfigs();
+  let rows = cfgs.map((cfg) => ({
     id: `${cfg.id}:${cfg.defaultModel}`,
-    object: "model",
+    object: "model" as const,
     created,
     owned_by: cfg.id,
+    cfg,
   }));
-  return { object: "list", data: rows };
+  if (opts.pingModels) {
+    const ping = async (cfg: typeof cfgs[number]) => {
+      try {
+        const url = `${cfg.baseUrl}${cfg.modelsPath}`;
+        const { key } = resolveKey(cfg.id);
+        const headers: Record<string, string> = {};
+        if (key.length > 0) headers["Authorization"] = `Bearer ${key}`;
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 1500);
+        const res = await fetch(url, { method: "GET", signal: controller.signal, headers });
+        clearTimeout(t);
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => null) as { data?: Array<{ id: string }> } | null;
+        if (!data?.data) return true; // list shape unknown, assume reachable
+        return data.data.some((m) => m.id === cfg.defaultModel);
+      } catch {
+        return false;
+      }
+    };
+    const results = await Promise.all(rows.map(async (r) => ({ r, ok: await ping(r.cfg) })));
+    rows = results.filter((x) => x.ok).map((x) => x.r);
+  }
+  const data = rows.map(({ cfg: _cfg, ...rest }) => rest);
+  return { object: "list", data };
 }
 
 /** Provider key manager UI as a route group on the serve server. */
 const AUTH_UI = `/auth`;
+
+/**
+ * Sub-path of the auth UI that registers and removes custom providers — the
+ * UI equivalent of `codewhip provider add/remove`.
+ *
+ * The leading underscore is deliberate: a provider id can only be `[a-z0-9-]`,
+ * so `/_custom` can never be shadowed by a provider the user later names
+ * "custom", "providers", or anything else — unlike a plain `/custom`, which
+ * would silently become unreachable as a key endpoint the moment someone
+ * registered that id.
+ */
+const CUSTOM_PATH = "/_custom";
+const CUSTOM_UI = `${AUTH_UI}${CUSTOM_PATH}`;
+
+const MAX_KEY_BYTES = 1024;
+const MAX_CUSTOM_BODY_BYTES = 8 * 1024;
 
 function sendHtml(res: http.ServerResponse, html: string): void {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html, "utf8") });
   res.end(html);
 }
 
+/** Escape for HTML text and attribute positions. */
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function authStatus(): Array<Record<string, unknown>> {
   return listAllProviderConfigs().map((cfg) => {
     const { key, source } = resolveKey(cfg.id);
-    return { id: cfg.id, brand: cfg.brand, keyUrl: cfg.keyUrl, envVar: cfg.envVar, source, hasKey: key.length > 0 };
+    return {
+      id: cfg.id,
+      brand: cfg.brand,
+      baseUrl: cfg.baseUrl,
+      keyUrl: cfg.keyUrl,
+      envVar: cfg.envVar,
+      source,
+      hasKey: key.length > 0,
+      custom: !isBuiltinProviderId(cfg.id),
+    };
   });
 }
 
 function authHtml(): string {
-  const rows = authStatus()
-    .map(
-      (r) =>
-        `<tr><td>${r.id}</td><td><a href="${r.keyUrl}" target=_blank>${r.keyUrl}</a></td>` +
-        `<td><code>${r.envVar}</code></td>` +
-        `<td><span class="src">${r.source}</span></td>` +
-        `<td>${r.hasKey ? '<button onclick="logout(\'' + r.id + '\')">logout</button>' : '<button onclick="edit(\'' + r.id + '\')">set key</button>'}</td></tr>`
-    )
-    .join("");
-  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip auth</title><style>body{font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}.src{color:#666;font-size:.85em}</style></head><body><h1>codewhip auth — provider keys</h1><table><thead><tr><th>provider</th><th>key console</th><th>env var</th><th>source</th><th></th></tr></thead><tbody>${rows}</tbody></table><p><small>Environment wins when set. POST <code>{"key":"..."}</code> to <code>/auth/:id</code> to save; DELETE removes. Keys are never echoed in any response.</small></p><script>async function edit(id){const k=prompt("Enter "+id+" API key");if(k===null)return;await fetch("/auth/"+id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:k})});location.reload();}async function logout(id){if(!confirm("Remove stored "+id+" key?"))return;await fetch("/auth/"+id,{method:"DELETE"});location.reload();}</script></body></html>`;
+  const rows = authStatus().map(r => {
+    const id = escapeHtml(r.id);
+    const endpoint = r.custom === true ? `<div class="url">${escapeHtml(r.baseUrl)}</div>` : "";
+    const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="none">(none)</span>`;
+    const tag = r.custom === true ? `<span class="tag">custom</span>` : "";
+    const keyState = r.hasKey ? `<span class="pill ok">key set</span>` : `<span class="pill">no key</span>`;
+    const source = escapeHtml(r.source);
+    const env = escapeHtml(r.envVar);
+    return `<div class="card prov">
+<div class="prov-head">
+<div>
+<strong>${id}</strong>${tag}
+${endpoint}
+</div>
+<div class="prov-actions">
+${keyState}
+<button data-act="login" data-id="${id}">Set key</button>
+${r.hasKey ? `<button data-act="logout" data-id="${id}" class="ghost">Remove key</button>` : ``}
+${r.custom ? `<button data-act="remove" data-id="${id}" class="danger">Remove provider</button>` : ``}
+</div>
+</div>
+<div class="prov-meta">
+<div><span class="k">Env</span><code>${env}</code></div>
+<div><span class="k">Key console</span>${keyUrl}</div>
+<div><span class="k">Source</span><span class="src">${source}</span></div>
+</div>
+</div>`;
+  }).join("");
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip auth</title><style>
+:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff;--danger:#d00}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
+header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0}
+h1{margin:0;font-size:1.2rem;font-weight:600}
+.container{max-width:1000px;margin:0 auto;padding:1.5rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem}
+.prov{margin-bottom:1rem}
+.prov-head{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start}
+.prov-actions{display:flex;gap:.5rem;align-items:center}
+.prov-meta{display:grid;grid-template-columns:140px 1fr;gap:.5rem;margin-top:.75rem;color:var(--muted);font-size:.92rem}
+.prov-meta .k{font-weight:600;color:var(--fg)}
+code{background:var(--bg);padding:.15rem .35rem;border-radius:4px;border:1px solid var(--border)}
+.tag{background:#eef;border:1px solid #ccd;color:#446;border-radius:3px;font-size:.7em;padding:.05rem .25rem;margin-left:.5rem}
+.pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;background:var(--border);font-size:.75rem;margin-right:.5rem}
+.pill.ok{background:#e6f4ea;color:#137333}
+.url{font-size:.8em;color:var(--muted);word-break:break-all}
+.none{opacity:.6}
+button{cursor:pointer;padding:.5rem .8rem;border:1px solid var(--border);border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+button.ghost{background:transparent;color:var(--fg)}
+button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
+input{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--fg)}
+label{display:block;font-weight:600;margin:.6rem 0 .25rem}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+@media (max-width:700px){.form-grid{grid-template-columns:1fr}}
+.err{color:var(--danger);min-height:1.2em;margin:.5rem 0}
+small{color:var(--muted)}
+</style></head><body>
+<header><h1>codewhip auth — providers & keys</h1></header>
+<div class="container">
+<div class="grid">
+<div>
+<h2 style="margin:.5rem 0 1rem">Your providers</h2>
+${rows}
+</div>
+<div>
+<div class="card">
+<h3 style="margin-top:0">Register custom endpoint</h3>
+<form id="add" autocomplete="off" class="form-grid">
+<div><label>id</label><input name="id" required placeholder="my-gateway"></div>
+<div><label>base URL</label><input name="baseUrl" required placeholder="https://gateway.example.com"></div>
+<div><label>default model</label><input name="model" required placeholder="my-model"></div>
+<div><label>env var</label><input name="envVar" required placeholder="MY_GATEWAY_API_KEY"></div>
+<div style="grid-column:1/-1"><label>key URL</label><input name="keyUrl" placeholder="https://gateway.example.com/keys"></div>
+<div style="grid-column:1/-1"><label>API key <span style="font-weight:400;color:var(--muted)">optional – provide now instead of env var</span></label><input name="key" type="password" autocomplete="new-password" placeholder="sk-..."></div>
+<details style="grid-column:1/-1"><summary>Optional</summary>
+<div class="form-grid" style="margin-top:.5rem">
+<div><label>brand</label><input name="brand"></div>
+<div><label>chat path</label><input name="chatPath" placeholder="/v1/chat/completions"></div>
+<div><label>models path</label><input name="modelsPath" placeholder="/v1/models"></div>
+<div><label>timeout ms</label><input name="timeoutMs" inputmode="numeric"></div>
+<div><label>rate hint</label><input name="rateHint"></div>
+</div>
+</details>
+<div class="err" id="err"></div>
+<button type="submit" style="margin-top:.5rem">Register</button>
+</form>
+<p><small>https:// anywhere, http:// on loopback for local runtimes like Ollama. Ids: lowercase letters, digits, dashes.</small></p>
+</div>
+</div>
+</div>
+</div>
+<script>
+const err=document.getElementById('err');
+document.getElementById('add').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const key=String(fd.get('key')||'').trim();
+  const body={}; fd.forEach((v,k)=>{if(k==='key') return; const s=String(v).trim(); if(s) body[k]=s;});
+  err.textContent='';
+  try{
+    const res=await fetch('/auth/_custom',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok){const j=await res.json().catch(()=>null); err.textContent=(j&&j.error&&j.error.message)||('failed '+res.status); return;}
+    if(key){await fetch('/auth/'+encodeURIComponent(body.id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key})});}
+    location.reload();
+  }catch(e2){err.textContent='network error';}
+});
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-act]'); if(!b) return;
+  const id=b.dataset.id, act=b.dataset.act;
+  if(act==='login'){const k=prompt('Enter '+id+' API key'); if(k===null) return; await fetch('/auth/'+encodeURIComponent(id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:k})}); location.reload();}
+  if(act==='logout'){if(!confirm('Remove stored '+id+' key?')) return; await fetch('/auth/'+encodeURIComponent(id),{method:'DELETE'}); location.reload();}
+  if(act==='remove'){if(!confirm('Remove custom provider '+id+'?')) return; const res=await fetch('/auth/_custom/'+encodeURIComponent(id),{method:'DELETE'}); if(!res.ok){alert('failed');} else {location.reload();}}
+});
+</script></body></html>`;
 }
 
-function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse, path: string): boolean {
+function playgroundHtml(): string {
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip playground</title><style>
+:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff;--danger:#d00}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
+header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0;z-index:10}
+h1{margin:0;font-size:1.2rem;font-weight:600}
+.container{max-width:1100px;margin:0 auto;padding:1.5rem;display:grid;grid-template-columns:360px 1fr;gap:1.5rem}
+@media (max-width:900px){.container{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem}
+label{display:block;font-weight:600;margin:.75rem 0 .35rem;color:var(--fg)}
+select,input,textarea,button{font:inherit}
+select,input[type=text],textarea{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--fg)}
+textarea{min-height:100px;resize:vertical}
+.row{display:grid;grid-template-columns:1fr;gap:.5rem}
+.actions{display:flex;gap:.5rem;align-items:center;margin-top:.75rem}
+button{cursor:pointer;padding:.55rem .9rem;border:1px solid var(--border);border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+button.secondary{background:transparent;color:var(--fg)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.switch{display:flex;align-items:center;gap:.5rem;font-weight:400;color:var(--muted)}
+.output{border:1px solid var(--border);border-radius:10px;background:var(--card);padding:1rem;min-height:420px;white-space:pre-wrap;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92rem}
+.status{font-size:.85rem;color:var(--muted);margin:.5rem 0}
+.error{color:var(--danger);font-weight:600}
+.collapser{cursor:pointer;color:var(--accent);font-size:.9rem;margin:.25rem 0}
+.hidden{display:none}
+.badge{display:inline-block;padding:.15rem .45rem;border-radius:6px;background:var(--border);font-size:.75rem;margin-left:.5rem;color:var(--muted)}
+</style></head><body>
+<header><h1>codewhip playground</h1></header>
+<div class="container">
+<div class="card">
+<div class="row">
+<label for="model">Model <span id="modelBadge" class="badge">loading…</span></label>
+<select id="model"></select>
+<p class="status">Choose a provider:model from /v1/models</p>
+</div>
+<div class="row">
+<label for="system" class="collapser" id="sysToggle">System ▾</label>
+<textarea id="system" class="hidden" placeholder="Optional system prompt"></textarea>
+</div>
+<div class="row">
+<label for="prompt">Prompt</label>
+<textarea id="prompt" placeholder="Type a prompt…"></textarea>
+</div>
+<div class="actions">
+<div class="switch"><input type="checkbox" id="stream" checked> <span>Stream</span></div>
+<button id="send">Send</button>
+<button class="secondary" id="stop">Stop</button>
+<button class="secondary" id="clear">Clear</button>
+</div>
+<div id="err" class="error status"></div>
+</div>
+<div class="card">
+<div class="status">Output</div>
+<div id="chat" class="output" aria-live="polite"></div>
+</div>
+</div>
+<script>
+const $ = s=>document.querySelector(s);
+const modelSel=$('#model'), sys=$('#system'), promptEl=$('#prompt'), streamEl=$('#stream');
+const chat=$('#chat'), err=$('#err'), badge=$('#modelBadge');
+let controller=null;
+async function loadModels(){
+  try{
+    const res=await fetch('/v1/models');
+    const j=await res.json();
+    modelSel.innerHTML='';
+    (j.data||[]).forEach(m=>{
+      const o=document.createElement('option');
+      o.value=m.id; o.textContent=m.id;
+      modelSel.appendChild(o);
+    });
+    badge.textContent=(j.data?.length||0)+' models';
+  }catch(e){badge.textContent='offline';}
+}
+loadModels();
+$('#sysToggle').addEventListener('click',()=>{sys.classList.toggle('hidden'); $('#sysToggle').textContent=sys.classList.contains('hidden')?'System ▾':'System ▴';});
+$('#clear').addEventListener('click',()=>{chat.textContent=''; err.textContent='';});
+$('#stop').addEventListener('click',()=>{if(controller){controller.abort(); controller=null; err.textContent='Stopped';}});
+async function send(){
+  err.textContent=''; chat.textContent='';
+  const model=modelSel.value, system=sys.value.trim(), prompt=promptEl.value.trim();
+  if(!model){err.textContent='Select a model'; modelSel.focus(); return;}
+  if(!prompt){err.textContent='Enter a prompt'; promptEl.focus(); return;}
+  const messages=[]; if(system) messages.push({role:'system',content:system}); messages.push({role:'user',content:prompt});
+  controller=new AbortController();
+  try{
+    const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,messages,stream:streamEl.checked}),signal:controller.signal});
+    if(!res.ok){err.textContent='Error '+res.status; return;}
+    if(streamEl.checked){
+      const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
+      while(true){const {value,done}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const lines=buf.split('\\n'); buf=lines.pop(); for(const line of lines){if(!line.startsWith('data:')) continue; const data=line.slice(5).trim(); if(data==='[DONE]') continue; try{const j=JSON.parse(data); const c=j.choices?.[0]?.delta?.content; if(c) chat.textContent+=c;}catch{}} }
+    }else{const j=await res.json(); chat.textContent=j.choices?.[0]?.message?.content ?? '';}
+  }catch(e){if(e.name!=='AbortError') err.textContent='Network error';}
+  finally{controller=null;}
+}
+$('#send').addEventListener('click',send);
+promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.metaKey){e.preventDefault();send();}});
+</script>
+ </body></html>`;
+}
+
+function statsHtml(summary: ReturnType<typeof summarizeCalls>): string {
+  const totalCalls = summary.total;
+  const overallSuccess = summary.providers.length ? summary.providers.reduce((a,p)=>a+p.ok,0)/Math.max(1,summary.providers.reduce((a,p)=>a+p.total,0)) : 0;
+  const providers = summary.providers.map(p => {
+    const rows = p.models.map(m => {
+      const ok = m.successRate * 100;
+      const bar = `<div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden"><div style="width:${ok}%;height:100%;background:${ok>=80?'#137333':ok>=50?'#b8860b':'#d00'}"></div></div>`;
+      const fail = m.lastFailureTs ? new Date(m.lastFailureTs).toLocaleString() : '—';
+      const errors = Object.entries(m.errorKinds).map(([k,v])=>`<span class="pill">${k}: ${v}</span>`).join('');
+      return `<div class="card model">
+        <div class="model-head"><strong>${escapeHtml(m.model)}</strong><span class="pill">${m.total} calls</span><span class="pill ${ok>=80?'ok':''}">${ok.toFixed(1)}% ok</span></div>
+        ${bar}
+        <div class="meta">last failure: ${fail} ${m.lastFailureOutcome ? '('+escapeHtml(m.lastFailureOutcome)+')' : ''}</div>
+        <div class="errors">${errors}</div>
+      </div>`;
+    }).join('');
+    return `<section class="provider">
+      <h2>${escapeHtml(p.provider)} <span class="pill">${p.total} calls</span><span class="pill">${(p.successRate*100).toFixed(1)}% ok</span></h2>
+      <div class="grid">${rows}</div>
+    </section>`;
+  }).join('');
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip stats</title><style>
+:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
+header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0}
+h1{margin:0;font-size:1.2rem;font-weight:600}
+.container{max-width:1100px;margin:0 auto;padding:1.5rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+.provider h2{margin:.5rem 0 1rem;color:var(--fg)}
+.model-head{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.5rem}
+.meta{font-size:.85rem;color:var(--muted);margin:.5rem 0}
+.errors{margin-top:.5rem}
+.pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;background:var(--border);font-size:.75rem;margin-right:.5rem}
+.pill.ok{background:#e6f4ea;color:#137333}
+</style></head><body>
+<header><h1>codewhip stats — provider/model health</h1></header>
+<div class="container">
+<div class="card"><strong>Total calls:</strong> ${totalCalls} • <strong>Success rate:</strong> ${(overallSuccess*100).toFixed(1)}%</div>
+${providers || '<p>No data yet.</p>'}
+</div></body></html>`;
+}
+
+/** Body of `POST /auth/_custom`, before validation. */
+type CustomProviderBody = {
+  id?: unknown;
+  baseUrl?: unknown;
+  model?: unknown;
+  envVar?: unknown;
+  brand?: unknown;
+  chatPath?: unknown;
+  modelsPath?: unknown;
+  keyUrl?: unknown;
+  timeoutMs?: unknown;
+  rateHint?: unknown;
+};
+
+/** non-string → "". normalize() trims strings, so a number would throw there. */
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** Absent → undefined (the default wins); garbage → NaN, which normalize rejects. */
+function asTimeout(value: unknown): number | undefined {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim().length > 0) return Number(value);
+  return undefined;
+}
+
+/**
+ * Register and remove custom providers from the UI — `codewhip provider
+ * add/remove` for people who never open a terminal.
+ *
+ * Validation is deliberately NOT duplicated here: every rejection is
+ * `addCustomProvider`'s own message, so the form and the CLI can never
+ * disagree about what a valid endpoint is (https anywhere, or http on
+ * loopback; no builtin id collisions; UPPER_SNAKE env var; …).
+ */
+async function handleCustomRoutes(req: http.IncomingMessage, res: http.ServerResponse, rest: string): Promise<void> {
+  const id = rest.replace(/^\//, "").replace(/\/$/, "");
+  if (req.method === "GET" && id.length === 0) {
+    sendJson(res, 200, { data: authStatus().filter((r) => r.custom === true) });
+    return;
+  }
+  if (req.method === "POST" && id.length === 0) {
+    const body = await readCappedBody(req, MAX_CUSTOM_BODY_BYTES, "request body too large");
+    if (!body.ok) {
+      sendJson(res, 413, { error: { message: body.error, code: "too_large" } });
+      return;
+    }
+    let parsed: CustomProviderBody;
+    try {
+      parsed = JSON.parse(body.body) as CustomProviderBody;
+    } catch {
+      sendJson(res, 400, { error: { message: "invalid JSON", code: "invalid_json" } });
+      return;
+    }
+    const timeoutMs = asTimeout(parsed.timeoutMs);
+    const result = addCustomProvider({
+      id: asText(parsed.id),
+      baseUrl: asText(parsed.baseUrl),
+      defaultModel: asText(parsed.model),
+      envVar: asText(parsed.envVar),
+      brand: asText(parsed.brand),
+      chatPath: asText(parsed.chatPath),
+      modelsPath: asText(parsed.modelsPath),
+      keyUrl: asText(parsed.keyUrl),
+      rateLimitedHint: asText(parsed.rateHint),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    if (!result.ok) {
+      sendJson(res, 400, { error: { message: result.error, code: "invalid_provider" } });
+      return;
+    }
+    const cfg = getProviderConfig(result.id);
+    // `local` is the signal the UI turns into "no credential needed".
+    sendJson(res, 201, {
+      id: result.id,
+      baseUrl: cfg?.baseUrl ?? "",
+      defaultModel: cfg?.defaultModel ?? "",
+      envVar: cfg?.envVar ?? "",
+      local: cfg !== null && isLoopbackBaseUrl(cfg.baseUrl),
+    });
+    return;
+  }
+  if (req.method === "DELETE" && id.length > 0) {
+    if (isBuiltinProviderId(id.trim().toLowerCase())) {
+      sendJson(res, 400, { error: { message: `"${id}" is a builtin provider and cannot be removed`, code: "builtin_provider" } });
+      return;
+    }
+    const result = removeCustomProvider(id);
+    if (!result.ok) {
+      sendJson(res, 404, { error: { message: result.error, code: "unknown_provider" } });
+      return;
+    }
+    sendJson(res, 200, { id, removed: true });
+    return;
+  }
+  sendError(
+    res,
+    405,
+    `method ${req.method ?? ""} not allowed on ${CUSTOM_UI} (POST to register, DELETE ${CUSTOM_UI}/<id> to remove)`,
+    "method_not_allowed"
+  );
+}
+
+async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<boolean> {
   if (!path.startsWith(AUTH_UI)) return false;
-  const rest = path.slice(AUTH_UI.length); // "" | "/<id>"
+  const rest = path.slice(AUTH_UI.length); // "" | "/<id>" | "/_custom" | "/_custom/<id>"
+  if (rest === CUSTOM_PATH || rest.startsWith(`${CUSTOM_PATH}/`)) {
+    await handleCustomRoutes(req, res, rest.slice(CUSTOM_PATH.length));
+    return true;
+  }
   // GET /auth → HTML page
   if (req.method === "GET" && (rest === "" || rest === "/")) {
     sendHtml(res, authHtml());
@@ -343,25 +805,24 @@ function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse, path:
     return true;
   }
   if (req.method === "POST") {
-    // readBody is async; inline read.
-    let size = 0;
-    const chunks: Buffer[] = [];
-    let done = false;
-    req.on("data", (c: Buffer) => { size += c.length; if (size > 1024) { done = true; } chunks.push(c); });
-    req.on("end", () => {
-      if (done) { sendJson(res, 413, { error: { message: "key too large", code: "too_large" } }); return; }
-      try {
-        const p = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { key?: unknown };
-        if (typeof p.key !== "string" || p.key.length === 0) {
-          sendJson(res, 400, { error: { message: "body {\"key\":\"<value>\"} required", code: "invalid_key" } });
-          return;
-        }
-        saveKey(id, p.key);
-        sendJson(res, 200, { id, source: "file" });
-      } catch {
-        sendJson(res, 400, { error: { message: "invalid JSON", code: "invalid_json" } });
-      }
-    });
+    const body = await readCappedBody(req, MAX_KEY_BYTES, "key too large");
+    if (!body.ok) {
+      sendJson(res, 413, { error: { message: body.error, code: "too_large" } });
+      return true;
+    }
+    let p: { key?: unknown };
+    try {
+      p = JSON.parse(body.body) as { key?: unknown };
+    } catch {
+      sendJson(res, 400, { error: { message: "invalid JSON", code: "invalid_json" } });
+      return true;
+    }
+    if (typeof p.key !== "string" || p.key.length === 0) {
+      sendJson(res, 400, { error: { message: "body {\"key\":\"<value>\"} required", code: "invalid_key" } });
+      return true;
+    }
+    saveKey(id, p.key);
+    sendJson(res, 200, { id, source: "file" });
     return true;
   }
   if (req.method === "DELETE") {
@@ -379,11 +840,43 @@ export function createServeHandler(opts: ServeOptions): http.RequestListener {
   };
 }
 
+function logServeRequest(opts: ServeOptions, method: string, url: string, body?: string, status?: number) {
+  if (!opts.flagSecrets) return;
+  if (!body) return;
+  const redacted = redactSecrets(body);
+  if (redacted === body) return; // no secrets detected
+  try {
+    const ts = new Date().toISOString();
+    console.warn(`[codewhip serve] secret flagged ${ts} ${method} ${url} status=${status ?? "?"}`);
+    console.warn(`[codewhip serve] raw body: ${body}`);
+  } catch { /* best effort */ }
+}
+
 async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts: ServeOptions): Promise<void> {
   const url = req.url ?? "/";
   const path = url.split("?")[0];
+  let statusCode = 200;
+  const origWriteHead = res.writeHead.bind(res);
+  res.writeHead = ((code: number, ...args: any[]) => { statusCode = code; return origWriteHead(code, ...args); }) as any;
+  const origEnd = res.end.bind(res);
+  res.end = ((...args: any[]) => { logServeRequest(opts, req.method ?? "GET", url, undefined, statusCode); return origEnd(...args); }) as any;
   if (req.method === "GET" && (path === "/health" || path === "/healthz")) {
     sendJson(res, 200, { status: "ok", providers: listAllProviderConfigs().length });
+    return;
+  }
+  if (req.method === "GET" && path === "/playground") {
+    sendHtml(res, playgroundHtml());
+    return;
+  }
+  if (req.method === "GET" && path === "/stats") {
+    const summary = summarizeCalls(readProviderCalls());
+    const url = req.url ?? "";
+    const wantJson = /[?&]format=json/.test(url) || (req.headers.accept ?? "").includes("application/json");
+    if (wantJson) {
+      sendJson(res, 200, summary);
+    } else {
+      sendHtml(res, statsHtml(summary));
+    }
     return;
   }
   if (opts.token !== undefined) {
@@ -394,11 +887,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
   }
   if (opts.authUi && path.startsWith(AUTH_UI)) {
-    void handleAuthUi(req, res, path);
+    await handleAuthUi(req, res, path);
     return;
   }
   if (req.method === "GET" && path === "/v1/models") {
-    sendJson(res, 200, modelList());
+    const list = await modelList(opts);
+    sendJson(res, 200, list);
     return;
   }
   if (req.method !== "POST" || path !== "/v1/chat/completions") {
@@ -410,6 +904,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendError(res, 413, raw.error, "request_too_large");
     return;
   }
+  logServeRequest(opts, req.method ?? "POST", url, raw);
   let parsed: OpenAiRequest;
   try {
     parsed = JSON.parse(raw) as OpenAiRequest;
@@ -550,8 +1045,13 @@ export function startServe(opts: ServeOptions): http.Server {
     const shown = typeof addr === "object" && addr !== null ? `${addr.address}:${addr.port}` : `${opts.host}:${opts.port}`;
     console.log(`codewhip serve — OpenAI-compatible endpoint on http://${shown}`);
     console.log(`  POST /v1/chat/completions   (stream and non-stream; model = "<provider>:<model>")`);
-    console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers as "<provider>:<default-model>")`);
+    console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers as "<provider>:<default-model>"${opts.pingModels ? ", ping-filtered" : ""})`);
     console.log(`  GET  /health`);
+    console.log(`  GET  /playground            model playground UI`);
+    console.log(`  GET  /stats                 provider/model success/failure stats`);
+    if (opts.authUi) {
+      console.log(`  GET  /auth                  provider key manager UI (register a custom endpoint there too)`);
+    }
     console.log(`  default route: ${opts.provider}:${opts.model}`);
     console.log(`  auth: ${opts.token !== undefined ? "bearer token required" : "none (loopback only)"}`);
     console.log(`  note: this proxies models — it runs no tools, applies no policy, and writes no audit entries.`);

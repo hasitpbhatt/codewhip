@@ -2,12 +2,19 @@ import { describe, it } from "node:test";
 import { strictEqual, ok, deepStrictEqual } from "node:assert/strict";
 import * as http from "node:http";
 import * as os from "node:os";
+import * as fs from "node:fs";
 import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { createServeServer, createShutdown, resolveTarget, startServe, toLoopMessages } from "./serve.js";
 import type { ServeOptions } from "./serve.js";
-import { PROVIDERS } from "./provider.js";
+import { PROVIDERS, PROVIDER_IDS } from "./provider.js";
+
+const TEST_CONFIG_DIR = fs.mkdtempSync(join(os.tmpdir(), "codewhip-serve-"));
+for (const p of PROVIDER_IDS) {
+  delete process.env[`${p.toUpperCase()}_API_KEY`];
+}
+process.env.CODEWHIP_CONFIG_DIR = TEST_CONFIG_DIR;
 
 /** OpenAI-shaped non-streaming reply, as the upstream provider would send it. */
 function openAiReply(content: string | null, toolCalls?: unknown[]): Response {
@@ -396,6 +403,165 @@ describe("serve HTTP surface", () => {
     try {
       const res = await h.client(`${h.base}/auth/nope-nope`);
       strictEqual(res.status, 404);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("auth UI registers custom endpoints", () => {
+  /** These tests write custom-providers.json, so they get a throwaway dir. */
+  async function withTempConfig<T>(fn: () => Promise<T>): Promise<T> {
+    const tmp = await mkdtemp(join(os.tmpdir(), "cw-serve-custom-"));
+    const prev = process.env["CODEWHIP_CONFIG_DIR"];
+    process.env["CODEWHIP_CONFIG_DIR"] = tmp;
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env["CODEWHIP_CONFIG_DIR"];
+      else process.env["CODEWHIP_CONFIG_DIR"] = prev;
+    }
+  }
+
+  function register(base: string, body: unknown): Promise<Response> {
+    return clientFetch(`${base}/auth/_custom`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  const GATEWAY = {
+    id: "my-gateway",
+    baseUrl: "https://gateway.example.com/",
+    model: "my-model",
+    envVar: "MY_GATEWAY_API_KEY",
+    keyUrl: "https://gateway.example.com/keys",
+  };
+
+  it("registers from the UI, then the new endpoint is a real provider", async () => {
+    await withTempConfig(async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        // The page carries a form, not just a table of keys.
+        const html = await (await h.client(`${h.base}/auth`)).text();
+        ok(html.includes('name="baseUrl"'), html.slice(0, 120));
+        ok(html.includes("/auth/_custom"), "the form must post to the register route");
+
+        const added = await register(h.base, GATEWAY);
+        strictEqual(added.status, 201);
+        const body = (await added.json()) as { id: string; baseUrl: string; defaultModel: string; envVar: string; local: boolean };
+        strictEqual(body.id, "my-gateway");
+        // The trailing slash is trimmed, same as `codewhip provider add`.
+        strictEqual(body.baseUrl, "https://gateway.example.com");
+        strictEqual(body.defaultModel, "my-model");
+        strictEqual(body.local, false);
+
+        // It is a provider now: /v1/models lists it…
+        const models = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
+        ok(models.data.some((m) => m.id === "my-gateway:my-model"), JSON.stringify(models.data.slice(-3)));
+
+        // …and its key can be saved through the same UI.
+        const keyed = await h.client(`${h.base}/auth/my-gateway`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: "sk-custom-key" }),
+        });
+        strictEqual(keyed.status, 200);
+        ok(!(await keyed.text()).includes("sk-custom-key"), "keys are never echoed");
+
+        // GET /auth/_custom lists the customs only, and marks them custom.
+        const list = (await (await h.client(`${h.base}/auth/_custom`)).json()) as { data: Array<{ id: string; custom: boolean }> };
+        strictEqual(list.data.length, 1);
+        strictEqual(list.data[0].id, "my-gateway");
+        strictEqual(list.data[0].custom, true);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("removes a custom endpoint, and refuses builtins and unknowns", async () => {
+    await withTempConfig(async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        strictEqual((await register(h.base, GATEWAY)).status, 201);
+        const removed = await h.client(`${h.base}/auth/_custom/my-gateway`, { method: "DELETE" });
+        strictEqual(removed.status, 200);
+        const models = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
+        ok(!models.data.some((m) => m.id === "my-gateway:my-model"), "removed provider must leave the model list");
+
+        const builtin = await h.client(`${h.base}/auth/_custom/nvidia`, { method: "DELETE" });
+        strictEqual(builtin.status, 400);
+        const unknown = await h.client(`${h.base}/auth/_custom/ghost`, { method: "DELETE" });
+        strictEqual(unknown.status, 404);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("applies the CLI's own validation, and never throws on a bad shape", async () => {
+    await withTempConfig(async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const cases: Array<{ label: string; body: unknown; expect: string }> = [
+          { label: "builtin id", body: { ...GATEWAY, id: "nvidia" }, expect: "builtin" },
+          { label: "plain http off-loopback", body: { ...GATEWAY, id: "insecure", baseUrl: "http://insecure.example.com" }, expect: "https://" },
+          { label: "lowercase env var", body: { ...GATEWAY, id: "env-bad", envVar: "lower" }, expect: "UPPER_SNAKE" },
+          { label: "empty id", body: { ...GATEWAY, id: "" }, expect: "bad id" },
+          // A JSON body is not TypeScript: normalize() trims strings, so a
+          // number here used to be a TypeError inside the request handler.
+          { label: "non-string id", body: { ...GATEWAY, id: 42 }, expect: "bad id" },
+          { label: "non-string url", body: { ...GATEWAY, id: "url-bad", baseUrl: { href: "x" } }, expect: "bad --base-url" },
+          { label: "garbage timeout", body: { ...GATEWAY, id: "time-bad", timeoutMs: "soon" }, expect: "bad --timeout-ms" },
+        ];
+        for (const c of cases) {
+          const res = await register(h.base, c.body);
+          strictEqual(res.status, 400, `${c.label}: expected 400`);
+          const err = ((await res.json()) as { error: { message: string; code: string } }).error;
+          strictEqual(err.code, "invalid_provider", `${c.label}: ${err.message}`);
+          ok(err.message.includes(c.expect), `${c.label}: ${err.message}`);
+        }
+        // Nothing was written: the only customs list is still empty.
+        const list = (await (await h.client(`${h.base}/auth/_custom`)).json()) as { data: unknown[] };
+        strictEqual(list.data.length, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("registers a loopback runtime, which then needs no key at all", async () => {
+    await withTempConfig(async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const added = await register(h.base, {
+          id: "ollama-local",
+          baseUrl: "http://127.0.0.1:11434",
+          model: "llama3",
+          envVar: "OLLAMA_LOCAL_API_KEY",
+        });
+        strictEqual(added.status, 201);
+        const body = (await added.json()) as { id: string; local: boolean };
+        strictEqual(body.local, true);
+
+        // The promise: a local runtime resolves with nothing stored, so the
+        // request reaches it instead of dying on "no key".
+        const res = await post(h.base, { model: "ollama-local:llama3", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 200);
+        strictEqual(h.upstream.length, 1);
+        ok(h.upstream[0].url.startsWith("http://127.0.0.1:11434"), h.upstream[0].url);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("is not reachable when the auth UI is disabled", async () => {
+    const h = await harness({ authUi: false }, () => openAiReply("ok"));
+    try {
+      strictEqual((await register(h.base, GATEWAY)).status, 404);
     } finally {
       await h.close();
     }

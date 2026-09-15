@@ -1,5 +1,6 @@
 import { PROVIDERS, type ProviderId } from "./provider.js";
-import { getProviderConfig, isLoopbackBaseUrl, listLocalProviders } from "./custom-providers.js";
+import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
+import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
 
 export type TaskClass = "implement" | "polish" | "private";
 
@@ -59,12 +60,79 @@ export function classify(prompt: string): { taskClass: TaskClass; reason: string
  * remote model is an explicit `--provider`, which is informed consent and is
  * logged on the receipt line.
  */
+function healthOk(providerId: ProviderId, model: string) {
+  const records = readProviderCalls();
+  const summary = summarizeCalls(records);
+  const ph = summary.providers.find((p) => p.provider === providerId);
+  if (!ph) return true; // no data yet
+  const mh = ph.models.find((m) => m.model === model);
+  if (!mh) return true;
+  if (mh.total < 5) return true; // not enough data
+  return mh.successRate >= 0.7;
+}
+
+const TTL_MS = {
+  quota: 15 * 60 * 1000,
+  auth: 60 * 60 * 1000,
+  timeout: 5 * 60 * 1000,
+  network: 5 * 60 * 1000,
+  bad_model: 24 * 60 * 60 * 1000,
+  other: 5 * 60 * 1000,
+};
+
+function isRecentlyFailed(providerId: string, model: string): boolean {
+  const records = readProviderCalls();
+  const summary = summarizeCalls(records);
+  const ph = summary.providers.find((p) => p.provider === providerId);
+  if (!ph) return false;
+  const mh = ph.models.find((m) => m.model === model);
+  if (!mh || !mh.lastFailureTs || !mh.lastFailureOutcome) return false;
+  const last = new Date(mh.lastFailureTs).getTime();
+  const ttl = TTL_MS[mh.lastFailureOutcome as keyof typeof TTL_MS] ?? 5 * 60 * 1000;
+  return Date.now() - last < ttl;
+}
+
+function pickRandomHealthy(): Route | { error: string } {
+  const configs = listAllProviderConfigs();
+  const summary = summarizeCalls(readProviderCalls());
+  const candidates: { provider: string; model: string }[] = [];
+  for (const cfg of configs) {
+    const provider = cfg.id as ProviderId;
+    const model = cfg.defaultModel;
+    if (isLoopbackBaseUrl(cfg.baseUrl)) continue; // random auto not for local
+    if (isRecentlyFailed(provider, model)) continue;
+    const ph = summary.providers.find((p) => p.provider === provider);
+    const mh = ph?.models.find((m) => m.model === model);
+    if (mh && mh.total >= 5 && mh.successRate < 0.5) continue;
+    candidates.push({ provider, model });
+  }
+  if (candidates.length === 0) {
+    return { error: "auto random: no healthy provider/model combos available — pass --provider to override" };
+  }
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  return { provider: pick.provider as ProviderId, model: pick.model, note: "auto random → provider health & TTL deactivation" };
+}
+
 export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: string } {
+  if (process.env.CODEWHIP_AUTO_RANDOM === "1") {
+    if (taskClass === "private") return localRoute(dir);
+    return pickRandomHealthy();
+  }
   if (taskClass === "implement") {
-    return { provider: "nvidia", model: PROVIDERS.nvidia.defaultModel, note: "implement → frontier free tier" };
+    const provider = "nvidia";
+    const model = PROVIDERS.nvidia.defaultModel;
+    if (!healthOk(provider, model)) {
+      return { error: `auto route for 'implement' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
+    }
+    return { provider, model, note: "implement → frontier free tier" };
   }
   if (taskClass === "polish") {
-    return { provider: "sensenova", model: PROVIDERS.sensenova.defaultModel, note: "polish → cheapest inference" };
+    const provider = "sensenova";
+    const model = PROVIDERS.sensenova.defaultModel;
+    if (!healthOk(provider, model)) {
+      return { error: `auto route for 'polish' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
+    }
+    return { provider, model, note: "polish → cheapest inference" };
   }
   return localRoute(dir);
 }
