@@ -1,5 +1,6 @@
 import { PROVIDERS, type ProviderId } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
+import { resolveKey } from "./auth.js";
 import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
 
 export type TaskClass = "implement" | "polish" | "private";
@@ -80,7 +81,12 @@ const TTL_MS = {
   other: 5 * 60 * 1000,
 };
 
-function isRecentlyFailed(providerId: string, model: string): boolean {
+/**
+ * Exported for `serve` auto-pick: the serve proxy reuses the same TTL
+ * deactivation so `model: "auto"` never routes at a model the CLI just
+ * watched fail. Single source for the TTL table lives here.
+ */
+export function isRecentlyFailed(providerId: string, model: string): boolean {
   const records = readProviderCalls();
   const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);
@@ -92,6 +98,29 @@ function isRecentlyFailed(providerId: string, model: string): boolean {
   return Date.now() - last < ttl;
 }
 
+/**
+ * Paid-key protection shared by every auto path (CLI `CODEWHIP_AUTO_RANDOM=1`
+ * and serve `model: "auto"` / `--provider auto`). Auto only spends keys that
+ * are free by construction:
+ * - `anonymous` source — keyless free tiers (llm7, kilo, opencode, …), or
+ * - a route with a known $0 price — a user key there only raises rate limits.
+ *
+ * A user-supplied key (`env`/`file`) on an untracked-cost route — sensenova,
+ * tokenharbor, custom gateways, anything that might bill — is never
+ * auto-touched unless `CODEWHIP_AUTO_INCLUDE_UNTRACKED=1` opts in. Without
+ * this, setting a paid key would silently enroll it in random spend.
+ */
+export function isAutoEligible(providerId: string, model: string): boolean {
+  const cfg = getProviderConfig(providerId);
+  if (cfg === null) return false;
+  if (isLoopbackBaseUrl(cfg.baseUrl)) return false; // auto never guesses at local
+  const { key, source } = resolveKey(providerId);
+  if (key.length === 0) return false; // auto never routes at a certain 401
+  if (source === "anonymous") return true;
+  if (estimateCost(providerId as ProviderId, model, 1000, 1000) === 0) return true;
+  return process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED === "1";
+}
+
 function pickRandomHealthy(): Route | { error: string } {
   const configs = listAllProviderConfigs();
   const summary = summarizeCalls(readProviderCalls());
@@ -99,7 +128,7 @@ function pickRandomHealthy(): Route | { error: string } {
   for (const cfg of configs) {
     const provider = cfg.id as ProviderId;
     const model = cfg.defaultModel;
-    if (isLoopbackBaseUrl(cfg.baseUrl)) continue; // random auto not for local
+    if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
     if (isRecentlyFailed(provider, model)) continue;
     const ph = summary.providers.find((p) => p.provider === provider);
     const mh = ph?.models.find((m) => m.model === model);

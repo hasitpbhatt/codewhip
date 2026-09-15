@@ -1,11 +1,11 @@
 import * as http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
-import { isBuiltinProviderId, makePortForConfig, PROVIDERS } from "./provider.js";
+import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
-import { redactSecrets } from "./redact.js";
+import { estimateCost, isAutoEligible, isRecentlyFailed } from "./router.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -49,8 +49,6 @@ export type ServeOptions = {
   authUi?: boolean;
   /** When true, /v1/models only lists providers that respond to their models endpoint. */
   pingModels?: boolean;
-  /** When true, write secret-flagged entries to .codewhip/serve-requests.log */
-  flagSecrets?: boolean;
 };
 
 type OpenAiMessage = {
@@ -161,16 +159,50 @@ function contentToText(parts: unknown[]): string {
  * a bare provider id means "that provider's default model", anything else is a
  * model id on the server's default provider.
  */
+/**
+ * Health-weighted auto pick for `model: "auto"` (and `--provider auto`).
+ * Eligibility (loopback / key / paid-key gates) is `isAutoEligible` in the
+ * router — one rule for CLI and serve, so a paid key is never auto-touched.
+ * On top: TTL deactivation plus a success-rate floor, then weight drains the
+ * known-$0 pool first: free ×3, priced ×1, untracked ×0.5 (opt-in only),
+ * times (0.5 + successRate) so a proven model beats an unproven one without
+ * starving new providers. No-data providers keep full weight — empty history
+ * is not failure.
+ */
+function pickAutoTarget(): Target | { error: string } {
+  const summary = summarizeCalls(readProviderCalls());
+  const cands: Array<{ provider: string; model: string; weight: number }> = [];
+  for (const cfg of listAllProviderConfigs()) {
+    if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
+    if (isRecentlyFailed(cfg.id, cfg.defaultModel)) continue;
+    const mh = summary.providers.find((p) => p.provider === cfg.id)?.models.find((m) => m.model === cfg.defaultModel);
+    if (mh !== undefined && mh.total >= 5 && mh.successRate < 0.5) continue;
+    const per1k = estimateCost(cfg.id as ProviderId, cfg.defaultModel, 1000, 1000);
+    const costFactor = per1k === null ? 0.5 : per1k === 0 ? 3 : 1;
+    const healthFactor = mh === undefined ? 1.5 : 0.5 + mh.successRate;
+    cands.push({ provider: cfg.id, model: cfg.defaultModel, weight: costFactor * healthFactor });
+  }
+  if (cands.length === 0) {
+    return { error: "auto: no healthy free provider/model combos available — pass an explicit model, add a key for a $0 route, or set CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 to let auto use untracked-cost providers" };
+  }
+  const total = cands.reduce((a, c) => a + c.weight, 0);
+  let r = Math.random() * total;
+  for (const c of cands) {
+    r -= c.weight;
+    if (r <= 0) return { provider: c.provider, model: c.model };
+  }
+  const last = cands[cands.length - 1] as { provider: string; model: string };
+  return { provider: last.provider, model: last.model };
+}
+
 export function resolveTarget(requested: string, fallback: { provider: string; model: string }): Target | { error: string } {
   const trimmed = requested.trim();
   if (trimmed.length === 0) {
+    if (fallback.provider === "auto") return pickAutoTarget();
     return { provider: fallback.provider, model: fallback.model };
   }
   if (trimmed === "auto") {
-    const configs = listAllProviderConfigs();
-    if (configs.length === 0) return { error: "no providers available for auto selection" };
-    const pick = configs[Math.floor(Math.random() * configs.length)];
-    return { provider: pick.id, model: pick.defaultModel };
+    return pickAutoTarget();
   }
   const colon = trimmed.indexOf(":");
   if (colon > 0) {
@@ -183,6 +215,12 @@ export function resolveTarget(requested: string, fallback: { provider: string; m
   const asProvider = getProviderConfig(trimmed);
   if (asProvider !== null) {
     return { provider: asProvider.id, model: asProvider.defaultModel };
+  }
+  if (fallback.provider === "auto") {
+    // `--provider auto` with a pinned model id: pick the provider, keep the id.
+    const pick = pickAutoTarget();
+    if ("error" in pick) return pick;
+    return { provider: pick.provider, model: trimmed };
   }
   if (getProviderConfig(fallback.provider) === null) {
     return { error: `unknown default provider "${fallback.provider}"` };
@@ -852,26 +890,9 @@ export function createServeHandler(opts: ServeOptions): http.RequestListener {
   };
 }
 
-function logServeRequest(opts: ServeOptions, method: string, url: string, body?: string, status?: number) {
-  if (!opts.flagSecrets) return;
-  if (!body) return;
-  const redacted = redactSecrets(body);
-  if (redacted === body) return; // no secrets detected
-  try {
-    const ts = new Date().toISOString();
-    console.warn(`[codewhip serve] secret flagged ${ts} ${method} ${url} status=${status ?? "?"}`);
-    console.warn(`[codewhip serve] redacted body: ${redacted}`);
-  } catch { /* best effort */ }
-}
-
 async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts: ServeOptions): Promise<void> {
   const url = req.url ?? "/";
   const path = url.split("?")[0];
-  let statusCode = 200;
-  const origWriteHead = res.writeHead.bind(res);
-  res.writeHead = ((code: number, ...args: any[]) => { statusCode = code; return origWriteHead(code, ...args); }) as any;
-  const origEnd = res.end.bind(res);
-  res.end = ((...args: any[]) => { logServeRequest(opts, req.method ?? "GET", url, undefined, statusCode); return origEnd(...args); }) as any;
   if (req.method === "GET" && (path === "/health" || path === "/healthz")) {
     sendJson(res, 200, { status: "ok", providers: listAllProviderConfigs().length });
     return;
@@ -919,7 +940,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendError(res, 413, raw.error, "request_too_large");
     return;
   }
-  logServeRequest(opts, req.method ?? "POST", url, raw);
   let parsed: OpenAiRequest;
   try {
     parsed = JSON.parse(raw) as OpenAiRequest;

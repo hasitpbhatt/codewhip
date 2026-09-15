@@ -143,9 +143,11 @@ function printCommandHelp(topic: string): boolean {
       console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
       return true;
     case "serve":
-      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui] [--ping-models] [--flag-secrets]");
+      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui] [--ping-models]");
       console.log("  Exposes the provider registry as an OpenAI-compatible HTTP server:");
-      console.log("    POST /v1/chat/completions   stream and non-stream; model = \"<provider>:<model>\"");
+      console.log("    POST /v1/chat/completions   stream and non-stream; model = \"<provider>:<model>\" or \"auto\"");
+      console.log("  \"auto\" only spends free keys (anonymous tiers + known-$0 routes with TTL health filter).");
+      console.log("  A paid key on an untracked-cost route is never auto-touched unless CODEWHIP_AUTO_INCLUDE_UNTRACKED=1.");
       console.log("    GET  /v1/models             every provider as \"<provider>:<default-model>\"");
       console.log("    GET  /health");
       console.log("    GET  /playground            model playground UI");
@@ -1673,10 +1675,13 @@ async function cmdServe(args: string[]): Promise<void> {
     return;
   }
   // llm7 is the default on purpose: it is keyless, so `codewhip serve` works
-  // with no setup at all. Point it anywhere else with --provider.
+  // with no setup at all. Point it anywhere else with --provider, or pass
+  // --provider auto for a health-weighted pick per request (free keys only —
+  // paid keys on untracked-cost routes are never auto-touched; recent
+  // failures deactivated by TTL).
   const provider = flag("--provider") ?? "llm7";
-  const cfg = getProviderConfig(provider);
-  if (cfg === null) {
+  const cfg = provider === "auto" ? null : getProviderConfig(provider);
+  if (provider !== "auto" && cfg === null) {
     console.error(`serve: unknown provider "${provider}" (see: codewhip provider list)`);
     process.exitCode = 1;
     return;
@@ -1685,13 +1690,12 @@ async function cmdServe(args: string[]): Promise<void> {
     port,
     host: flag("--host") ?? "127.0.0.1",
     provider,
-    model: flag("--model") ?? cfg.defaultModel,
+    model: flag("--model") ?? cfg?.defaultModel ?? "auto",
   };
   const token = flag("--token");
   if (token !== undefined) opts.token = token;
   opts.authUi = args.indexOf("--no-auth-ui") === -1;
   opts.pingModels = args.includes("--ping-models");
-  opts.flagSecrets = args.includes("--flag-secrets");
   const { createShutdown, startServe } = await import("./serve.js");
   try {
     const server = startServe(opts);

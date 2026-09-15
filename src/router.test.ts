@@ -3,8 +3,9 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, polishGate, resolveRoute, routeFor } from "./router.js";
-import { addCustomProvider } from "./custom-providers.js";
+import { classify, estimateCost, isAutoEligible, polishGate, resolveRoute, routeFor } from "./router.js";
+import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
+import { PROVIDERS } from "./provider.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
 
 /**
@@ -245,6 +246,34 @@ describe("router", () => {
     if (!("error" in r)) {
       strictEqual(r.provider, "mistral");
       strictEqual(r.taskClass, "private");
+    }
+  });
+  it("auto eligibility: anonymous tiers yes, env-keyed untracked routes no, opt-in flips it", () => {
+    // llm7 is anonymous in a clean env — free by construction, always eligible.
+    const llm7 = getProviderConfig("llm7");
+    ok(llm7 !== null);
+    const prevLlm7 = process.env[llm7.envVar];
+    delete process.env[llm7.envVar];
+    // sensenova is the paid-key case: untracked cost, no anonymous fallback.
+    const cfg = getProviderConfig("sensenova");
+    ok(cfg !== null);
+    const prevKey = process.env[cfg.envVar];
+    const prevOpt = process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
+    delete process.env[cfg.envVar];
+    delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
+    try {
+      ok(isAutoEligible("llm7", PROVIDERS.llm7.defaultModel));
+      process.env[cfg.envVar] = "paid-key-for-test";
+      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), false);
+      process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = "1";
+      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), true);
+    } finally {
+      if (prevLlm7 === undefined) delete process.env[llm7.envVar];
+      else process.env[llm7.envVar] = prevLlm7;
+      if (prevKey === undefined) delete process.env[cfg.envVar];
+      else process.env[cfg.envVar] = prevKey;
+      if (prevOpt === undefined) delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
+      else process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = prevOpt;
     }
   });
 });

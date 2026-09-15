@@ -9,6 +9,9 @@ import type { AddressInfo } from "node:net";
 import { createServeServer, createShutdown, resolveTarget, startServe, toLoopMessages } from "./serve.js";
 import type { ServeOptions } from "./serve.js";
 import { PROVIDERS, PROVIDER_IDS } from "./provider.js";
+import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
+import { resolveKey } from "./auth.js";
+import { estimateCost, isAutoEligible } from "./router.js";
 
 const TEST_CONFIG_DIR = fs.mkdtempSync(join(os.tmpdir(), "codewhip-serve-"));
 for (const p of PROVIDER_IDS) {
@@ -141,6 +144,62 @@ describe("serve model routing", () => {
   it("rejects an unknown provider prefix instead of guessing", () => {
     ok("error" in resolveTarget("nope:model", fallback));
     ok("error" in resolveTarget("nvidia:", fallback));
+  });
+  it("auto picks a keyed, non-loopback provider with its default model", () => {
+    const t = resolveTarget("auto", fallback);
+    ok(!("error" in t), `auto must resolve, got: ${JSON.stringify(t)}`);
+    const cfg = getProviderConfig(t.provider);
+    ok(cfg !== null, `auto picked an unknown provider: ${t.provider}`);
+    ok(!isLoopbackBaseUrl(cfg.baseUrl), `auto must never pick a loopback runtime: ${t.provider}`);
+    ok(resolveKey(t.provider).key.length > 0, `auto must never route at a keyless provider: ${t.provider}`);
+    strictEqual(t.model, cfg.defaultModel);
+  });
+  it("auto as the server default resolves empty and bare-model requests", () => {
+    const auto = { provider: "auto", model: "auto" };
+    const empty = resolveTarget("", auto);
+    ok(!("error" in empty), `empty model on auto default must resolve: ${JSON.stringify(empty)}`);
+    const pinned = resolveTarget("gpt-4o-mini", auto);
+    ok(!("error" in pinned), `bare model on auto default must resolve: ${JSON.stringify(pinned)}`);
+    if (!("error" in pinned)) strictEqual(pinned.model, "gpt-4o-mini");
+  });
+  it("auto never spends a user-supplied key on an untracked-cost route", () => {
+    // sensenova is the paid-key case: untracked cost, no anonymous fallback.
+    const cfg = getProviderConfig("sensenova");
+    ok(cfg !== undefined && cfg !== null);
+    strictEqual(estimateCost("sensenova", cfg.defaultModel, 1000, 1000), null);
+    const prev = process.env[cfg.envVar];
+    delete process.env[cfg.envVar];
+    process.env[cfg.envVar] = "paid-key-for-test";
+    try {
+      strictEqual(resolveKey("sensenova").source, "env");
+      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), false);
+      for (let i = 0; i < 30; i++) {
+        const t = resolveTarget("auto", fallback);
+        ok(!("error" in t), `auto must resolve, got: ${JSON.stringify(t)}`);
+        if (!("error" in t)) ok(t.provider !== "sensenova", "auto must not route at a paid-key untracked provider");
+      }
+    } finally {
+      if (prev === undefined) delete process.env[cfg.envVar];
+      else process.env[cfg.envVar] = prev;
+    }
+  });
+  it("CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 opts paid keys back into auto", () => {
+    const cfg = getProviderConfig("sensenova");
+    ok(cfg !== undefined && cfg !== null);
+    const prevKey = process.env[cfg.envVar];
+    const prevOpt = process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
+    delete process.env[cfg.envVar];
+    process.env[cfg.envVar] = "paid-key-for-test";
+    process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = "1";
+    try {
+      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), true);
+      ok(!("error" in resolveTarget("auto", fallback)));
+    } finally {
+      if (prevKey === undefined) delete process.env[cfg.envVar];
+      else process.env[cfg.envVar] = prevKey;
+      if (prevOpt === undefined) delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
+      else process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = prevOpt;
+    }
   });
 });
 
