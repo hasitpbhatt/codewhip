@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok, deepStrictEqual } from "node:assert/strict";
 import * as http from "node:http";
+import * as os from "node:os";
+import { join } from "node:path";
+import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { createServeServer, createShutdown, resolveTarget, startServe, toLoopMessages } from "./serve.js";
 import type { ServeOptions } from "./serve.js";
@@ -342,6 +345,57 @@ describe("serve HTTP surface", () => {
       const notFound = await h.client(`${h.base}/v1/nope`);
       strictEqual(notFound.status, 404);
       strictEqual(h.upstream.length, 0);
+    } finally {
+      await h.close();
+    }
+  });
+  it("does not serve the auth UI when authUi is off", async () => {
+    const h = await harness({ authUi: false }, () => openAiReply("x"));
+    try {
+      strictEqual((await h.client(`${h.base}/auth`)).status, 404);
+    } finally {
+      await h.close();
+    }
+  });
+  it("serves the auth UI, then round-trips a stored key", async () => {
+    const tmpDir = await mkdtemp(join(os.tmpdir(), "cw-serve-"));
+    const realConfig = process.env["CODEWHIP_CONFIG_DIR"];
+    process.env["CODEWHIP_CONFIG_DIR"] = tmpDir;
+    const h = await harness({ authUi: true }, () => openAiReply("ok"));
+    try {
+      // The listing shows source "none" for an untouched provider.
+      const html = await (await h.client(`${h.base}/auth`)).text();
+      ok(html.includes("<title>codewhip auth</title>"), html.slice(0, 50));
+      const saved = await h.client(`${h.base}/auth/groq`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: "sk-test-key" }),
+      });
+      strictEqual(saved.status, 200);
+      const savedBody = (await saved.json()) as { id: string; source: string };
+      strictEqual(savedBody.id, "groq");
+      strictEqual(savedBody.source, "file");
+      const get = (await h.client(`${h.base}/auth/groq`)).json() as Promise<{ id: string; source: string; hasKey: boolean }>;
+      const got = await get;
+      strictEqual(got.source, "file");
+      ok(got.hasKey, "hasKey should be true after save");
+      // The key is never echoed.
+      ok(!JSON.stringify(got).includes("sk-test-key"), "key must not be echoed");
+      const del = await h.client(`${h.base}/auth/groq`, { method: "DELETE" });
+      strictEqual(del.status, 200);
+      const after = (await del.json()) as { source: string };
+      strictEqual(after.source, "none");
+    } finally {
+      if (realConfig === undefined) delete process.env["CODEWHIP_CONFIG_DIR"];
+      else process.env["CODEWHIP_CONFIG_DIR"] = realConfig;
+      await h.close();
+    }
+  });
+  it("rejects unknown providers in the auth API", async () => {
+    const h = await harness({ authUi: true }, () => openAiReply("ok"));
+    try {
+      const res = await h.client(`${h.base}/auth/nope-nope`);
+      strictEqual(res.status, 404);
     } finally {
       await h.close();
     }

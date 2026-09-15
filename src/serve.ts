@@ -1,8 +1,8 @@
 import * as http from "node:http";
 import { randomUUID } from "node:crypto";
 import { getProviderConfig, listAllProviderConfigs } from "./custom-providers.js";
-import { makePortForConfig } from "./provider.js";
-import { resolveKey } from "./auth.js";
+import { makePortForConfig, PROVIDERS } from "./provider.js";
+import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 
 /**
@@ -43,6 +43,8 @@ export type ServeOptions = {
   model: string;
   /** When set, requests must carry `Authorization: Bearer <token>`. */
   token?: string;
+  /** Serve the provider key manager UI (HTML + JSON API); off by default. */
+  authUi?: boolean;
 };
 
 type OpenAiMessage = {
@@ -286,6 +288,91 @@ function modelList(): Record<string, unknown> {
   return { object: "list", data: rows };
 }
 
+/** Provider key manager UI as a route group on the serve server. */
+const AUTH_UI = `/auth`;
+
+function sendHtml(res: http.ServerResponse, html: string): void {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html, "utf8") });
+  res.end(html);
+}
+
+function authStatus(): Array<Record<string, unknown>> {
+  return listAllProviderConfigs().map((cfg) => {
+    const { key, source } = resolveKey(cfg.id);
+    return { id: cfg.id, brand: cfg.brand, keyUrl: cfg.keyUrl, envVar: cfg.envVar, source, hasKey: key.length > 0 };
+  });
+}
+
+function authHtml(): string {
+  const rows = authStatus()
+    .map(
+      (r) =>
+        `<tr><td>${r.id}</td><td><a href="${r.keyUrl}" target=_blank>${r.keyUrl}</a></td>` +
+        `<td><code>${r.envVar}</code></td>` +
+        `<td><span class="src">${r.source}</span></td>` +
+        `<td>${r.hasKey ? '<button onclick="logout(\'' + r.id + '\')">logout</button>' : '<button onclick="edit(\'' + r.id + '\')">set key</button>'}</td></tr>`
+    )
+    .join("");
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip auth</title><style>body{font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}.src{color:#666;font-size:.85em}</style></head><body><h1>codewhip auth — provider keys</h1><table><thead><tr><th>provider</th><th>key console</th><th>env var</th><th>source</th><th></th></tr></thead><tbody>${rows}</tbody></table><p><small>Environment wins when set. POST <code>{"key":"..."}</code> to <code>/auth/:id</code> to save; DELETE removes. Keys are never echoed in any response.</small></p><script>async function edit(id){const k=prompt("Enter "+id+" API key");if(k===null)return;await fetch("/auth/"+id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:k})});location.reload();}async function logout(id){if(!confirm("Remove stored "+id+" key?"))return;await fetch("/auth/"+id,{method:"DELETE"});location.reload();}</script></body></html>`;
+}
+
+function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse, path: string): boolean {
+  if (!path.startsWith(AUTH_UI)) return false;
+  const rest = path.slice(AUTH_UI.length); // "" | "/<id>"
+  // GET /auth → HTML page
+  if (req.method === "GET" && (rest === "" || rest === "/")) {
+    sendHtml(res, authHtml());
+    return true;
+  }
+  // GET /auth/:id → JSON status
+  const id = rest.replace(/^\//, "").replace(/\/$/, "");
+  if (id.length === 0) {
+    sendJson(res, 200, { data: authStatus() });
+    return true;
+  }
+  const builtin = PROVIDERS[id as keyof typeof PROVIDERS];
+  const custom = builtin === undefined ? getProviderConfig(id) : builtin;
+  if (builtin === undefined && custom === null) {
+    sendJson(res, 404, { error: { message: `unknown provider "${id}"`, code: "not_found" } });
+    return true;
+  }
+  const cfg = builtin ?? custom!;
+  if (req.method === "GET") {
+    const { key, source } = resolveKey(id);
+    sendJson(res, 200, { id, envVar: cfg.envVar, source, hasKey: key.length > 0 });
+    return true;
+  }
+  if (req.method === "POST") {
+    // readBody is async; inline read.
+    let size = 0;
+    const chunks: Buffer[] = [];
+    let done = false;
+    req.on("data", (c: Buffer) => { size += c.length; if (size > 1024) { done = true; } chunks.push(c); });
+    req.on("end", () => {
+      if (done) { sendJson(res, 413, { error: { message: "key too large", code: "too_large" } }); return; }
+      try {
+        const p = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { key?: unknown };
+        if (typeof p.key !== "string" || p.key.length === 0) {
+          sendJson(res, 400, { error: { message: "body {\"key\":\"<value>\"} required", code: "invalid_key" } });
+          return;
+        }
+        saveKey(id, p.key);
+        sendJson(res, 200, { id, source: "file" });
+      } catch {
+        sendJson(res, 400, { error: { message: "invalid JSON", code: "invalid_json" } });
+      }
+    });
+    return true;
+  }
+  if (req.method === "DELETE") {
+    clearKey(id);
+    sendJson(res, 200, { id, source: resolveKey(id).source });
+    return true;
+  }
+  sendError(res, 405, `method ${req.method ?? ""} not allowed on /auth`, "method_not_allowed");
+  return true;
+}
+
 export function createServeHandler(opts: ServeOptions): http.RequestListener {
   return (req, res): void => {
     void handle(req, res, opts);
@@ -305,6 +392,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       sendError(res, 401, "missing or invalid bearer token for this server", "invalid_api_key");
       return;
     }
+  }
+  if (opts.authUi && path.startsWith(AUTH_UI)) {
+    void handleAuthUi(req, res, path);
+    return;
   }
   if (req.method === "GET" && path === "/v1/models") {
     sendJson(res, 200, modelList());
