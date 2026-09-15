@@ -16,6 +16,7 @@ import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpo
 import { listSessions, loadSession, saveSession } from "./sessions.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
+import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { writeShareBundle } from "./share.js";
 import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
@@ -505,12 +506,14 @@ function cmdInit(): void {
   }
   if (!fs.existsSync(privKey) || !fs.existsSync(pubKey)) {
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-    fs.writeFileSync(privKey, privateKey.export({ type: "pkcs8", format: "pem" }), {
-      mode: 0o600,
-    });
+    const lockWarning = writeOwnerOnlyFile(privKey, privateKey.export({ type: "pkcs8", format: "pem" }));
     fs.writeFileSync(pubKey, publicKey.export({ type: "spki", format: "pem" }), "utf8");
     console.log("generated .codewhip/key (ed25519, local only)");
+    if (lockWarning !== null) console.warn(`init: warning: ${lockWarning}`);
   } else {
+    // Repair pass: keys written by older versions predate owner-only files.
+    const lockWarning = lockFileOwnerOnly(privKey);
+    if (lockWarning !== null) console.warn(`init: warning: ${lockWarning}`);
     console.log("kept .codewhip/key (exists)");
   }
   console.log('done. next: codewhip demo --deny (offline, $0) — then: codewhip auth login nvidia');
@@ -521,7 +524,7 @@ function missingKeyHelp(provider: string): void {
   const envVar = cfg?.envVar ?? `${provider.toUpperCase()}_API_KEY`;
   const keyUrl = cfg?.keyUrl ?? "the provider console";
   console.error(`codewhip: ${envVar} is not set and no stored ${provider} key found (the key is never printed or logged).`);
-  console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, 0600 file; env still wins)`);
+  console.error(`  Persist once: codewhip auth login ${provider}   (hidden prompt, owner-only file; env still wins)`);
   console.error(`  Or per terminal, PowerShell: $env:${envVar} = "..."`);
   console.error(`  Get a key at ${keyUrl}`);
   console.error(`  No key yet? Try the offline wedge demo (no key, $0): codewhip demo --deny`);
@@ -935,8 +938,9 @@ async function cmdAuth(args: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      saveKey(provider, key);
+      const lockWarning = saveKey(provider, key);
       console.log(`auth: ${provider} saved (source: file, ${configDir()})`);
+      if (lockWarning !== null) console.warn(`auth: warning: ${lockWarning}`);
       return;
     }
     if (clearKey(provider)) {
@@ -1153,7 +1157,7 @@ function cmdAudit(args: string[]): void {
       return;
     }
     const raw = verifyChain(cwd);
-    const v = interpretVerification(raw);
+    const v = interpretVerification(raw, cwd);
     console.log(
       `audit: ${raw.total} entries — hash chain ${v.status} (${raw.signed} signed / ${raw.unsigned} unsigned, ${raw.keyPresent ? "key present" : "no local key"})`
     );
@@ -1483,7 +1487,7 @@ function cmdTrust(args: string[]): void {
   // 1. Audit chain — ONE interpretation shared with `audit --verify` and
   // `demo` (product panel: two verifiers must never disagree).
   const raw = verifyChain(cwd);
-  const v = interpretVerification(raw);
+  const v = interpretVerification(raw, cwd);
   const chainClean = v.clean;
   lines.push(`  audit chain: ${v.status} (${raw.total} entries, ${raw.signed} signed, ${raw.unsigned} unsigned${raw.keyPresent ? ", key present" : ", no local key"})`);
   if (!chainClean) {

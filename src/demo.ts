@@ -45,7 +45,7 @@ export async function runDenyDemo(cwd: string): Promise<DenyDemoResult> {
     if (t.policy.startsWith("deny")) denied += 1;
     else if (t.policy.startsWith("allow")) allowed += 1;
   }
-  const v = interpretVerification(verifyChain(cwd));
+  const v = interpretVerification(verifyChain(cwd), cwd);
   return {
     runId: r.runId,
     allowed,

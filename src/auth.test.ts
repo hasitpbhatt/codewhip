@@ -77,6 +77,15 @@ describe("auth", () => {
   it("unknown provider ids resolve to no key", () => {
     strictEqual(resolveKey("nope-not-a-provider").source, "none");
   });
+  it("credentials file is owner-only, and loose files are repaired", () => {
+    if (process.platform === "win32") return; // stat-mode assertions are POSIX-only
+    saveKey("nvidia", "k-perm");
+    const p = path.join(configDir(), "credentials.json");
+    strictEqual(fs.statSync(p).mode & 0o777, 0o600);
+    fs.chmodSync(p, 0o644); // simulate a file left loose by an older version
+    saveKey("mistral", "k-perm-2");
+    strictEqual(fs.statSync(p).mode & 0o777, 0o600);
+  });
   it("groq keys save/resolve/clear under their own field, preserving other providers", () => {
     const groqDir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-auth-groq-"));
     const prev = process.env[envKey];

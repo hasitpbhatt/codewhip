@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { LoopMsg } from "./provider-port.js";
 import { redactSecrets } from "./redact.js";
+import { writeOwnerOnlyFile } from "./secure-file.js";
 
 /**
  * Opt-in conversation memory (committee verdict: multi-turn).
@@ -80,10 +81,7 @@ export function saveSession(cwd: string, rec: SessionRecord): boolean {
       fs.chmodSync(sessionDir(cwd), 0o700);
     } catch { /* best-effort */ }
     const p = sessionPath(cwd, rec.runId);
-    fs.writeFileSync(p, JSON.stringify(clean) + "\n", { mode: 0o600 });
-    try {
-      fs.chmodSync(p, 0o600);
-    } catch { /* best-effort */ }
+    writeOwnerOnlyFile(p, JSON.stringify(clean) + "\n");
     return true;
   } catch {
     return false;

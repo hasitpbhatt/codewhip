@@ -5,7 +5,7 @@ import { checkPermission, permissionSubject, describePolicy, POLICY_VERSION } fr
 
 describe("policy", () => {
   it("uses the live policy module", () => {
-    strictEqual(POLICY_VERSION, "v1-2026-09-10");
+    strictEqual(POLICY_VERSION, "v1-2026-09-15");
   });
   it("read/search allow by default", () => {
     strictEqual(checkPermission("read", "any").decision, "allow");
@@ -48,12 +48,45 @@ describe("policy", () => {
     strictEqual(checkPermission("bash", "curl http://example.com/x").decision, "ask");
     strictEqual(checkPermission("bash", "echo v1..5").decision, "ask");
   });
-it("Windows cmd-style single-letter flags are not treated as absolute paths", () => {
-  strictEqual(checkPermission("bash", "dir /s /b *.md").decision, "allow");
-  strictEqual(checkPermission("bash", "dir /s /b *.md").ruleId, "allowlist:dir");
-  strictEqual(checkPermission("bash", "cat /etc/passwd").decision, "deny");
-  strictEqual(checkPermission("bash", "cat /etc/passwd").ruleId, "denylist:worktree-escape");
-});
+  it("interpreter inline code is denied (opaque payloads)", () => {
+    strictEqual(checkPermission("bash", "node -e \"require('fs').rmSync('x')\"").decision, "deny");
+    strictEqual(checkPermission("bash", "node --eval \"1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "python -c \"import os\"").decision, "deny");
+    strictEqual(checkPermission("bash", "python3 -c \"1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "perl -ne \"1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "ruby -e \"1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "php -r \"echo 1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "deno eval \"1\"").decision, "deny");
+    strictEqual(checkPermission("bash", "node -e \"1\"").ruleId, "denylist:interpreter inline code (node)");
+  });
+  it("nested shells and encoded payloads are denied", () => {
+    strictEqual(checkPermission("bash", "powershell -EncodedCommand aGVsbG8=").decision, "deny");
+    strictEqual(checkPermission("bash", "powershell Get-ChildItem").decision, "deny");
+    strictEqual(checkPermission("bash", "pwsh -NoProfile").decision, "deny");
+    strictEqual(checkPermission("bash", "cmd /c del file.txt").decision, "deny");
+    strictEqual(checkPermission("bash", "cmd /c del file.txt").ruleId, "denylist:nested shell (cmd)");
+  });
+  it("interpreter file/module/version execution stays ask-gated", () => {
+    strictEqual(checkPermission("bash", "node script.js").decision, "ask");
+    strictEqual(checkPermission("bash", "python -m pytest").decision, "ask");
+    strictEqual(checkPermission("bash", "node --version").decision, "ask");
+    strictEqual(checkPermission("bash", "python --version").decision, "ask");
+    strictEqual(checkPermission("bash", "ruby -Eutf-8 script.rb").decision, "ask");
+  });
+  it("dynamic path construction is denied", () => {
+    strictEqual(checkPermission("bash", "cat $env:TEMP\\secret").decision, "deny");
+    strictEqual(checkPermission("bash", "type %APPDATA%\\x").decision, "deny");
+    strictEqual(checkPermission("bash", "echo ${HOME}").decision, "deny");
+    strictEqual(checkPermission("bash", "echo chr(47)").decision, "deny");
+    strictEqual(checkPermission("bash", "cat '.cod'+'ewhip/x'").decision, "deny");
+    strictEqual(checkPermission("bash", "cat $env:TEMP\\secret").ruleId, "denylist:worktree-escape");
+  });
+  it("Windows cmd-style single-letter flags are not treated as absolute paths", () => {
+    strictEqual(checkPermission("bash", "dir /s /b *.md").decision, "allow");
+    strictEqual(checkPermission("bash", "dir /s /b *.md").ruleId, "allowlist:dir");
+    strictEqual(checkPermission("bash", "cat /etc/passwd").decision, "deny");
+    strictEqual(checkPermission("bash", "cat /etc/passwd").ruleId, "denylist:worktree-escape");
+  });
   it("redirection is denied like chaining", () => {
     strictEqual(checkPermission("bash", "echo hi > f.txt").decision, "deny");
     strictEqual(checkPermission("bash", "echo hi >> .codewhip/x").decision, "deny");

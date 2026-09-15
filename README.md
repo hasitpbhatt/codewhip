@@ -34,16 +34,24 @@ uses it doesn't ship in H1.
 ## Quickstart
 
 ```sh
-npm i -g codewhip
-codewhip init                      # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
-codewhip demo --deny               # offline wedge demo: 5 disasters refused, $0, no key
-codewhip auth login mistral        # optional; every provider needs a key (see "Provider keys")
-codewhip run "fix the failing test"
-codewhip run "refactor auth" --token-budget 250000
-codewhip trust                     # the trust certificate: chain, policy, keys, memory — one command
-codewhip remember list             # what the agent auto-runs without asking (revoke: remember forget)
-codewhip audit --verify            # re-walk seq/prev_hash + ed25519 signatures
+git clone https://github.com/hasitpbhatt/codewhip
+cd codewhip
+npm install
+npm run build
+node dist/index.js init              # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
+node dist/index.js demo --deny       # offline wedge demo: 5 disasters refused, $0, no key
+node dist/index.js run "fix the failing test" --free   # keyless first success (free chain, never bills)
+node dist/index.js auth login nvidia # default provider needs a key (free at build.nvidia.com) — or keep using --free
+node dist/index.js run "fix the failing test"
+node dist/index.js run "refactor auth" --token-budget 250000
+node dist/index.js trust              # needs init + one run first: chain, policy, keys, memory — one command
+node dist/index.js remember list      # what the agent auto-runs without asking (revoke: remember forget)
+node dist/index.js audit --verify     # re-walk seq/prev_hash + ed25519 signatures
 ```
+
+(`npm i -g codewhip` arrives with the first published release — until then,
+`node dist/index.js …` from the repo root is the command. `npm run dev --
+…` skips the build.)
 
 Every run prints receipts: `tokens / model mix / $`. Receipts price known
 $0 routes (nvidia and the verified free-chain defaults); unpriced routes
@@ -167,11 +175,11 @@ npm run typecheck  # tsc --noEmit
 npm test           # $0-quota suite: tsx --test src/**/*.test.ts
 ```
 
-Requires Node >= 22. TypeScript strict, ESM.
+Requires Node >= 22 for development (`npm test` needs the Node 21+
+test-runner globs; CI pins 22/24). The built CLI (`node dist/index.js`)
+runs on Node >= 20 (`engines` floor). TypeScript strict, ESM.
 
-### Install globally (use `codewhip` from any path)
-
-One-time (global bin `C:\Users\Lenovo\AppData\Roaming\npm` is already on your `PATH`):
+### Install globally (local dev only — use `codewhip` from any path)
 
 ```sh
 npm install
@@ -183,10 +191,30 @@ Then open a **new terminal** and verify from any directory:
 
 ```sh
 codewhip help
-codewhip run "fix the failing test"
+codewhip run "fix the failing test" --free
 ```
 
-Remove it with `npm unlink -g codewhip`.
+Remove it with `npm unlink -g codewhip`. `npm link` needs a writable
+global bin and does not survive ephemeral filesystems — on Replit, CI, or
+any machine where `-g` fails, skip it and run `node dist/index.js …` from
+the repo root instead (same binary, no link).
+
+### Run on Replit
+
+Import the GitHub repo, then in the Shell:
+
+```sh
+node -v              # need >= 20 to run, >= 22 for npm test
+npm install
+npm run build
+node dist/index.js demo --deny
+node dist/index.js run "fix the failing test" --free
+```
+
+Notes: never `npm link` or `npm i -g` on Replit (no persistent global
+bin). The key file (`~/.config/codewhip`) is ephemeral on Replit — set
+provider keys as Replit Secrets (env vars win over stored keys, e.g.
+`NVIDIA_API_KEY`), or just stay on `--free`/keyless providers.
 
 ### Fast iteration (link once, rebuild on save)
 
@@ -205,7 +233,7 @@ Alternative without watch mode: `npm run build` manually after each change, or s
 ### Provider keys (persistent, per provider)
 
 ```sh
-codewhip auth login            # nvidia: hidden prompt, paste once; stored 0600 outside the repo
+codewhip auth login            # nvidia: hidden prompt, paste once; stored owner-only outside the repo
 codewhip auth login mistral    # same for mistral (no default stored; key only)
 codewhip auth status           # per provider: set (source: env|file) or missing — never prints keys
 codewhip auth logout mistral   # deletes the stored key (re-run login to rotate)
@@ -219,7 +247,7 @@ codewhip run "Say OK" --provider bai               # bai gateway default (needs 
 codewhip run "Say OK" --provider fabryka           # fabryka router default (needs a key: free key, reasoning model)
 ```
 
-Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`); bai keys at `https://chat.b.ai/chat` (log in, top up credits — paid, metered per model); fabryka keys at `https://router.fabryka.ai` (free key, then $0.20/$0.60 per 1M in/out — single `qwen3.6-35b-a3b` reasoning model, keep concurrency at 1). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`/`BAI_API_KEY`/`FABRYKA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — filesystem permissions, not encryption; on shared machines prefer the env var.
+Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`); bai keys at `https://chat.b.ai/chat` (log in, top up credits — paid, metered per model); fabryka keys at `https://router.fabryka.ai` (free key, then $0.20/$0.60 per 1M in/out — single `qwen3.6-35b-a3b` reasoning model, keep concurrency at 1). The bare default (`run` with no flags) routes to nvidia and needs its key — for a $0 start with no keys use `run "…" --free` (free chain, never bills) or `--provider llm7` (anonymous, rate-limited). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`/`BAI_API_KEY`/`FABRYKA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — owner-only permissions (0600 POSIX, user-only ACL on Windows, repaired on every write), not encryption; on shared machines prefer the env var.
 
 ### Custom providers (any OpenAI-compatible endpoint)
 

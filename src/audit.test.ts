@@ -9,6 +9,7 @@ import {
   auditPath,
   buildBundle,
   entryHash,
+  interpretVerification,
   readAuditLog,
   verifyChain,
   type AuditEntry,
@@ -207,6 +208,52 @@ describe("audit chain", () => {
     const v = verifyChain(cwd);
     strictEqual(v.valid, false);
     ok(v.problems.some((p) => p.includes("BROKEN") || p.includes("no pubkey")), v.problems.join(" | "));
+  });
+
+  it("stripping every signature reads BROKEN (no laundering to INTACT)", () => {
+    writeKey(cwd);
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    appendEntry(cwd, { runId: "r1", actor: "human", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    const file = auditPath(cwd);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
+    const stripped = lines.map((l) => {
+      const e = JSON.parse(l) as AuditEntry;
+      e.sig = null;
+      return JSON.stringify(e);
+    });
+    fs.writeFileSync(file, stripped.join("\n") + "\n", "utf8");
+    const v = verifyChain(cwd);
+    strictEqual(v.valid, false);
+    const interp = interpretVerification(v, cwd);
+    strictEqual(interp.clean, false);
+    strictEqual(interp.status, "BROKEN");
+    ok(interp.problems.length > 0, "evidence is kept, not swallowed");
+  });
+
+  it("a pre-key unsigned prefix stays INTACT", () => {
+    appendEntry(cwd, { runId: "r0", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    writeKey(cwd);
+    appendEntry(cwd, { runId: "r1", actor: "human", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    const v = verifyChain(cwd);
+    strictEqual(v.valid, false); // strict tool flags the pre-key entry
+    const interp = interpretVerification(v, cwd);
+    strictEqual(interp.clean, true);
+    ok(interp.status.startsWith("INTACT"), interp.status);
+  });
+
+  it("a single stripped post-key entry reads BROKEN", () => {
+    writeKey(cwd);
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    appendEntry(cwd, { runId: "r1", actor: "human", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    const file = auditPath(cwd);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
+    const second = JSON.parse(lines[1] as string) as AuditEntry;
+    second.sig = null;
+    fs.writeFileSync(file, (lines[0] as string) + "\n" + JSON.stringify(second) + "\n", "utf8");
+    const v = verifyChain(cwd);
+    const interp = interpretVerification(v, cwd);
+    strictEqual(interp.clean, false);
+    strictEqual(interp.status, "BROKEN");
   });
 
   it("hashes the same recorded content independently (matches fixture)", () => {

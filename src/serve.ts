@@ -1,5 +1,5 @@
 import * as http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
@@ -72,6 +72,17 @@ type Target = { provider: string; model: string };
 
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+/**
+ * Constant-time bearer comparison. Length check first (timingSafeEqual
+ * throws on unequal lengths) — a length mismatch is a mismatch, full stop.
+ */
+function bearerMatches(header: string | undefined, token: string): boolean {
+  if (header === undefined) return false;
+  const want = `Bearer ${token}`;
+  if (header.length !== want.length) return false;
+  return timingSafeEqual(Buffer.from(header, "utf8"), Buffer.from(want, "utf8"));
 }
 
 /** OpenAI `tools[]` → the loop's ToolSpec. Names pass through verbatim. */
@@ -821,7 +832,8 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
       sendJson(res, 400, { error: { message: "body {\"key\":\"<value>\"} required", code: "invalid_key" } });
       return true;
     }
-    saveKey(id, p.key);
+    const lockWarning = saveKey(id, p.key);
+    if (lockWarning !== null) console.warn(`[codewhip serve] warning: ${lockWarning}`);
     sendJson(res, 200, { id, source: "file" });
     return true;
   }
@@ -848,7 +860,7 @@ function logServeRequest(opts: ServeOptions, method: string, url: string, body?:
   try {
     const ts = new Date().toISOString();
     console.warn(`[codewhip serve] secret flagged ${ts} ${method} ${url} status=${status ?? "?"}`);
-    console.warn(`[codewhip serve] raw body: ${body}`);
+    console.warn(`[codewhip serve] redacted body: ${redacted}`);
   } catch { /* best effort */ }
 }
 
@@ -864,6 +876,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendJson(res, 200, { status: "ok", providers: listAllProviderConfigs().length });
     return;
   }
+  // Only /health is public (load-balancer checks must work without the
+  // bearer). Everything else — playground, stats, the auth UI/API, /v1/* —
+  // sits behind the token when one is configured: /stats leaks provider
+  // usage history and the auth UI spends your keys.
+  if (opts.token !== undefined) {
+    if (!bearerMatches(req.headers.authorization, opts.token)) {
+      sendError(res, 401, "missing or invalid bearer token for this server", "invalid_api_key");
+      return;
+    }
+  }
   if (req.method === "GET" && path === "/playground") {
     sendHtml(res, playgroundHtml());
     return;
@@ -878,13 +900,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       sendHtml(res, statsHtml(summary));
     }
     return;
-  }
-  if (opts.token !== undefined) {
-    const header = req.headers.authorization ?? "";
-    if (header !== `Bearer ${opts.token}`) {
-      sendError(res, 401, "missing or invalid bearer token for this server", "invalid_api_key");
-      return;
-    }
   }
   if (opts.authUi && path.startsWith(AUTH_UI)) {
     await handleAuthUi(req, res, path);

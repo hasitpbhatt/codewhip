@@ -58,6 +58,8 @@ export function matchDenylist(commandPreview: string): string | null {
   if (rmDeny !== null) return rmDeny;
   const winDeny = matchWindowsDeny(tokens);
   if (winDeny !== null) return winDeny;
+  const interpDeny = matchInterpreterDeny(tokens);
+  if (interpDeny !== null) return interpDeny;
   if (tokens.includes("dd") && tokens.some((t) => t.startsWith("of=/dev/"))) {
     return "dd of=/dev/";
   }
@@ -126,6 +128,59 @@ function matchWindowsDeny(tokens: string[]): string | null {  const head = token
 }
 
 /**
+ * Interpreter indirection: a second program behind the shell. Inline-code
+ * flags (`node -e`, `python -c`, `php -r`, `sh -c`) make the payload opaque
+ * to string screening — `node -e "require('fs').rmSync('x')"` has no
+ * chaining chars, no absolute path, and no denylisted token, yet deletes
+ * outside the jail. Nested shells (`powershell`, `pwsh`, `cmd`) are worse:
+ * powershell treats bare arguments as -Command, and -EncodedCommand is
+ * base64-opaque by design, so the heads are denied outright — there is no
+ * legitimate reason to nest a shell inside the tool shell.
+ *
+ * File/module execution (`node script.js`, `python -m pytest`,
+ * `node --version`) stays ask-gated: the target is visible in the string
+ * and must first pass through the governed write tool to exist.
+ */
+const INLINE_CODE_FLAGS: Record<string, string[]> = {
+  python: ["c"], python3: ["c"], py: ["c"],
+  node: ["e", "eval"], nodejs: ["e", "eval"],
+  deno: ["e", "eval"], bun: ["e", "eval"],
+  perl: ["e"], ruby: ["e"], php: ["r"],
+  lua: ["e"], rscript: ["e"],
+  sh: ["c", "command"], bash: ["c", "command"],
+  dash: ["c"], zsh: ["c"], fish: ["c", "command"],
+};
+
+const NESTED_SHELLS = new Set(["powershell", "pwsh", "cmd"]);
+
+function matchInterpreterDeny(tokens: string[]): string | null {
+  // Encoded payloads defeat every string screen — deny wherever they appear,
+  // not just behind a powershell head.
+  if (tokens.some((t) => t === "-encodedcommand" || t === "-enc" || t === "-ec" || t === "--eval")) {
+    return "encoded/opaque command payload";
+  }
+  const head = tokens[0] ?? "";
+  if (NESTED_SHELLS.has(head)) return `nested shell (${head})`;
+  const inline = INLINE_CODE_FLAGS[head];
+  if (inline === undefined) return null;
+  // Exact short flags (`-e`), letters-only bundles (`perl -ne`, `bash -lc`),
+  // and long forms (`--eval`). Deliberately NOT the shared flagSet(): its
+  // expansion would misread values like `ruby -Eutf-8` (encoding name,
+  // lowercased) as inline `-e`.
+  for (const t of tokens.slice(1)) {
+    if (t.startsWith("--")) {
+      if (inline.includes(t.slice(2).split("=")[0] ?? "")) return `interpreter inline code (${head})`;
+    } else if (/^-[a-z]{1,4}$/.test(t)) {
+      const letters = t.slice(1);
+      if (inline.some((f) => f.length === 1 && letters.includes(f))) return `interpreter inline code (${head})`;
+    }
+  }
+  // `deno eval "..."` is a subcommand, not a flag.
+  if (head === "deno" && tokens[1] === "eval") return "interpreter inline code (deno)";
+  return null;
+}
+
+/**
  * Worktree containment for bash (STRING-based, not realpath): parent
  * traversal (`..` segments) and absolute paths (POSIX `/x`, Windows `C:\x`,
  * UNC `\\s\x`, `~/x`) are denied — the agent works inside its worktree via
@@ -140,6 +195,17 @@ export function matchWorktreeEscape(command: string): string | null {
   }
   if (/(^|[\s;"'`(=])([a-zA-Z]:[\\/]|\\\\|\/(?![a-zA-Z](?:\s|$))|~(?=[/\\]|$))/.test(command)) {
     return "absolute path escapes the worktree";
+  }
+  // Dynamic path construction spells paths the static screens never see:
+  // $env:TEMP / ${HOME} / %APPDATA% (environment indirection — also an
+  // exfil channel), chr(47) / [char]46 / [convert] (computed characters),
+  // and quoted-literal concatenation ('.cod'+'ewhip'). The agent works with
+  // static worktree-relative paths; computed paths are denied, not asked.
+  if (/\$env:|\$env\{|%[a-z_][a-z0-9_]*%|\$\{[a-z_]|chr\s*\(|\[char\]|\[convert\]/i.test(command)) {
+    return "dynamic path construction ($env:, %VAR%, ${}, chr()/[char]) escapes string screening — use static worktree-relative paths";
+  }
+  if (/(['"])[^'"]*\1\s*\+\s*['"]/.test(command)) {
+    return "concatenated string literals escape string screening — use static worktree-relative paths";
   }
   return null;
 }
@@ -166,7 +232,7 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
   return preview;
 }
 
-export const POLICY_VERSION = "v1-2026-09-10";
+export const POLICY_VERSION = "v1-2026-09-15";
 export function checkPermission(
   tool: ToolName,
   commandPreview: string,
@@ -280,5 +346,5 @@ export function checkPermission(
 }
 
 export function describePolicy(): string {
-  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; bash containment is string-based, file tools use realpath jail)";
+  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; interpreter inline code / nested shells / encoded payloads denied; dynamic paths denied; bash containment is string-based, file tools use realpath jail)";
 }
