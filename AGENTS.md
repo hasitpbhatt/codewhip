@@ -13,7 +13,7 @@ npm run lint       # oxlint src --deny-warnings (TS-7-native; typescript-eslint 
 npm start          # node dist/index.js
 ```
 
-Node >= 22. TypeScript strict, ESM (`"type": "module"`).
+Node >= 20. TypeScript strict, ESM (`"type": "module"`).
 
 ## Repo conventions
 
