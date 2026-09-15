@@ -212,24 +212,69 @@ export type AuditVerification = {
 };
 
 /**
- * One interpretation layer, used by `audit --verify`, `demo`, and `trust` so
- * every surface reports the SAME status. Entries written before the key
- * existed are legitimately unsigned — `verifyChain` flags them strictly
- * (it is the integrity tool); interpretation tolerates exactly that pattern
- * and nothing else. Anything else stays BROKEN.
+ * Birth of the local keypair (key.pub mtime, else key mtime): the earliest
+ * moment a signed entry could legitimately exist. Entries older than this
+ * with null sigs are plausibly pre-key; anything newer is tampering.
+ * Null when no key files exist (unsigned repos verify via `valid` alone).
  */
-export function interpretVerification(v: AuditVerification): { clean: boolean; status: string; problems: string[] } {
-  const preKeyOnly =
+function keyBirthMs(cwd: string): number | null {
+  for (const f of ["key.pub", "key"]) {
+    try {
+      return fs.statSync(path.join(cwd, ".codewhip", f)).mtimeMs;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+/**
+ * One interpretation layer, used by `audit --verify`, `demo`, and `trust` so
+ * every surface reports the SAME status.
+ *
+ * Fail-closed on downgrade: stripping every signature produces EXACTLY the
+ * "entry unsigned while a key exists" problem set, so "all unsigned" alone
+ * must never mean clean. Legit pre-key history has one narrow shape — a
+ * contiguous unsigned prefix from genesis whose entries all predate the key
+ * birth — and anything else is BROKEN. Residual hole (documented, not
+ * fixable locally): an attacker with full filesystem write can re-forge the
+ * whole chain plus a fresh keypair; that breaks cross-references in
+ * outcomes/share bundles anchored to the old pubkey and tail instead.
+ */
+export function interpretVerification(
+  v: AuditVerification,
+  cwd: string
+): { clean: boolean; status: string; problems: string[] } {
+  if (v.valid) return { clean: true, status: "INTACT", problems: [] };
+  const unsignedOnly =
     v.problems.length > 0 &&
     v.problems.every((p) => p.includes("entry unsigned while a key exists"));
-  if (preKeyOnly) {
-    return {
-      clean: true,
-      status: "INTACT (entries pre-dating the key are unsigned as expected)",
-      problems: [],
-    };
+  if (unsignedOnly) {
+    const { entries } = readAuditLog(cwd);
+    const birth = keyBirthMs(cwd);
+    let prefix = 0;
+    while (
+      prefix < entries.length &&
+      (entries[prefix]?.sig === null || (entries[prefix]?.sig as string)?.length === 0)
+    ) {
+      prefix += 1;
+    }
+    const tailSigned = entries.slice(prefix).every(
+      (e) => e.sig !== null && (e.sig as string).length > 0
+    );
+    const prefixPreKey =
+      birth !== null &&
+      entries.slice(0, prefix).every((e) => {
+        const t = Date.parse(e.ts);
+        return Number.isFinite(t) && t <= birth;
+      });
+    if (prefix >= 1 && tailSigned && prefixPreKey) {
+      return {
+        clean: true,
+        status: `INTACT (${prefix} pre-key unsigned ${prefix === 1 ? "entry" : "entries"} pre-dating the key)`,
+        problems: v.problems,
+      };
+    }
   }
-  return { clean: v.valid, status: v.valid ? "INTACT" : "BROKEN", problems: v.problems };
+  return { clean: false, status: "BROKEN", problems: v.problems };
 }
 
 /**

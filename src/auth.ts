@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
 import { getProviderConfig } from "./custom-providers.js";
+import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import type { BuiltinProviderId } from "./provider.js";
 
 export type { ProviderId } from "./provider.js";
@@ -181,10 +182,13 @@ export function resolveApiKey(): { key: string; source: KeySource } {
   return resolveKey("nvidia");
 }
 
-function writeStored(next: Record<string, string>): void {
+function writeStored(next: Record<string, string>): string | null {
   const dir = configDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(credsPath(), JSON.stringify(next) + "\n", { mode: 0o600 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch { /* best-effort (Windows ignores mode) */ }
+  return writeOwnerOnlyFile(credsPath(), JSON.stringify(next) + "\n");
 }
 
 /** All stored keys merged, so writing one provider never drops the others'. */
@@ -199,8 +203,8 @@ function allStoredFields(): Record<string, string> {
   return out;
 }
 
-export function saveKey(provider: string, key: string): void {
-  writeStored({ ...allStoredFields(), [fieldFor(provider)]: key });
+export function saveKey(provider: string, key: string): string | null {
+  return writeStored({ ...allStoredFields(), [fieldFor(provider)]: key });
 }
 
 /** Back-compat default (nvidia). */
@@ -216,7 +220,13 @@ export function clearKey(provider: string): boolean {
   }
   const rest = allStoredFields();
   delete rest[fieldFor(provider)];
-  writeStored(rest);
+  const warning = writeStored(rest);
+  // The rewrite inherits the file's existing ACLs/mode; re-lock so a file
+  // left loose by an older version is repaired on the way out too.
+  const relock = lockFileOwnerOnly(credsPath());
+  for (const w of [warning, relock]) {
+    if (w !== null) console.warn(`auth: warning: ${w}`);
+  }
   return true;
 }
 
