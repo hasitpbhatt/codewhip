@@ -1428,9 +1428,14 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
                 return { ok: false, error: netErr, retryable: "other" };
               }
               if (parsed.text.length > 0 || parsed.toolCalls.length > 0) {
-                recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: "ok", host: hosts[i], status: res.status, ms: Date.now() - callStart });
                 const estimated = parsed.usage === null;
                 const usage = parsed.usage ?? estimateUsage(body.length, parsed.text, parsed.toolCalls);
+                // Stats carry only meter readings: an estimate never enters
+                // provider-analytics (receipts mark it "est." instead).
+                recordProviderCall({
+                  ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: "ok", host: hosts[i], status: res.status, ms: Date.now() - callStart,
+                  ...(parsed.usage !== null ? { promptTokens: usage.prompt, completionTokens: usage.completion } : {}),
+                });
                 return {
                   ok: true,
                   text: parsed.text.length > 0 ? parsed.text : null,
@@ -1449,7 +1454,6 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
               }
               return { ok: false, error: `${brand} api returned no text or tool calls`, retryable: "other" };
             }
-            recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: "ok", host: hosts[i], status: res.status, ms });
             let data: NvidiaChatResponse;
             try {
               data = (await res.json()) as NvidiaChatResponse;
@@ -1462,12 +1466,18 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
             if ((content === null || content.length === 0) && toolCalls.length === 0) {
               return { ok: false, error: `${brand} api returned no text or tool calls`, retryable: "other" };
             }
+            const prompt = toCount(data.usage?.prompt_tokens);
+            const completion = toCount(data.usage?.completion_tokens);
+            recordProviderCall({
+              ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: "ok", host: hosts[i], status: res.status, ms,
+              ...(data.usage !== undefined ? { promptTokens: prompt, completionTokens: completion } : {}),
+            });
             return {
               ok: true,
               text: content,
               toolCalls,
-              promptTokens: toCount(data.usage?.prompt_tokens),
-              completionTokens: toCount(data.usage?.completion_tokens),
+              promptTokens: prompt,
+              completionTokens: completion,
             };
           }
           let respBody = "";

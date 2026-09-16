@@ -1,7 +1,7 @@
 {
-  "name": "codewhip",
+  "name": "codewhip-proxy",
   "version": "0.2.0",
-  "description": "AI coding agent that cracks through code like a whip",
+  "description": "OpenAI-compatible proxy library with smart routing for LLM providers",
   "author": "Hasit Bhatt",
   "repository": {
     "type": "git",
@@ -12,35 +12,90 @@
   },
   "homepage": "https://github.com/hasitpbhatt/codewhip#readme",
   "type": "module",
+  "main": "dist/lib/index.js",
+  "module": "dist/lib/index.js",
+  "types": "dist/lib/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/lib/index.js",
+      "require": "./dist/lib/index.js",
+      "types": "./dist/lib/index.d.ts"
+    },
+    "./proxy": {
+      "import": "./dist/lib/proxy.js",
+      "require": "./dist/lib/proxy.js",
+      "types": "./dist/lib/proxy.d.ts"
+    },
+    "./storage": {
+      "import": "./dist/lib/storage.js",
+      "require": "./dist/lib/storage.js",
+      "types": "./dist/lib/storage.d.ts"
+    },
+    "./providers": {
+      "import": "./dist/lib/providers.js",
+      "require": "./dist/lib/providers.js",
+      "types": "./dist/lib/providers.d.ts"
+    },
+    "./openai": {
+      "import": "./dist/lib/openai.js",
+      "require": "./dist/lib/openai.js",
+      "types": "./dist/lib/openai.d.ts"
+    },
+    "./types": {
+      "import": "./dist/lib/types.js",
+      "require": "./dist/lib/types.js",
+      "types": "./dist/lib/types.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "workers",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "codewhip": "dist/index.js"
   },
-  "files": [
-    "dist"
-  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
+    "build:lib": "tsc --project tsconfig.lib.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "typecheck:lib": "tsc --noEmit --project tsconfig.lib.json",
     "lint": "oxlint src --deny-warnings",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "bench": "tsx src/bench/cli.ts"
+    "test:lib": "tsx --test \"src/lib/**/*.test.ts\"",
+    "bench": "tsx src/bench/cli.ts",
+    "serve": "node dist/serve.js",
+    "deploy": "wrangler deploy",
+    "deploy:dev": "wrangler dev"
   },
   "engines": {
     "node": ">=20"
   },
   "keywords": [
+    "codewhip",
+    "proxy",
+    "openai",
+    "llm",
     "ai",
-    "coding",
-    "agent",
-    "cli"
+    "router",
+    "cloudflare",
+    "workers",
+    "serverless",
+    "typescript",
+    "esm"
   ],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.20.2",
     "oxlint": "^1.82.0",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "wrangler": "^3.105.0"
   }
 }

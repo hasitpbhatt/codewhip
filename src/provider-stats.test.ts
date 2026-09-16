@@ -4,6 +4,7 @@ import {
   summarizeCalls,
   renderProviderHealth,
   outcomeForStatus,
+  LISTING_MODEL,
   type ProviderCallRecord,
 } from "./provider-stats.js";
 
@@ -70,5 +71,41 @@ describe("provider-stats", () => {
     const records = [rec({ provider: "nvidia", outcome: "ok" }), rec({ provider: "moonshot", outcome: "ok" })];
     const s = summarizeCalls(records);
     strictEqual(s.providers.length, 2);
+  });
+
+  it("aggregates upstream-reported tokens and tokens/sec", () => {
+    const records = [
+      rec({ outcome: "ok", ms: 2000, promptTokens: 300, completionTokens: 100 }),
+      rec({ outcome: "ok", ms: 2000, promptTokens: 100, completionTokens: 100 }),
+      rec({ outcome: "quota", ms: 500, status: 429 }), // failures carry no tokens
+    ];
+    const s = summarizeCalls(records);
+    const stepfun = s.providers.find((p) => p.provider === "stepfun")!;
+    strictEqual(stepfun.promptTokens, 400);
+    strictEqual(stepfun.completionTokens, 200);
+    const m = stepfun.models.find((x) => x.model === "step-3.5-flash")!;
+    strictEqual(m.promptTokens, 400);
+    strictEqual(m.completionTokens, 200);
+    // 600 tokens over the 4000ms of token-bearing calls = 150 tok/s
+    strictEqual(m.tokensPerSec, 150);
+    ok(renderProviderHealth(s).includes("600 tok @ 150 tok/s"), "expected token throughput in render");
+  });
+
+  it("keeps model ids that contain colons intact", () => {
+    const records = [rec({ provider: "kilo", model: "cohere/north-mini-code:free", outcome: "ok" })];
+    const s = summarizeCalls(records);
+    const kilo = s.providers.find((p) => p.provider === "kilo")!;
+    strictEqual(kilo.models.length, 1);
+    strictEqual(kilo.models[0].model, "cohere/north-mini-code:free");
+  });
+
+  it("renders listing checks as a check row, not a model row", () => {
+    const records = [
+      rec({ model: LISTING_MODEL, kind: "models", outcome: "ok" }),
+      rec({ outcome: "ok" }),
+    ];
+    const out = renderProviderHealth(summarizeCalls(records));
+    ok(out.includes("model-listing checks"), "expected a listing-check row");
+    ok(!/\(listing\):/.test(out), "(listing) must not render as a model name");
   });
 });

@@ -72,7 +72,7 @@ function healthOk(providerId: ProviderId, model: string) {
   return mh.successRate >= 0.7;
 }
 
-const TTL_MS = {
+export const TTL_MS = {
   quota: 15 * 60 * 1000,
   auth: 60 * 60 * 1000,
   timeout: 5 * 60 * 1000,

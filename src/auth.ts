@@ -147,11 +147,27 @@ function credsPath(): string {
   return path.join(configDir(), "credentials.json");
 }
 
+/**
+ * resolveKey runs per chat request and per provider row on the auth page, so
+ * credentials.json is cached keyed by (mtime, size): a stat replaces the
+ * read+parse on every call, while edits from this process, another process,
+ * or a hand edit still invalidate naturally. Written keys drop the cache
+ * outright so a save is visible immediately.
+ */
+let credsCache: { mtimeMs: number; size: number; creds: StoredCreds } | null = null;
+
 function readStored(): StoredCreds {
   try {
-    const raw = fs.readFileSync(credsPath(), "utf8");
-    return JSON.parse(raw) as StoredCreds;
+    const st = fs.statSync(credsPath());
+    if (credsCache !== null && credsCache.mtimeMs === st.mtimeMs && credsCache.size === st.size) {
+      return credsCache.creds;
+    }
+    const creds = JSON.parse(fs.readFileSync(credsPath(), "utf8")) as StoredCreds;
+    credsCache = { mtimeMs: st.mtimeMs, size: st.size, creds };
+    return creds;
   } catch {
+    // Missing/unreadable file: drop any cached value for a since-deleted file.
+    credsCache = null;
     return {};
   }
 }
@@ -188,7 +204,10 @@ function writeStored(next: Record<string, string>): string | null {
   try {
     fs.chmodSync(dir, 0o700);
   } catch { /* best-effort (Windows ignores mode) */ }
-  return writeOwnerOnlyFile(credsPath(), JSON.stringify(next) + "\n");
+  const err = writeOwnerOnlyFile(credsPath(), JSON.stringify(next) + "\n");
+  // Same-tick saves can land inside one mtime tick — invalidate explicitly.
+  credsCache = null;
+  return err;
 }
 
 /** All stored keys merged, so writing one provider never drops the others'. */

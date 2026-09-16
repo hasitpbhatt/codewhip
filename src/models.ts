@@ -1,5 +1,5 @@
 import { candidateBaseUrls, pinHost, resolveBaseUrl, unresolvedBaseUrlVars } from "./provider.js";
-import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
+import { recordProviderCall, outcomeForStatus, LISTING_MODEL } from "./provider-stats.js";
 import { getProviderConfig } from "./custom-providers.js";
 
 const MODELS_TIMEOUT_MS = 15000;
@@ -168,19 +168,19 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
       if (name === "TimeoutError" || name === "AbortError") {
         lastError = `${provider} models listing timed out after ${MODELS_TIMEOUT_MS}ms`;
         if (hosts.length > 1) continue;
-        recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "timeout", host, error: lastError.slice(0, 120) });
+        recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "timeout", host, error: lastError.slice(0, 120) });
         return { ok: false, error: lastError };
       }
       lastError = `network error: ${err instanceof Error ? err.message : "fetch failed"}`;
       if (hosts.length > 1) continue;
-      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "network", host, error: lastError.slice(0, 120) });
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "network", host, error: lastError.slice(0, 120) });
       return { ok: false, error: lastError };
     }
     if (res.ok) {
       if (host !== cfg.baseUrl) {
         pinHost(provider, host);
       }
-      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "ok", host, status: res.status });
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "ok", host, status: res.status });
       let data: unknown;
       try {
         data = (await res.json()) as unknown;
@@ -201,16 +201,16 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
     if (res.status === 401 || res.status === 403) {
       lastError = `invalid ${provider} key (never printed or logged)`;
       if (hosts.length > 1) continue;
-      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "auth", host, status: res.status, error: lastError.slice(0, 120) });
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "auth", host, status: res.status, error: lastError.slice(0, 120) });
       return { ok: false, error: lastError };
     }
     if (res.status === 429) {
-      recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: "quota", host, status: res.status });
+      recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "quota", host, status: res.status });
       return { ok: false, error: `${provider} rate limited — the listing shares your quota, retry later` };
     }
     lastError = `${provider} models listing failed (http ${res.status})`;
     if (hosts.length > 1) continue;
-    recordProviderCall({ ts: new Date().toISOString(), provider, model: "(listing)", kind: "models", outcome: outcomeForStatus(res.status), host, status: res.status, error: lastError.slice(0, 120) });
+    recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: outcomeForStatus(res.status), host, status: res.status, error: lastError.slice(0, 120) });
     return { ok: false, error: lastError };
   }
   return { ok: false, error: lastError || `${provider} models listing failed` };

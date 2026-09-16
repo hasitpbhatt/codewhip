@@ -4,8 +4,8 @@ import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProvide
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
-import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
-import { estimateCost, isAutoEligible, isRecentlyFailed } from "./router.js";
+import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
+import { estimateCost, isAutoEligible, TTL_MS } from "./router.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -174,8 +174,13 @@ function pickAutoTarget(): Target | { error: string } {
   const cands: Array<{ provider: string; model: string; weight: number }> = [];
   for (const cfg of listAllProviderConfigs()) {
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
-    if (isRecentlyFailed(cfg.id, cfg.defaultModel)) continue;
+    // TTL deactivation against the summary computed above — one pass over the
+    // records per request, not one per candidate (isRecentlyFailed re-reads).
     const mh = summary.providers.find((p) => p.provider === cfg.id)?.models.find((m) => m.model === cfg.defaultModel);
+    if (mh !== undefined && mh.lastFailureTs !== undefined && mh.lastFailureOutcome !== undefined && mh.lastFailureOutcome !== "ok") {
+      const ttl = TTL_MS[mh.lastFailureOutcome] ?? 5 * 60_000;
+      if (Date.now() - new Date(mh.lastFailureTs).getTime() < ttl) continue;
+    }
     if (mh !== undefined && mh.total >= 5 && mh.successRate < 0.5) continue;
     const per1k = estimateCost(cfg.id as ProviderId, cfg.defaultModel, 1000, 1000);
     const costFactor = per1k === null ? 0.5 : per1k === 0 ? 3 : 1;
@@ -325,7 +330,8 @@ function writeSyntheticStream(
   text: string | null,
   toolCalls: LoopToolCall[],
   usage: { prompt: number; completion: number },
-  includeUsage: boolean
+  includeUsage: boolean,
+  servicedBy: string
 ): void {
   const chunk = (delta: Record<string, unknown>, finish: string | null): string =>
     `data: ${JSON.stringify({
@@ -363,12 +369,22 @@ function writeSyntheticStream(
         created,
         model,
         choices: [],
+        serviced_by: servicedBy,
         usage: { prompt_tokens: usage.prompt, completion_tokens: usage.completion, total_tokens: usage.prompt + usage.completion },
       })}\n\n`
     );
   }
   res.write("data: [DONE]\n\n");
 }
+
+/**
+ * Ping results for `--ping-models`, cached 60s: a round is 54 network probes
+ * (~1.5s wall) and /v1/models gets called on every playground load. Staleness
+ * is bounded by the TTL, so a newly added key changes filtering within a
+ * minute — pass ?refresh in the CLI path to force a re-ping.
+ */
+let pingCache: { at: number; ok: Set<string> } | null = null;
+const PING_TTL_MS = 60_000;
 
 async function modelList(opts: ServeOptions): Promise<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000);
@@ -381,26 +397,33 @@ async function modelList(opts: ServeOptions): Promise<Record<string, unknown>> {
     cfg,
   }));
   if (opts.pingModels) {
-    const ping = async (cfg: typeof cfgs[number]) => {
-      try {
-        const url = `${cfg.baseUrl}${cfg.modelsPath}`;
-        const { key } = resolveKey(cfg.id);
-        const headers: Record<string, string> = {};
-        if (key.length > 0) headers["Authorization"] = `Bearer ${key}`;
-        const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), 1500);
-        const res = await fetch(url, { method: "GET", signal: controller.signal, headers });
-        clearTimeout(t);
-        if (!res.ok) return false;
-        const data = await res.json().catch(() => null) as { data?: Array<{ id: string }> } | null;
-        if (!data?.data) return true; // list shape unknown, assume reachable
-        return data.data.some((m) => m.id === cfg.defaultModel);
-      } catch {
-        return false;
-      }
-    };
-    const results = await Promise.all(rows.map(async (r) => ({ r, ok: await ping(r.cfg) })));
-    rows = results.filter((x) => x.ok).map((x) => x.r);
+    let okIds: Set<string>;
+    if (pingCache !== null && Date.now() - pingCache.at < PING_TTL_MS) {
+      okIds = pingCache.ok;
+    } else {
+      const ping = async (cfg: typeof cfgs[number]) => {
+        try {
+          const url = `${cfg.baseUrl}${cfg.modelsPath}`;
+          const { key } = resolveKey(cfg.id);
+          const headers: Record<string, string> = {};
+          if (key.length > 0) headers["Authorization"] = `Bearer ${key}`;
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), 1500);
+          const res = await fetch(url, { method: "GET", signal: controller.signal, headers });
+          clearTimeout(t);
+          if (!res.ok) return false;
+          const data = await res.json().catch(() => null) as { data?: Array<{ id: string }> } | null;
+          if (!data?.data) return true; // list shape unknown, assume reachable
+          return data.data.some((m) => m.id === cfg.defaultModel);
+        } catch {
+          return false;
+        }
+      };
+      const results = await Promise.all(rows.map(async (r) => ({ r, ok: await ping(r.cfg) })));
+      pingCache = { at: Date.now(), ok: new Set(results.filter((x) => x.ok).map((x) => x.r.id)) };
+      okIds = pingCache.ok;
+    }
+    rows = rows.filter((r) => okIds.has(r.id));
   }
   const data = rows.map(({ cfg: _cfg, ...rest }) => rest);
   return { object: "list", data };
@@ -456,224 +479,486 @@ function authStatus(): Array<Record<string, unknown>> {
   });
 }
 
-function authHtml(): string {
-  const rows = authStatus().map(r => {
-    const id = escapeHtml(r.id);
-    const endpoint = r.custom === true ? `<div class="url">${escapeHtml(r.baseUrl)}</div>` : "";
-    const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="none">(none)</span>`;
-    const tag = r.custom === true ? `<span class="tag">custom</span>` : "";
-    const keyState = r.hasKey ? `<span class="pill ok">key set</span>` : `<span class="pill">no key</span>`;
-    const source = escapeHtml(r.source);
-    const env = escapeHtml(r.envVar);
-    return `<div class="card prov">
-<div class="prov-head">
-<div>
-<strong>${id}</strong>${tag}
-${endpoint}
-</div>
-<div class="prov-actions">
-${keyState}
-<button data-act="login" data-id="${id}">Set key</button>
-${r.hasKey ? `<button data-act="logout" data-id="${id}" class="ghost">Remove key</button>` : ``}
-${r.custom ? `<button data-act="remove" data-id="${id}" class="danger">Remove provider</button>` : ``}
-</div>
-</div>
-<div class="prov-meta">
-<div><span class="k">Env</span><code>${env}</code></div>
-<div><span class="k">Key console</span>${keyUrl}</div>
-<div><span class="k">Source</span><span class="src">${source}</span></div>
-</div>
-</div>`;
-  }).join("");
-  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip auth</title><style>
-:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff;--danger:#d00}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
-header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0}
-h1{margin:0;font-size:1.2rem;font-weight:600}
-.container{max-width:1000px;margin:0 auto;padding:1.5rem}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
-@media (max-width:900px){.grid{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem}
-.prov{margin-bottom:1rem}
-.prov-head{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start}
-.prov-actions{display:flex;gap:.5rem;align-items:center}
-.prov-meta{display:grid;grid-template-columns:140px 1fr;gap:.5rem;margin-top:.75rem;color:var(--muted);font-size:.92rem}
-.prov-meta .k{font-weight:600;color:var(--fg)}
-code{background:var(--bg);padding:.15rem .35rem;border-radius:4px;border:1px solid var(--border)}
-.tag{background:#eef;border:1px solid #ccd;color:#446;border-radius:3px;font-size:.7em;padding:.05rem .25rem;margin-left:.5rem}
-.pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;background:var(--border);font-size:.75rem;margin-right:.5rem}
-.pill.ok{background:#e6f4ea;color:#137333}
-.url{font-size:.8em;color:var(--muted);word-break:break-all}
-.none{opacity:.6}
-button{cursor:pointer;padding:.5rem .8rem;border:1px solid var(--border);border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+/**
+ * Shared UI foundation for the serve surfaces (playground + auth).
+ * One token sheet, one type scale, one header — the two pages are one product.
+ * Accent is near-black, not a brand color: the content is the color.
+ * Built once and reused across every page render.
+ */
+let uiCssCache: string | null = null;
+function uiCss(): string {
+  if (uiCssCache === null) {
+    uiCssCache = `:root{--bg:#f7f7f5;--surface:#fff;--fg:#1a1a1a;--muted:#6e6e6a;--line:#e3e3df;--accent:#1a1a1a;--accent-fg:#fff;--danger:#b30000;--ok:#0a7d32;--r:6px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
+@media (prefers-color-scheme:dark){:root{--bg:#111214;--surface:#191b1e;--fg:#e8e8e6;--muted:#9a9a95;--line:#2a2d31;--accent:#e8e8e6;--accent-fg:#111214;--danger:#ff8080;--ok:#4cc38a}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+a{color:inherit}
+h1{margin:0;font-size:16px;font-weight:600}
+h2{margin:0;font-size:13px;font-weight:600}
+.kicker{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:var(--s4);padding:var(--s3) var(--s5);background:var(--surface);border-bottom:1px solid var(--line)}
+header .wordmark{font-weight:700}
+header nav{display:flex;gap:var(--s3);font-size:13px}
+header nav a{text-decoration:none;color:var(--muted)}
+header nav a[aria-current=page]{color:var(--fg);font-weight:600}
+header .note{margin-left:auto;font-size:12px;color:var(--muted)}
+main{max-width:1100px;margin:0 auto;padding:var(--s5)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:var(--s4)}
+button{font:inherit;cursor:pointer;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r);background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.ghost{background:transparent;color:var(--fg)}
 button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
-input{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--fg)}
-label{display:block;font-weight:600;margin:.6rem 0 .25rem}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
-@media (max-width:700px){.form-grid{grid-template-columns:1fr}}
-.err{color:var(--danger);min-height:1.2em;margin:.5rem 0}
-small{color:var(--muted)}
-</style></head><body>
-<header><h1>codewhip auth — providers & keys</h1></header>
-<div class="container">
-<div class="grid">
-<div>
-<h2 style="margin:.5rem 0 1rem">Your providers</h2>
-${rows}
+button:disabled{opacity:.5;cursor:not-allowed}
+input,select,textarea{font:inherit;width:100%;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r);background:var(--bg);color:var(--fg)}
+textarea{min-height:96px;resize:vertical}
+label{display:block;font-weight:600;margin:var(--s2) 0 var(--s1)}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px var(--s1)}
+.small{font-size:12px;color:var(--muted)}`;
+  }
+  return uiCssCache;
+}
+
+/** Shared header: wordmark, nav with current-page marker, honesty note. */
+function uiHeader(title: string, active: "playground" | "stats" | "auth", note: string): string {
+  const mark = (page: "playground" | "stats" | "auth", label: string): string =>
+    `<a href="/${page}"${page === active ? ' aria-current="page"' : ""}>${label}</a>`;
+  return `<header><span class="wordmark">codewhip</span><nav>${mark("playground", "playground")}${mark("stats", "stats")}${mark("auth", "keys & providers")}</nav><h1 style="position:absolute;left:-9999px">${title}</h1><span class="note">${note}</span></header>`;
+}
+
+function authHtml(): string {
+  const status = authStatus();
+  const rowHtml = (r: Record<string, unknown>): string => {
+    const id = escapeHtml(r.id);
+    const endpoint = r.custom === true ? `<div class="small">${escapeHtml(r.baseUrl)}</div>` : "";
+    const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="small">(none)</span>`;
+    const keyState = r.hasKey ? `<span class="small" style="color:var(--ok)">key set (${escapeHtml(r.source)})</span>` : `<span class="small">no key</span>`;
+    const search = escapeHtml(`${r.id} ${r.envVar} ${r.baseUrl ?? ""}`).toLowerCase();
+    return `<li class="card prov" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3)">
+<div style="display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;align-items:flex-start">
+<div><strong>${id}</strong>${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
+<div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
+${keyState}
+<button data-act="login">Set key</button>
+${r.hasKey ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
+${r.custom ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
 </div>
-<div>
+</div>
+<div class="keyrow" hidden>
+<input type="password" class="keyinput" placeholder="paste ${escapeHtml(r.envVar)} value — stored 0600, never logged" autocomplete="new-password">
+<button data-act="reveal" class="ghost">show</button>
+<button data-act="save">Save key</button>
+<span class="msg small"></span>
+</div>
+<div class="small" style="display:flex;gap:var(--s5);margin-top:var(--s2);flex-wrap:wrap">
+<span>env <code>${escapeHtml(r.envVar)}</code></span>
+<span>console ${keyUrl}</span>
+</div>
+</li>`;
+  };
+  const withKey = status.filter((r) => r.hasKey === true && r.custom !== true);
+  const keyless = status.filter((r) => r.hasKey !== true && r.custom !== true);
+  const custom = status.filter((r) => r.custom === true);
+  const group = (label: string, rows: Array<Record<string, unknown>>): string =>
+    rows.length === 0
+      ? ""
+      : `<section style="margin-bottom:var(--s5)"><h2 class="kicker" style="margin-bottom:var(--s3)">${label} (${rows.length})</h2><ul id="g-${label.replace(/\s/g, "")}" style="padding:0;margin:0">${rows.map(rowHtml).join("")}</ul></section>`;
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>codewhip auth</title><style>${uiCss()}
+.keyrow{display:flex;gap:var(--s2);margin-top:var(--s3);align-items:center;flex-wrap:wrap}
+[hidden]{display:none!important}
+.keyrow input{flex:1;min-width:200px}
+.msg.ok{color:var(--ok)}
+.msg.bad{color:var(--danger)}
+</style></head><body>
+${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your keys — it stores and removes them")}
+<main>
+<p class="small" style="margin-top:0">${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom. A provider with no key still works if its env var is set outside this page.</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s5)">
+<section>
+<label for="provfilter" class="kicker">Filter providers</label>
+<input id="provfilter" type="search" placeholder="Type an id, env var, or URL…" autocomplete="off" style="margin-bottom:var(--s4)">
+${group("keys set", withKey)}
+${group("keyless", keyless)}
+${group("custom", custom)}
+</section>
+<section>
 <div class="card">
-<h3 style="margin-top:0">Register custom endpoint</h3>
-<form id="add" autocomplete="off" class="form-grid">
-<div><label>id</label><input name="id" required placeholder="my-gateway"></div>
-<div><label>base URL</label><input name="baseUrl" required placeholder="https://gateway.example.com"></div>
-<div><label>default model</label><input name="model" required placeholder="my-model"></div>
-<div><label>env var</label><input name="envVar" required placeholder="MY_GATEWAY_API_KEY"></div>
-<div style="grid-column:1/-1"><label>key URL</label><input name="keyUrl" placeholder="https://gateway.example.com/keys"></div>
-<div style="grid-column:1/-1"><label>API key <span style="font-weight:400;color:var(--muted)">optional – provide now instead of env var</span></label><input name="key" type="password" autocomplete="new-password" placeholder="sk-..."></div>
-<details style="grid-column:1/-1"><summary>Optional</summary>
-<div class="form-grid" style="margin-top:.5rem">
-<div><label>brand</label><input name="brand"></div>
-<div><label>chat path</label><input name="chatPath" placeholder="/v1/chat/completions"></div>
-<div><label>models path</label><input name="modelsPath" placeholder="/v1/models"></div>
-<div><label>timeout ms</label><input name="timeoutMs" inputmode="numeric"></div>
-<div><label>rate hint</label><input name="rateHint"></div>
+<h2>Register custom endpoint</h2>
+<form id="add" autocomplete="off" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)">
+<div><label for="f-id">id</label><input id="f-id" name="id" required placeholder="my-gateway"></div>
+<div><label for="f-baseUrl">base URL</label><input id="f-baseUrl" name="baseUrl" required placeholder="https://gateway.example.com"></div>
+<div><label for="f-model">default model</label><input id="f-model" name="model" required placeholder="my-model"></div>
+<div><label for="f-envVar">env var</label><input id="f-envVar" name="envVar" required placeholder="MY_GATEWAY_API_KEY"></div>
+<div style="grid-column:1/-1"><label for="f-keyUrl">key URL</label><input id="f-keyUrl" name="keyUrl" placeholder="https://gateway.example.com/keys"></div>
+<div style="grid-column:1/-1"><label for="f-key">API key <span style="font-weight:400;color:var(--muted)">optional – stored now instead of an env var</span></label><input id="f-key" name="key" type="password" autocomplete="new-password" placeholder="sk-..."></div>
+<details style="grid-column:1/-1"><summary class="small">Advanced</summary>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)">
+<div><label for="f-brand">brand</label><input id="f-brand" name="brand"></div>
+<div><label for="f-chatPath">chat path</label><input id="f-chatPath" name="chatPath" placeholder="/v1/chat/completions"></div>
+<div><label for="f-modelsPath">models path</label><input id="f-modelsPath" name="modelsPath" placeholder="/v1/models"></div>
+<div><label for="f-timeoutMs">timeout ms</label><input id="f-timeoutMs" name="timeoutMs" inputmode="numeric"></div>
+<div style="grid-column:1/-1"><label for="f-rateHint">rate hint</label><input id="f-rateHint" name="rateHint"></div>
 </div>
 </details>
-<div class="err" id="err"></div>
-<button type="submit" style="margin-top:.5rem">Register</button>
+<div class="err small" id="err" style="color:var(--danger)"></div>
+<button type="submit" style="grid-column:1/-1">Register</button>
 </form>
-<p><small>https:// anywhere, http:// on loopback for local runtimes like Ollama. Ids: lowercase letters, digits, dashes.</small></p>
+<p class="small">https:// anywhere, http:// on loopback for local runtimes like Ollama. Ids: lowercase letters, digits, dashes.</p>
 </div>
+</section>
 </div>
-</div>
-</div>
+</main>
 <script>
+document.getElementById('provfilter').addEventListener('input',e=>{
+  const q=e.target.value.trim().toLowerCase();
+  for(const li of document.querySelectorAll('li.prov')) li.style.display=!q||li.dataset.search.includes(q)?'':'none';
+  for(const sec of document.querySelectorAll('section ul[id^="g-"]')) {
+    const visible=[...sec.querySelectorAll('li.prov')].some(li=>li.style.display!=='none');
+    sec.parentElement.style.display=visible?'':'none';
+  }
+});
 const err=document.getElementById('err');
+async function guarded(btn,label,fn){
+  const orig=btn.textContent; btn.disabled=true; btn.textContent=label;
+  try{return await fn();} finally{btn.disabled=false; btn.textContent=orig;}
+}
+async function failBody(res){
+  const j=await res.json().catch(()=>null);
+  return (j&&j.error&&j.error.message)||('failed ('+res.status+')');
+}
 document.getElementById('add').addEventListener('submit',async e=>{
   e.preventDefault();
-  const fd=new FormData(e.target);
+  const form=e.target, btn=form.querySelector('button[type=submit]');
+  const fd=new FormData(form);
   const key=String(fd.get('key')||'').trim();
   const body={}; fd.forEach((v,k)=>{if(k==='key') return; const s=String(v).trim(); if(s) body[k]=s;});
   err.textContent='';
-  try{
-    const res=await fetch('/auth/_custom',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-    if(!res.ok){const j=await res.json().catch(()=>null); err.textContent=(j&&j.error&&j.error.message)||('failed '+res.status); return;}
-    if(key){await fetch('/auth/'+encodeURIComponent(body.id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key})});}
-    location.reload();
-  }catch(e2){err.textContent='network error';}
+  await guarded(btn,'Registering…',async()=>{
+    try{
+      const res=await fetch('/auth/_custom',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      if(!res.ok){err.textContent=await failBody(res); return false;}
+      if(key){
+        const kres=await fetch('/auth/'+encodeURIComponent(body.id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key})});
+        if(!kres.ok){err.textContent='endpoint registered, but the key failed to save: '+await failBody(kres); return false;}
+      }
+      location.reload(); return true;
+    }catch(e2){err.textContent='network error'; return false;}
+  });
 });
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button[data-act]'); if(!b) return;
-  const id=b.dataset.id, act=b.dataset.act;
-  if(act==='login'){const k=prompt('Enter '+id+' API key'); if(k===null) return; await fetch('/auth/'+encodeURIComponent(id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:k})}); location.reload();}
-  if(act==='logout'){if(!confirm('Remove stored '+id+' key?')) return; await fetch('/auth/'+encodeURIComponent(id),{method:'DELETE'}); location.reload();}
-  if(act==='remove'){if(!confirm('Remove custom provider '+id+'?')) return; const res=await fetch('/auth/_custom/'+encodeURIComponent(id),{method:'DELETE'}); if(!res.ok){alert('failed');} else {location.reload();}}
+  const card=b.closest('li.prov'); if(!card) return;
+  const id=card.dataset.id;
+  const msg=card.querySelector('.msg');
+  const say=(t,bad)=>{msg.textContent=t; msg.classList.toggle('bad',!!bad); msg.classList.toggle('ok',!bad);};
+  const act=b.dataset.act;
+  if(act==='login'){
+    const row=card.querySelector('.keyrow');
+    row.hidden=!row.hidden;
+    if(!row.hidden){
+      const inp=card.querySelector('.keyinput');
+      inp.focus();
+      inp.onkeydown=(ev)=>{if(ev.key==='Escape'){row.hidden=true; b.focus();}};
+    }
+    return;
+  }
+  if(act==='reveal'){
+    const inp=card.querySelector('.keyinput');
+    inp.type=inp.type==='password'?'text':'password';
+    b.textContent=inp.type==='password'?'show':'hide';
+    return;
+  }
+  if(act==='save'){
+    const inp=card.querySelector('.keyinput');
+    const key=inp.value.trim();
+    if(!key){say('paste a key first',true); return;}
+    say('saving…',false);
+    await guarded(b,'Saving…',async()=>{
+      try{
+        const res=await fetch('/auth/'+encodeURIComponent(id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key})});
+        if(!res.ok){say(await failBody(res),true); inp.focus(); return false;}
+        say('key saved — reloading',false);
+        setTimeout(()=>location.reload(),400);
+        return true;
+      }catch(e2){say('network error',true); return false;}
+    });
+    return;
+  }
+  if(act==='logout'){
+    if(!confirm('Remove stored '+id+' key?')) return;
+    await guarded(b,'Removing…',async()=>{
+      try{
+        const res=await fetch('/auth/'+encodeURIComponent(id),{method:'DELETE'});
+        if(!res.ok){say(await failBody(res),true); return false;}
+        location.reload(); return true;
+      }catch(e2){say('network error',true); return false;}
+    });
+    return;
+  }
+  if(act==='remove'){
+    if(!confirm('Remove custom provider '+id+'?')) return;
+    await guarded(b,'Removing…',async()=>{
+      try{
+        const res=await fetch('/auth/_custom/'+encodeURIComponent(id),{method:'DELETE'});
+        if(!res.ok){say(await failBody(res),true); return false;}
+        location.reload(); return true;
+      }catch(e2){say('network error',true); return false;}
+    });
+    return;
+  }
 });
 </script></body></html>`;
 }
 
+let playgroundCache: string | null = null;
 function playgroundHtml(): string {
-  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip playground</title><style>
-:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff;--danger:#d00}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
-header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0;z-index:10}
-h1{margin:0;font-size:1.2rem;font-weight:600}
-.container{max-width:1100px;margin:0 auto;padding:1.5rem;display:grid;grid-template-columns:360px 1fr;gap:1.5rem}
-@media (max-width:900px){.container{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem}
-label{display:block;font-weight:600;margin:.75rem 0 .35rem;color:var(--fg)}
-select,input,textarea,button{font:inherit}
-select,input[type=text],textarea{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--fg)}
-textarea{min-height:100px;resize:vertical}
-.row{display:grid;grid-template-columns:1fr;gap:.5rem}
-.actions{display:flex;gap:.5rem;align-items:center;margin-top:.75rem}
-button{cursor:pointer;padding:.55rem .9rem;border:1px solid var(--border);border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
-button.secondary{background:transparent;color:var(--fg)}
-button:disabled{opacity:.5;cursor:not-allowed}
-.switch{display:flex;align-items:center;gap:.5rem;font-weight:400;color:var(--muted)}
-.output{border:1px solid var(--border);border-radius:10px;background:var(--card);padding:1rem;min-height:420px;white-space:pre-wrap;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92rem}
-.status{font-size:.85rem;color:var(--muted);margin:.5rem 0}
-.error{color:var(--danger);font-weight:600}
-.collapser{cursor:pointer;color:var(--accent);font-size:.9rem;margin:.25rem 0}
-.hidden{display:none}
-.badge{display:inline-block;padding:.15rem .45rem;border-radius:6px;background:var(--border);font-size:.75rem;margin-left:.5rem;color:var(--muted)}
+  if (playgroundCache === null) {
+    playgroundCache = `<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>codewhip playground</title><style>
+${uiCss()}
+main{display:grid;grid-template-columns:360px 1fr;gap:var(--s5);align-items:start}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+#chat{min-height:420px;max-height:70vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s4)}
+.turn .body{white-space:pre-wrap;font-size:14px}
+.turn.assistant .body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.turn.user .body{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:var(--s2) var(--s3)}
+.receipt{font-size:11px;color:var(--muted);margin-top:var(--s1)}
 </style></head><body>
-<header><h1>codewhip playground</h1></header>
-<div class="container">
-<div class="card">
-<div class="row">
-<label for="model">Model <span id="modelBadge" class="badge">loading…</span></label>
-<select id="model"></select>
-<p class="status">Choose a provider:model from /v1/models</p>
-</div>
-<div class="row">
-<label for="system" class="collapser" id="sysToggle">System ▾</label>
-<textarea id="system" class="hidden" placeholder="Optional system prompt"></textarea>
-</div>
-<div class="row">
+${uiHeader("codewhip playground", "playground", "requests run through the local proxy — auto picks a healthy free model")}
+<main>
+<section class="card">
+<label for="modelfilter">Model <span class="small" id="modelBadge">loading…</span> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
+<input id="modelfilter" type="search" placeholder="Filter — type a provider or model" autocomplete="off">
+<select id="model" style="margin-top:var(--s2)"></select>
+<label for="system" style="margin-top:var(--s4)">System <span class="small">optional, sent with every request</span></label>
+<textarea id="system" rows="2" placeholder="Optional system prompt"></textarea>
 <label for="prompt">Prompt</label>
 <textarea id="prompt" placeholder="Type a prompt…"></textarea>
-</div>
-<div class="actions">
-<div class="switch"><input type="checkbox" id="stream" checked> <span>Stream</span></div>
+<div style="display:flex;gap:var(--s2);align-items:center;margin-top:var(--s3);flex-wrap:wrap">
+<label class="small" for="stream" style="display:flex;gap:var(--s1);margin:0;font-weight:400;align-items:center"><input type="checkbox" id="stream" style="width:auto" checked> Stream</label>
+<span style="flex:1"></span>
 <button id="send">Send</button>
-<button class="secondary" id="stop">Stop</button>
-<button class="secondary" id="clear">Clear</button>
+<button id="stop" class="ghost">Stop</button>
+<button id="clear" class="ghost">Clear thread</button>
 </div>
-<div id="err" class="error status"></div>
-</div>
-<div class="card">
-<div class="status">Output</div>
-<div id="chat" class="output" aria-live="polite"></div>
-</div>
-</div>
+<div id="err" class="small" style="color:var(--danger);margin-top:var(--s2)" role="alert"></div>
+</section>
+<section class="card">
+<h2 class="kicker">Thread</h2>
+<div id="chat" aria-live="polite"></div>
+</section>
+</main>
 <script>
 const $ = s=>document.querySelector(s);
-const modelSel=$('#model'), sys=$('#system'), promptEl=$('#prompt'), streamEl=$('#stream');
+const modelSel=$('#model'), filterEl=$('#modelfilter'), sys=$('#system'), promptEl=$('#prompt'), streamEl=$('#stream');
 const chat=$('#chat'), err=$('#err'), badge=$('#modelBadge');
-let controller=null;
+let controller=null, messages=[], allModels=[];
+function turn(role, text){
+  const wrap=document.createElement('div'); wrap.className='turn '+role;
+  const kick=document.createElement('div'); kick.className='kicker'; kick.textContent=role;
+  const body=document.createElement('div'); body.className='body'; body.textContent=text;
+  wrap.append(kick, body); chat.append(wrap); chat.scrollTop=chat.scrollHeight;
+  return body;
+}
+function receipt(body, parts){
+  const r=document.createElement('div'); r.className='receipt'; r.textContent=parts.filter(Boolean).join(' · ');
+  body.parentElement.append(r); chat.scrollTop=chat.scrollHeight;
+}
+function renderModels(){
+  const q=filterEl.value.trim().toLowerCase();
+  modelSel.innerHTML='';
+  const groups=new Map();
+  let n=0;
+  for(const id of allModels){
+    if(q && !id.toLowerCase().includes(q)) continue;
+    n++;
+    const colon=id.indexOf(':');
+    const prov=colon>0?id.slice(0,colon):'other';
+    if(!groups.has(prov)) groups.set(prov,[]);
+    groups.get(prov).push(id);
+  }
+  const auto=document.createElement('option');
+  auto.value='auto'; auto.textContent='auto — health-weighted pick';
+  if(!q || 'auto'.includes(q)) modelSel.append(auto);
+  for(const prov of [...groups.keys()].sort()){
+    const og=document.createElement('optgroup'); og.label=prov;
+    for(const id of groups.get(prov).sort()){
+      const o=document.createElement('option'); o.value=id; o.textContent=id; og.append(o);
+    }
+    modelSel.append(og);
+  }
+  const saved=localStorage.getItem('codewhip.model');
+  if(saved){modelSel.value=saved; if(modelSel.value!==saved) localStorage.removeItem('codewhip.model');}
+  badge.textContent=allModels.length+' models'+(q?' · '+n+' match':'');
+}
 async function loadModels(){
+  const retry=$('#retry'); retry.hidden=true;
   try{
     const res=await fetch('/v1/models');
+    if(!res.ok) throw new Error(String(res.status));
     const j=await res.json();
-    modelSel.innerHTML='';
-    (j.data||[]).forEach(m=>{
-      const o=document.createElement('option');
-      o.value=m.id; o.textContent=m.id;
-      modelSel.appendChild(o);
-    });
-    badge.textContent=(j.data?.length||0)+' models';
-  }catch(e){badge.textContent='offline';}
+    allModels=(j.data||[]).map(m=>m.id).sort();
+    renderModels();
+  }catch(e){
+    badge.textContent='could not load models — is the proxy running?';
+    retry.hidden=false;
+  }
 }
+$('#retry').addEventListener('click',loadModels);
 loadModels();
-$('#sysToggle').addEventListener('click',()=>{sys.classList.toggle('hidden'); $('#sysToggle').textContent=sys.classList.contains('hidden')?'System ▾':'System ▴';});
-$('#clear').addEventListener('click',()=>{chat.textContent=''; err.textContent='';});
+filterEl.addEventListener('input',renderModels);
+modelSel.addEventListener('change',()=>{try{localStorage.setItem('codewhip.model',modelSel.value);}catch{}});
+$('#clear').addEventListener('click',()=>{chat.textContent=''; err.textContent=''; messages=[];});
 $('#stop').addEventListener('click',()=>{if(controller){controller.abort(); controller=null; err.textContent='Stopped';}});
 async function send(){
-  err.textContent=''; chat.textContent='';
+  err.textContent='';
   const model=modelSel.value, system=sys.value.trim(), prompt=promptEl.value.trim();
   if(!model){err.textContent='Select a model'; modelSel.focus(); return;}
   if(!prompt){err.textContent='Enter a prompt'; promptEl.focus(); return;}
-  const messages=[]; if(system) messages.push({role:'system',content:system}); messages.push({role:'user',content:prompt});
+  turn('user',prompt); promptEl.value='';
+  const outgoing=system?[{role:'system',content:system},...messages,{role:'user',content:prompt}]:[...messages,{role:'user',content:prompt}];
+  const body=turn('assistant','');
+  const t0=performance.now();
   controller=new AbortController();
+  let usage=null, servicedBy=null, toolCalls=[];
   try{
-    const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,messages,stream:streamEl.checked}),signal:controller.signal});
-    if(!res.ok){err.textContent='Error '+res.status; return;}
+    const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,messages:outgoing,stream:streamEl.checked,...(streamEl.checked?{stream_options:{include_usage:true}}:{})}),signal:controller.signal});
+    if(!res.ok){
+      const j=await res.json().catch(()=>null);
+      err.textContent='Error '+res.status+(j&&j.error&&j.error.message?': '+j.error.message:'');
+      body.parentElement.remove(); messages.push({role:'user',content:prompt}); return;
+    }
+    let text='';
     if(streamEl.checked){
       const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
-      while(true){const {value,done}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const lines=buf.split('\\n'); buf=lines.pop(); for(const line of lines){if(!line.startsWith('data:')) continue; const data=line.slice(5).trim(); if(data==='[DONE]') continue; try{const j=JSON.parse(data); const c=j.choices?.[0]?.delta?.content; if(c) chat.textContent+=c;}catch{}} }
-    }else{const j=await res.json(); chat.textContent=j.choices?.[0]?.message?.content ?? '';}
-  }catch(e){if(e.name!=='AbortError') err.textContent='Network error';}
+      while(true){
+        const {value,done}=await reader.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\\n'); buf=lines.pop();
+        for(const line of lines){
+          if(!line.startsWith('data:')) continue;
+          const data=line.slice(5).trim();
+          if(data==='[DONE]') continue;
+          try{
+            const j=JSON.parse(data);
+            const c=j.choices?.[0]?.delta?.content;
+            if(c){text+=c; body.textContent=text; chat.scrollTop=chat.scrollHeight;}
+            const tc=j.choices?.[0]?.delta?.tool_calls;
+            if(tc) toolCalls.push(...tc);
+            if(j.usage) usage=j.usage;
+            if(j.serviced_by) servicedBy=j.serviced_by;
+          }catch{}
+        }
+      }
+    }else{
+      const j=await res.json();
+      text=j.choices?.[0]?.message?.content ?? '';
+      const tcs=j.choices?.[0]?.message?.tool_calls;
+      if(tcs) toolCalls=tcs;
+      if(j.usage) usage=j.usage;
+      if(j.serviced_by) servicedBy=j.serviced_by;
+    }
+    body.textContent=text;
+    if(toolCalls.length>0){
+      const tn=document.createElement('div'); tn.className='receipt';
+      tn.textContent='⚙ '+toolCalls.map(c=>c.function&&c.function.name?c.function.name+'()':'tool call').join(', ');
+      body.parentElement.append(tn);
+    }
+    const secs=((performance.now()-t0)/1000).toFixed(1)+'s';
+    const toks=usage?(usage.prompt_tokens+usage.completion_tokens)+' tok'+(usage.estimated?' (est.)':''):null;
+    const tools=toolCalls.length>0?toolCalls.length+' tool call'+(toolCalls.length>1?'s':''):null;
+    receipt(body,[model==='auto'&&servicedBy?servicedBy:null,secs,toks,tools].filter(x=>x!==null));
+    messages.push({role:'user',content:prompt},{role:'assistant',content:text});
+  }catch(e){
+    if(e.name!=='AbortError'){err.textContent='Network error'; body.parentElement.remove(); messages.push({role:'user',content:prompt});}
+    else{receipt(body,['stopped',((performance.now()-t0)/1000).toFixed(1)+'s']); messages.push({role:'user',content:prompt});}
+  }
   finally{controller=null;}
 }
 $('#send').addEventListener('click',send);
-promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.metaKey){e.preventDefault();send();}});
+promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();send();}});
+document.addEventListener('keydown',e=>{
+  const tag=document.activeElement?document.activeElement.tagName:'';
+  if(e.key==='/'&&tag!=='INPUT'&&tag!=='TEXTAREA'&&tag!=='SELECT'){e.preventDefault();filterEl.focus();}
+  if(e.key==='Escape'&&controller){controller.abort();controller=null;err.textContent='Stopped';}
+});
 </script>
- </body></html>`;
+</body></html>`;
+  }
+  return playgroundCache;
+}
+
+/**
+ * GET /stats — aggregated provider health, rendered server-side.
+ *
+ * Aggregates only: the per-request history endpoint was removed on purpose
+ * (d8f784f) and this page does not bring it back. Every number here is what
+ * auto-routing itself reads; tokens appear only when upstream reported them.
+ */
+function statsHtml(): string {
+  const s = summarizeCalls(readProviderCalls());
+  const now = Date.now();
+  const pct = (x: number): string => `${(x * 100).toFixed(0)}%`;
+  const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const sections =
+    s.total === 0
+      ? `<div class="card"><p>No calls recorded yet.</p><p class="small">Traffic shows up here after the first chat completion or model listing — open the <a href="/playground">playground</a> and send one.</p></div>`
+      : s.providers
+          .map((ph) => {
+            const rows = ph.models
+              .map((mh) => {
+                if (mh.model === LISTING_MODEL) {
+                  return `<tr class="dim"><td colspan="7">· model-listing checks: ${pct(mh.successRate)} (${mh.ok}/${mh.total})</td></tr>`;
+                }
+                let status = "";
+                const failOutcome = mh.lastFailureOutcome;
+                if (mh.lastFailureTs !== undefined && failOutcome !== undefined && failOutcome !== "ok") {
+                  const ttl = TTL_MS[failOutcome] ?? 5 * 60_000;
+                  const remain = ttl - (now - new Date(mh.lastFailureTs).getTime());
+                  if (remain > 0) {
+                    status = `<span class="warn">cooling ${Math.ceil(remain / 60_000)}m · ${failOutcome}</span>`;
+                  }
+                }
+                const toks = mh.promptTokens + mh.completionTokens;
+                return `<tr>
+<td><code>${escapeHtml(mh.model)}</code></td>
+<td>${pct(mh.successRate)}</td>
+<td>${mh.ok}/${mh.total}</td>
+<td>${mh.avgMs > 0 ? `${Math.round(mh.avgMs)}ms` : "—"}</td>
+<td>${toks > 0 ? `${fmtTok(toks)} tok` : "—"}</td>
+<td>${mh.tokensPerSec > 0 ? `${mh.tokensPerSec.toFixed(0)} tok/s` : "—"}</td>
+<td>${status}</td>
+</tr>`;
+              })
+              .join("");
+            const toks = ph.promptTokens + ph.completionTokens;
+            return `<section class="card" style="margin-bottom:var(--s4);padding:0;overflow:hidden">
+<div style="display:flex;gap:var(--s5);padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);flex-wrap:wrap;align-items:baseline">
+<strong>${escapeHtml(ph.provider)}</strong>
+<span class="small">${pct(ph.successRate)} ok (${ph.ok}/${ph.total})</span>
+<span class="small">${ph.avgMs > 0 ? `${Math.round(ph.avgMs)}ms avg` : ""}</span>
+<span class="small">${toks > 0 ? `${fmtTok(toks)} tok @ ${ph.tokensPerSec.toFixed(0)} tok/s` : ""}</span>
+<a href="/auth#prov-${escapeHtml(ph.provider)}" class="small" style="margin-left:auto">manage key →</a>
+</div>
+<table>
+<thead><tr><th>model</th><th>success</th><th>ok/total</th><th>avg ms</th><th>tokens</th><th>speed</th><th></th></tr></thead>
+<tbody>${rows}</tbody>
+</table>
+</section>`;
+          })
+          .join("");
+  return `<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>codewhip stats</title><style>
+${uiCss()}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:var(--s2) var(--s4);text-align:left;border-bottom:1px solid var(--line)}
+th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+tbody tr:last-child td{border-bottom:none}
+.dim td{color:var(--muted)}
+.warn{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:var(--r);padding:1px var(--s2)}
+</style></head><body>
+${uiHeader("codewhip stats — provider health", "stats", "aggregates only — per-request history is never served")}
+<main>
+<p class="small" style="margin-top:0">${s.total} calls recorded across ${s.providers.length} providers. Tokens appear only when the upstream provider reported usage — estimates are never invented here. A model marked <em>cooling</em> is temporarily skipped by <code>auto</code>.</p>
+${sections}
+</main>
+</body></html>`;
 }
 
 /** Body of `POST /auth/_custom`, before validation. */
@@ -868,6 +1153,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendHtml(res, playgroundHtml());
     return;
   }
+  if (req.method === "GET" && path === "/stats") {
+    sendHtml(res, statsHtml());
+    return;
+  }
   if (opts.authUi && path.startsWith(AUTH_UI)) {
     await handleAuthUi(req, res, path);
     return;
@@ -928,13 +1217,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return;
   }
   const usage = { prompt: result.promptTokens, completion: result.completionTokens };
+  const servicedBy = `${target.provider}:${target.model}`;
   if (stream) {
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    writeSyntheticStream(res, id, target.model, created, result.text, result.toolCalls, usage, includeUsage);
+    writeSyntheticStream(res, id, target.model, created, result.text, result.toolCalls, usage, includeUsage, servicedBy);
     res.end();
     return;
   }
@@ -943,6 +1233,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     object: "chat.completion",
     created,
     model: target.model,
+    serviced_by: servicedBy,
     choices: [completionChoice(result.text, result.toolCalls)],
     usage: {
       prompt_tokens: usage.prompt,
@@ -1029,6 +1320,7 @@ export function startServe(opts: ServeOptions): http.Server {
     console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers as "<provider>:<default-model>"${opts.pingModels ? ", ping-filtered" : ""})`);
     console.log(`  GET  /health`);
     console.log(`  GET  /playground            model playground UI`);
+    console.log(`  GET  /stats                 aggregated provider health (no per-request history)`);
     if (opts.authUi) {
       console.log(`  GET  /auth                  provider key manager UI (register a custom endpoint there too)`);
     }

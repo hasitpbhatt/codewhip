@@ -62,6 +62,10 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   accepts `http://` on loopback only, and `routeFor("private")` routes to a
   registered loopback provider — still refusing when none is registered, or when
   several make the choice ambiguous.
+  2026-09-16 ruling: serve regains a `GET /stats` page — aggregated
+  provider/model health only (the same summarizeCalls view auto-routing
+  reads). Per-request history stays unserved, as removed in d8f784f; the
+  bearer gate covers `/stats` like `/playground`.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

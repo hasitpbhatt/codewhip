@@ -394,11 +394,11 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
-  it("gates playground and the auth UI behind the token (health stays public)", async () => {
+  it("gates playground, stats, and the auth UI behind the token (health stays public)", async () => {
     const h = await harness({ token: "s3cret", authUi: true }, () => openAiReply("x"));
     try {
       strictEqual((await h.client(`${h.base}/health`)).status, 200);
-      for (const p of ["/playground", "/auth"]) {
+      for (const p of ["/playground", "/stats", "/auth"]) {
         strictEqual((await h.client(`${h.base}${p}`)).status, 401, p);
         const authed = await h.client(`${h.base}${p}`, { headers: { authorization: "Bearer s3cret" } });
         strictEqual(authed.status, 200, p);
@@ -416,16 +416,18 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
-  it("serves no per-request history: /stats is an unknown route", async () => {
+  it("serves aggregated stats at /stats but not per-request history", async () => {
     const h = await harness({ token: "s3cret", authUi: true }, () => openAiReply("x"));
     try {
-      // The bearer gate runs before routing, so an unauthenticated /stats
-      // still 401s — but even an authenticated caller gets 404: there is
-      // no history to serve, gated or otherwise.
+      // Unauthenticated still 401.
       strictEqual((await h.client(`${h.base}/stats`)).status, 401);
+      // Authed gets 200 HTML with aggregate data.
       const authed = await h.client(`${h.base}/stats`, { headers: { authorization: "Bearer s3cret" } });
-      strictEqual(authed.status, 404);
-      strictEqual((await h.client(`${h.base}/stats?format=json`, { headers: { authorization: "Bearer s3cret" } })).status, 404);
+      strictEqual(authed.status, 200);
+      const html = await authed.text();
+      ok(html.includes("<title>codewhip stats</title>"), "stats title");
+      ok(html.includes("calls recorded"), "contains aggregate marker");
+      ok(html.includes("per-request history is never served"), "per-request disclaimer");
     } finally {
       await h.close();
     }
