@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { createServeServer, createShutdown, resolveTarget, startServe, toLoopMessages } from "./serve.js";
+import { clearModelCatalogCache, createServeServer, createShutdown, IpRateLimiter, resolveTarget, startServe, toLoopMessages } from "./serve.js";
 import type { ServeOptions } from "./serve.js";
 import { PROVIDERS, PROVIDER_IDS } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
@@ -512,6 +512,9 @@ describe("auth UI registers custom endpoints", () => {
     const tmp = await mkdtemp(join(os.tmpdir(), "cw-serve-custom-"));
     const prev = process.env["CODEWHIP_CONFIG_DIR"];
     process.env["CODEWHIP_CONFIG_DIR"] = tmp;
+    // The module-level /v1/models cache is keyed by wall-clock, not config dir;
+    // a prior test's sweep would otherwise leak stale rows into this temp dir.
+    clearModelCatalogCache();
     try {
       return await fn();
     } finally {
@@ -661,6 +664,114 @@ describe("auth UI registers custom endpoints", () => {
       strictEqual((await register(h.base, GATEWAY)).status, 404);
     } finally {
       await h.close();
+    }
+  });
+});
+
+describe("IpRateLimiter (fixed window, 30 req / 60s per IP)", () => {
+  it("admits up to the limit, then refuses with a Retry-After", () => {
+    const limiter = new IpRateLimiter(3, 60_000);
+    const t0 = 1_000_000;
+    strictEqual(limiter.check("1.2.3.4", t0).admitted, true);
+    strictEqual(limiter.check("1.2.3.4", t0 + 1).admitted, true);
+    strictEqual(limiter.check("1.2.3.4", t0 + 2).admitted, true);
+    const denied = limiter.check("1.2.3.4", t0 + 3);
+    strictEqual(denied.admitted, false);
+    if (denied.admitted) return;
+    ok(denied.retryAfterSec > 0 && denied.retryAfterSec <= 60, `retryAfterSec=${denied.retryAfterSec}`);
+  });
+
+  it("resets the window after it expires", () => {
+    const limiter = new IpRateLimiter(2, 1_000);
+    const t0 = 5_000_000;
+    limiter.check("1.2.3.4", t0);
+    limiter.check("1.2.3.4", t0);
+    strictEqual(limiter.check("1.2.3.4", t0).admitted, false);
+    strictEqual(limiter.check("1.2.3.4", t0 + 1_001).admitted, true);
+  });
+
+  it("tracks IPs independently", () => {
+    const limiter = new IpRateLimiter(1, 60_000);
+    strictEqual(limiter.check("10.0.0.1").admitted, true);
+    strictEqual(limiter.check("10.0.0.1").admitted, false);
+    strictEqual(limiter.check("10.0.0.2").admitted, true);
+  });
+
+  it("429s the key-spending endpoint past the cap and sends Retry-After", async () => {
+    const h = await harness({}, () => openAiReply("ok"));
+    try {
+      // 30 admitted requests, all from the same loopback peer.
+      for (let i = 0; i < 30; i++) {
+        const res = await post(h.base, { model: "kilo:some-model", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 200, `request ${i + 1} should be admitted`);
+      }
+      const res = await post(h.base, { model: "kilo:some-model", messages: [{ role: "user", content: "hi" }] });
+      strictEqual(res.status, 429);
+      const retryAfter = res.headers.get("retry-after");
+      ok(retryAfter !== null && Number(retryAfter) > 0, `Retry-After=${retryAfter}`);
+      const body = (await res.json()) as { error: { code: string } };
+      strictEqual(body.error.code, "rate_limited");
+      // The 31st request never reached an upstream: the limiter fires before
+      // the body is read, so no key was spent.
+      strictEqual(h.upstream.length, 30);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("serve /v1/models live catalog", () => {
+  /** A fetch stub that answers models listings but otherwise chat-replies. */
+  function catalogAwareFetch(upstream: Array<{ url: string; body?: string }>): void {
+    globalThis.fetch = ((url: string, init?: { body?: string }) => {
+      upstream.push({ url, body: init?.body ?? "" });
+      if (url.endsWith("/models") || url.endsWith("/models/")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ object: "list", data: [{ id: "m-alpha" }, { id: "m-beta" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        );
+      }
+      return Promise.resolve(openAiReply("ok"));
+    }) as unknown as typeof fetch;
+  }
+
+  it("expands keyed providers into <provider>:<model> rows, defaults for the rest", async () => {
+    clearModelCatalogCache();
+    const h = await harness({}, () => openAiReply("ok"));
+    try {
+      catalogAwareFetch(h.upstream);
+      const res = await h.client(`${h.base}/v1/models`);
+      strictEqual(res.status, 200);
+      const body = (await res.json()) as { data: Array<{ id: string }> };
+      const ids = body.data.map((m) => m.id);
+      // pollinations resolves an anonymous key -> its catalog expands.
+      ok(ids.includes("pollinations:m-alpha"), "expanded row missing");
+      ok(ids.includes("pollinations:m-beta"), "expanded row missing");
+      // nvidia has no key in tests -> it keeps its default-model row.
+      ok(ids.includes(`nvidia:${PROVIDERS.nvidia.defaultModel}`), "fallback row missing");
+    } finally {
+      await h.close();
+      clearModelCatalogCache();
+    }
+  });
+
+  it("--ping-models filters to providers whose listModels probe succeeded", async () => {
+    clearModelCatalogCache();
+    const h = await harness({ pingModels: true }, () => openAiReply("ok"));
+    try {
+      catalogAwareFetch(h.upstream);
+      const res = await h.client(`${h.base}/v1/models`);
+      strictEqual(res.status, 200);
+      const body = (await res.json()) as { data: Array<{ id: string }> };
+      const ids = body.data.map((m) => m.id);
+      ok(ids.includes("pollinations:m-alpha"), "live provider's catalog missing");
+      // A provider we could not probe (no key) is absent, not defaulted.
+      ok(!ids.some((id) => id.startsWith("nvidia:")), "unprobed provider should be filtered out");
+    } finally {
+      await h.close();
+      clearModelCatalogCache();
     }
   });
 });
