@@ -21,7 +21,7 @@ import { oneminPort } from "./onemin.js";
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "bynara" | "atria" | "onerouter" | "xpiki";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -89,6 +89,29 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   // Keyed OpenAI-compatible gateway (user-specified 2026-09-14) — NOT in
   // FREE_CHAIN: beyond its daily free grant it draws on a prepaid balance.
   "hashneuron",
+  // 2026-09-16: new providers onboarded.
+  "anyrouter", // free-key gateway, 184+ models, OpenAI-compatible.
+  "apinex", // paid aggregator, $0.07/1M tokens.
+  "zukijourney", // community gateway, free tier.
+  "nagaai", // community gateway, free tier.
+  "zanityai", // community gateway, free tier.
+  "kimetsu", // community gateway, free tier.
+  "navyapi", // community gateway, free tier.
+  "mnn", // community gateway, free tier.
+  "hcap", // community gateway, free tier.
+  "voltai", // community gateway, free tier.
+  "electronhub", // community gateway, free tier.
+  // User-sourced gateways (2026-09-16).
+  "xkiro", // OpenAI-compatible, /v1/models works without key.
+  "gonkarouter", // OpenAI-compatible router.
+  "bazaarlink", // OpenAI SDK drop-in.
+  "seldon", // OpenAI-compatible.
+  "cavoti", // OpenAI-compatible.
+  "getunikey", // OpenAI-compatible.
+  "bynara", // OpenAI-compatible router.
+  "atria", // OpenAI-compatible.
+  "onerouter", // OpenAI-compatible router.
+  "xpiki", // OpenAI-compatible.
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -933,6 +956,258 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://hashneuron.space/#keys",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "RouteOpen gateway — key required; 500k tokens/day free per account, then it draws on your prepaid balance",
+  },
+  anyrouter: {
+    id: "anyrouter",
+    brand: "AnyRouter",
+    baseUrl: "https://anyrouter.dev",
+    chatPath: "/api/v1/chat/completions",
+    modelsPath: "/api/v1/models",
+    defaultModel: "anyrouter/free",
+    envVar: "ANYROUTER_API_KEY",
+    keyUrl: "https://anyrouter.dev/dashboard",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier: anyrouter/free models at $0/token, 1000 req/day; BYOK $0 markup",
+  },
+  apinex: {
+    id: "apinex",
+    brand: "APInex",
+    baseUrl: "https://api.apinex.bond",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt/5.6-luna",
+    envVar: "APINEX_API_KEY",
+    keyUrl: "https://apinex.bond/dashboard",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "paid aggregator: from $0.07/1M tokens, no free tier",
+  },
+  zukijourney: {
+    id: "zukijourney",
+    brand: "zukijourney",
+    baseUrl: "https://api.zukijourney.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "ZUKIJOURNEY_API_KEY",
+    keyUrl: "https://api.zukijourney.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  nagaai: {
+    id: "nagaai",
+    brand: "NagaAI",
+    baseUrl: "https://api.naga.ac",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "claude-3.5-sonnet",
+    envVar: "NAGAAI_API_KEY",
+    keyUrl: "https://api.naga.ac",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  zanityai: {
+    id: "zanityai",
+    brand: "ZanityAI",
+    baseUrl: "https://api.zanity.xyz",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4.1",
+    envVar: "ZANITYAI_API_KEY",
+    keyUrl: "https://api.zanity.xyz",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  kimetsu: {
+    id: "kimetsu",
+    brand: "Kimetsu",
+    baseUrl: "https://api.kimetsu.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "claude-3.5-sonnet",
+    envVar: "KIMETSU_API_KEY",
+    keyUrl: "https://api.kimetsu.ai",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  navyapi: {
+    id: "navyapi",
+    brand: "NavyAPI",
+    baseUrl: "https://api.navy",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4.1",
+    envVar: "NAVYAPI_API_KEY",
+    keyUrl: "https://api.navy",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  mnn: {
+    id: "mnn",
+    brand: "MNN",
+    baseUrl: "https://api.mnnai.ru",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4.1",
+    envVar: "MNN_API_KEY",
+    keyUrl: "https://api.mnnai.ru",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  hcap: {
+    id: "hcap",
+    brand: "hcap.ai",
+    baseUrl: "https://hcap.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4.1",
+    envVar: "HCAPI_API_KEY",
+    keyUrl: "https://hcap.ai",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  voltai: {
+    id: "voltai",
+    brand: "VoltAI",
+    baseUrl: "https://voltapi.online",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "deepseek-r1",
+    envVar: "VOLTAI_API_KEY",
+    keyUrl: "https://voltapi.online",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies; Render-hosted, cold starts possible",
+  },
+  electronhub: {
+    id: "electronhub",
+    brand: "ElectronHub",
+    baseUrl: "https://playground.electronhub.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "ELECTRONHUB_API_KEY",
+    keyUrl: "https://playground.electronhub.ai",
+    timeoutMs: 8000,
+    rateLimitedHint: "community gateway — free tier available, stability varies",
+  },
+  xkiro: {
+    id: "xkiro",
+    brand: "Xkiro",
+    baseUrl: "https://api.xkiro.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "XKIRO_API_KEY",
+    keyUrl: "https://api.xkiro.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — /v1/models works without key",
+  },
+  gonkarouter: {
+    id: "gonkarouter",
+    brand: "GonkaRouter",
+    baseUrl: "https://gonkarouter.io",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "GONKAROUTER_API_KEY",
+    keyUrl: "https://gonkarouter.io",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible router — key required",
+  },
+  bazaarlink: {
+    id: "bazaarlink",
+    brand: "BazaarLink",
+    baseUrl: "https://api.bazaarlink.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "BAZAARLINK_API_KEY",
+    keyUrl: "https://bazaarlink.ai",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI SDK drop-in — key required",
+  },
+  seldon: {
+    id: "seldon",
+    brand: "Seldon",
+    baseUrl: "https://api.seldon-ai.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "SELDON_API_KEY",
+    keyUrl: "https://seldon-ai.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  cavoti: {
+    id: "cavoti",
+    brand: "Cavoti",
+    baseUrl: "https://cavoti.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "CAVOTI_API_KEY",
+    keyUrl: "https://cavoti.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  getunikey: {
+    id: "getunikey",
+    brand: "UniKey",
+    baseUrl: "https://www.getunikey.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "UNIKEY_API_KEY",
+    keyUrl: "https://www.getunikey.ai/keys",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  bynara: {
+    id: "bynara",
+    brand: "Bynara",
+    baseUrl: "https://router.bynara.id",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "BYNARA_API_KEY",
+    keyUrl: "https://router.bynara.id",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible router — key required",
+  },
+  atria: {
+    id: "atria",
+    brand: "Atria",
+    baseUrl: "https://api.atria-asi.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "ATRIA_API_KEY",
+    keyUrl: "https://api.atria-asi.ai",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  onerouter: {
+    id: "onerouter",
+    brand: "OneRouter",
+    baseUrl: "https://llm.onerouter.pro",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "ONEROUTER_API_KEY",
+    keyUrl: "https://llm.onerouter.pro",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible router — key required",
+  },
+  xpiki: {
+    id: "xpiki",
+    brand: "Xpiki",
+    baseUrl: "https://api.xpiki.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "XPIKI_API_KEY",
+    keyUrl: "https://api.xpiki.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
   },
 };
 

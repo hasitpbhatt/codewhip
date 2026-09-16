@@ -72,6 +72,29 @@ type StoredCreds = {
   hcnsecApiKey?: unknown;
   /** id is "hashneuron" (hashneuron.space) — the RouteOpen gateway. */
   hashneuronApiKey?: unknown;
+  // 2026-09-16: new providers.
+  anyrouterApiKey?: unknown;
+  apinexApiKey?: unknown;
+  zukijourneyApiKey?: unknown;
+  nagaaiApiKey?: unknown;
+  zanityaiApiKey?: unknown;
+  kimetsuApiKey?: unknown;
+  navyapiApiKey?: unknown;
+  mnnApiKey?: unknown;
+  hcapApiKey?: unknown;
+  voltaiApiKey?: unknown;
+  electronhubApiKey?: unknown;
+  // User-sourced gateways (2026-09-16).
+  xkiroApiKey?: unknown;
+  gonkarouterApiKey?: unknown;
+  bazaarlinkApiKey?: unknown;
+  seldonApiKey?: unknown;
+  cavotiApiKey?: unknown;
+  getunikeyApiKey?: unknown;
+  bynaraApiKey?: unknown;
+  atriaApiKey?: unknown;
+  onerouterApiKey?: unknown;
+  xpikiApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -133,6 +156,29 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   "1min": "oneminApiKey",
   hcnsec: "hcnsecApiKey",
   hashneuron: "hashneuronApiKey",
+  // 2026-09-16: new providers.
+  anyrouter: "anyrouterApiKey",
+  apinex: "apinexApiKey",
+  zukijourney: "zukijourneyApiKey",
+  nagaai: "nagaaiApiKey",
+  zanityai: "zanityaiApiKey",
+  kimetsu: "kimetsuApiKey",
+  navyapi: "navyapiApiKey",
+  mnn: "mnnApiKey",
+  hcap: "hcapApiKey",
+  voltai: "voltaiApiKey",
+  electronhub: "electronhubApiKey",
+  // User-sourced gateways (2026-09-16).
+  xkiro: "xkiroApiKey",
+  gonkarouter: "gonkarouterApiKey",
+  bazaarlink: "bazaarlinkApiKey",
+  seldon: "seldonApiKey",
+  cavoti: "cavotiApiKey",
+  getunikey: "getunikeyApiKey",
+  bynara: "bynaraApiKey",
+  atria: "atriaApiKey",
+  onerouter: "onerouterApiKey",
+  xpiki: "xpikiApiKey",
 };
 
 function customFieldFor(provider: string): string {
