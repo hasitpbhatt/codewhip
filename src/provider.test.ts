@@ -424,6 +424,27 @@ describe("provider", () => {
       stub.restore();
     }
   });
+  it("survives an explicit usage:null chunk (pollinations anonymous budget reply)", async () => {
+    // Live-observed 2026-09-16: pollinations' anonymous tier emits
+    // `"usage": null` on the budget-exhausted response. The fold must not
+    // dereference it — null.usage crashed into a mislabeled network error.
+    const stub = stubFetchReturning(() =>
+      sseResponse([
+        'data: {"choices":[{"delta":{"content":"budget drained"}}],"usage":null}\n\n',
+        "data: [DONE]\n\n",
+      ]));
+    try {
+      const port = makePortForConfig(PROVIDERS.pollinations, "test-key");
+      const res = await port({ model: "m", messages: [], tools: [] });
+      strictEqual(res.ok, true);
+      if (!res.ok) return;
+      strictEqual(res.text, "budget drained");
+      // No usable usage block: counts are estimates and say so.
+      strictEqual(res.usageEstimated, true);
+    } finally {
+      stub.restore();
+    }
+  });
   it("reassembles a tool call whose arguments arrive split across chunks", async () => {
     const stub = stubFetchReturning(() =>
       sseResponse([

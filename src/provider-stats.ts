@@ -106,10 +106,18 @@ export function readProviderCalls(): ProviderCallRecord[] {
     // Cold start or dirty: load from disk.
     if (writeBuffer.length > 0) flushSync();
     const raw = fs.readFileSync(filePath(), "utf8");
-    cached = raw
-      .split("\n")
-      .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l) as ProviderCallRecord);
+    const lines = raw.split("\n").filter((l) => l.length > 0);
+    cached = lines.map((l, i) => {
+      try {
+        return JSON.parse(l) as ProviderCallRecord;
+      } catch (err) {
+        // Torn tail: a crash mid-append leaves a partial LAST line — drop it
+        // and keep the rest. A corrupt middle line still throws to the outer
+        // catch, because silently resuming past interior damage hides it.
+        if (i === lines.length - 1) return null;
+        throw err;
+      }
+    }).filter((r): r is ProviderCallRecord => r !== null);
     dirty = false;
     return cached;
   } catch {

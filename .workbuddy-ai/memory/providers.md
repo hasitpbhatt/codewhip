@@ -58,6 +58,18 @@ secret-bearing prompt never reaches a remote model without an explicit
 Proved end-to-end by dogfooding `codewhip serve` itself as the loopback runtime
 (no Ollama on this machine): `serve --port 11434 --provider llm7`.
 
+## Registering customs from the UI (2026-09-15)
+`serve`'s key manager (`GET /auth`, on by default) also registers and removes
+custom endpoints now: `POST /auth/_custom`, `GET /auth/_custom`,
+`DELETE /auth/_custom/<id>`. Two invariants if you touch it:
+- The path stays `_custom`. A provider id is `[a-z0-9-]`, so a plain `/custom`
+  would be shadowed as a `/auth/:id` **key** endpoint the day someone registers
+  a provider with that id. The underscore can never be a valid id.
+- Do NOT re-validate in the handler: return `addCustomProvider`'s error text
+  verbatim, so the page and `codewhip provider add` cannot drift. Coerce every
+  field with `asText()` first — `normalize()` calls `.trim()`, so a numeric
+  `id` in a JSON body is a TypeError inside the request handler.
+
 ## Account-scoped base URLs (Cloudflare)
 The Cloudflare row carries `{CLOUDFLARE_ACCOUNT_ID}` (Workers AI scopes by
 account), substituted from `process.env` ONLY at URL-build time —

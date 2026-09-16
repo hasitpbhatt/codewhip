@@ -6,6 +6,7 @@ import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
 import { estimateCost, isAutoEligible, TTL_MS } from "./router.js";
+import { listModels } from "./models.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -174,18 +175,30 @@ function pickAutoTarget(): Target | { error: string } {
   const cands: Array<{ provider: string; model: string; weight: number }> = [];
   for (const cfg of listAllProviderConfigs()) {
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
-    // TTL deactivation against the summary computed above — one pass over the
-    // records per request, not one per candidate (isRecentlyFailed re-reads).
-    const mh = summary.providers.find((p) => p.provider === cfg.id)?.models.find((m) => m.model === cfg.defaultModel);
-    if (mh !== undefined && mh.lastFailureTs !== undefined && mh.lastFailureOutcome !== undefined && mh.lastFailureOutcome !== "ok") {
-      const ttl = TTL_MS[mh.lastFailureOutcome] ?? 5 * 60_000;
-      if (Date.now() - new Date(mh.lastFailureTs).getTime() < ttl) continue;
+    // Cooling is per-MODEL, not per-provider: a failing model is skipped, but
+    // other models from the same provider stay eligible — auto can still try a
+    // different model there unless every model is cooling. Only when a provider
+    // reports NO served models at all do we fall back to its default model.
+    const served = summary.providers.find((p) => p.provider === cfg.id)?.models
+      ?? [];
+    const modelIds = served.length > 0 ? served.map((m) => m.model) : [cfg.defaultModel];
+    for (const modelId of modelIds) {
+      const mh = served.find((m) => m.model === modelId);
+      // TTL deactivation against the summary computed above — one pass over the
+      // records per request, not one per candidate (isRecentlyFailed re-reads).
+      if (
+        mh !== undefined && mh.lastFailureTs !== undefined && mh.lastFailureOutcome !== undefined &&
+        mh.lastFailureOutcome !== "ok"
+      ) {
+        const ttl = TTL_MS[mh.lastFailureOutcome] ?? 5 * 60_000;
+        if (Date.now() - new Date(mh.lastFailureTs).getTime() < ttl) continue;
+      }
+      if (mh !== undefined && mh.total >= 5 && mh.successRate < 0.5) continue;
+      const per1k = estimateCost(cfg.id as ProviderId, modelId, 1000, 1000);
+      const costFactor = per1k === null ? 0.5 : per1k === 0 ? 3 : 1;
+      const healthFactor = mh === undefined ? 1.5 : 0.5 + mh.successRate;
+      cands.push({ provider: cfg.id, model: modelId, weight: costFactor * healthFactor });
     }
-    if (mh !== undefined && mh.total >= 5 && mh.successRate < 0.5) continue;
-    const per1k = estimateCost(cfg.id as ProviderId, cfg.defaultModel, 1000, 1000);
-    const costFactor = per1k === null ? 0.5 : per1k === 0 ? 3 : 1;
-    const healthFactor = mh === undefined ? 1.5 : 0.5 + mh.successRate;
-    cands.push({ provider: cfg.id, model: cfg.defaultModel, weight: costFactor * healthFactor });
   }
   if (cands.length === 0) {
     return { error: "auto: no healthy free provider/model combos available — pass an explicit model, add a key for a $0 route, or set CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 to let auto use untracked-cost providers" };
@@ -243,14 +256,71 @@ function statusForError(retryable: string): number {
   return 502;
 }
 
-function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
+function sendJson(res: http.ServerResponse, status: number, payload: unknown, headers?: Record<string, string>): void {
   const body = JSON.stringify(payload);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body), ...headers });
   res.end(body);
 }
 
-function sendError(res: http.ServerResponse, status: number, message: string, code = "provider_error"): void {
-  sendJson(res, status, { error: { message, type: "invalid_request_error", code } });
+function sendError(res: http.ServerResponse, status: number, message: string, code = "provider_error", headers?: Record<string, string>): void {
+  sendJson(res, status, { error: { message, type: "invalid_request_error", code } }, headers);
+}
+
+/**
+ * Fire-and-forget server-side logging. Never awaited and never in the request
+ * path, so it cannot add latency to the client's response: the call returns
+ * immediately and the work (fs/console) runs on the next tick. Used to surface
+ * turn/provider failures on the operator's terminal without holding the
+ * response hostage to disk I/O.
+ */
+function logErrorLazy(label: string, detail: string): void {
+  setImmediate(() => {
+    try {
+      // eslint-disable-next-line no-console
+      console.error(`[serve] ${label}: ${detail}`);
+    } catch {
+      /* logging must never throw into the request path */
+    }
+  });
+}
+
+/**
+ * Fixed-window per-IP cap guarding the key-spending endpoint: `limit`
+ * requests per `windowMs`; over-limit gets 429 + Retry-After. Dependency-free
+ * on purpose — this process spends real keys, so the guard itself adds no
+ * supply-chain surface. Buckets are lazy-swept; a request from an IP whose
+ * window expired starts a fresh one. X-Forwarded-For is deliberately ignored
+ * (spoofable, and the server binds loopback by default anyway).
+ */
+export class IpRateLimiter {
+  private buckets = new Map<string, { count: number; resetAt: number }>();
+
+  constructor(
+    private limit = 30,
+    private windowMs = 60_000,
+    private maxBuckets = 10_000
+  ) {}
+
+  check(ip: string, now = Date.now()): { admitted: true } | { admitted: false; retryAfterSec: number } {
+    const bucket = this.buckets.get(ip);
+    if (bucket === undefined || now >= bucket.resetAt) {
+      this.buckets.set(ip, { count: 1, resetAt: now + this.windowMs });
+      this.sweep(now);
+      return { admitted: true };
+    }
+    if (bucket.count >= this.limit) {
+      return { admitted: false, retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+    }
+    bucket.count += 1;
+    return { admitted: true };
+  }
+
+  private sweep(now: number): void {
+    if (this.buckets.size <= this.maxBuckets) return;
+    for (const [ip, bucket] of this.buckets) {
+      if (now >= bucket.resetAt) this.buckets.delete(ip);
+    }
+  }
 }
 
 function readBody(req: http.IncomingMessage): Promise<string | { error: string }> {
@@ -378,54 +448,66 @@ function writeSyntheticStream(
 }
 
 /**
- * Ping results for `--ping-models`, cached 60s: a round is 54 network probes
- * (~1.5s wall) and /v1/models gets called on every playground load. Staleness
- * is bounded by the TTL, so a newly added key changes filtering within a
- * minute — pass ?refresh in the CLI path to force a re-ping.
+ * Live catalog for `/v1/models`: every provider's served models are fetched
+ * through `listModels` — the same call `--ping-models` uses as its liveness
+ * probe — and emitted as "<provider>:<model>" rows. A provider whose listing
+ * fails (no key, unreachable, non-OpenAI shape) keeps its
+ * "<provider>:<default>" row, so the response stays a strict superset of the
+ * old default-only listing. A keyless provider can't be probed at all
+ * (listModels refuses without credentials) — under --ping-models it is
+ * honestly absent rather than optimistically listed.
+ *
+ * Cached 60s: a sweep is one network call per configured provider and
+ * /v1/models gets hit on every playground load. Staleness is bounded by the
+ * TTL, so a newly added key expands its provider's catalog within a minute.
  */
-let pingCache: { at: number; ok: Set<string> } | null = null;
-const PING_TTL_MS = 60_000;
+type CatalogRow = {
+  cfg: ReturnType<typeof listAllProviderConfigs>[number];
+  /** true when listModels returned a live catalog this sweep. */
+  live: boolean;
+  /** expanded model ids; empty when the listing failed. */
+  ids: string[];
+};
+
+let catalogCache: { at: number; rows: CatalogRow[] } | null = null;
+const CATALOG_TTL_MS = 60_000;
+
+/** Tests reset the module-level catalog cache so one test's sweep can't
+ *  leak rows into the next. */
+export function clearModelCatalogCache(): void {
+  catalogCache = null;
+}
+/** Per-provider listing budget for the sweep — long enough to fetch a real
+ *  catalog, short enough that 75 providers sweep in one bounded round. */
+const SERVE_MODELS_TIMEOUT_MS = 2_000;
 
 async function modelList(opts: ServeOptions): Promise<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000);
-  const cfgs = listAllProviderConfigs();
-  let rows = cfgs.map((cfg) => ({
-    id: `${cfg.id}:${cfg.defaultModel}`,
-    object: "model" as const,
-    created,
-    owned_by: cfg.id,
-    cfg,
-  }));
-  if (opts.pingModels) {
-    let okIds: Set<string>;
-    if (pingCache !== null && Date.now() - pingCache.at < PING_TTL_MS) {
-      okIds = pingCache.ok;
-    } else {
-      const ping = async (cfg: typeof cfgs[number]) => {
-        try {
-          const url = `${cfg.baseUrl}${cfg.modelsPath}`;
-          const { key } = resolveKey(cfg.id);
-          const headers: Record<string, string> = {};
-          if (key.length > 0) headers["Authorization"] = `Bearer ${key}`;
-          const controller = new AbortController();
-          const t = setTimeout(() => controller.abort(), 1500);
-          const res = await fetch(url, { method: "GET", signal: controller.signal, headers });
-          clearTimeout(t);
-          if (!res.ok) return false;
-          const data = await res.json().catch(() => null) as { data?: Array<{ id: string }> } | null;
-          if (!data?.data) return true; // list shape unknown, assume reachable
-          return data.data.some((m) => m.id === cfg.defaultModel);
-        } catch {
-          return false;
-        }
-      };
-      const results = await Promise.all(rows.map(async (r) => ({ r, ok: await ping(r.cfg) })));
-      pingCache = { at: Date.now(), ok: new Set(results.filter((x) => x.ok).map((x) => x.r.id)) };
-      okIds = pingCache.ok;
-    }
-    rows = rows.filter((r) => okIds.has(r.id));
+  let rows: CatalogRow[];
+  if (catalogCache !== null && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
+    rows = catalogCache.rows;
+  } else {
+    rows = await Promise.all(
+      listAllProviderConfigs().map(async (cfg) => {
+        const { key } = resolveKey(cfg.id);
+        const res = await listModels(cfg.id, key, SERVE_MODELS_TIMEOUT_MS);
+        return res.ok && res.models.length > 0
+          ? { cfg, live: true, ids: res.models.map((m) => m.id) }
+          : { cfg, live: false, ids: [] as string[] };
+      })
+    );
+    catalogCache = { at: Date.now(), rows };
   }
-  const data = rows.map(({ cfg: _cfg, ...rest }) => rest);
+  const data = rows
+    .filter((r) => !opts.pingModels || r.live)
+    .flatMap((r) =>
+      (r.ids.length > 0 ? r.ids : [r.cfg.defaultModel]).map((id) => ({
+        id: `${r.cfg.id}:${id}`,
+        object: "model" as const,
+        created,
+        owned_by: r.cfg.id,
+      }))
+    );
   return { object: "list", data };
 }
 
@@ -1126,12 +1208,14 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
 }
 
 export function createServeHandler(opts: ServeOptions): http.RequestListener {
+  // One limiter per server instance so tests get fresh buckets.
+  const limiter = new IpRateLimiter();
   return (req, res): void => {
-    void handle(req, res, opts);
+    void handle(req, res, opts, limiter);
   };
 }
 
-async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts: ServeOptions): Promise<void> {
+async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts: ServeOptions, limiter: IpRateLimiter): Promise<void> {
   const url = req.url ?? "/";
   const path = url.split("?")[0];
   if (req.method === "GET" && (path === "/health" || path === "/healthz")) {
@@ -1170,6 +1254,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendError(res, 404, `unknown route ${req.method ?? ""} ${path} (try /v1/chat/completions, /v1/models, /health)`, "not_found");
     return;
   }
+  // The chat endpoint spends upstream keys per request — cap it per client IP
+  // before any body is read or provider is touched. (The models route is
+  // bounded by the catalog cache TTL instead.)
+  const rate = limiter.check(req.socket.remoteAddress ?? "unknown");
+  if (!rate.admitted) {
+    sendError(res, 429, `rate limit exceeded — retry in ${rate.retryAfterSec}s`, "rate_limited", { "Retry-After": String(rate.retryAfterSec) });
+    return;
+  }
   const raw = await readBody(req);
   if (typeof raw === "object") {
     sendError(res, 413, raw.error, "request_too_large");
@@ -1185,11 +1277,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   const requested = typeof parsed.model === "string" ? parsed.model : "";
   const target = resolveTarget(requested, { provider: opts.provider, model: opts.model });
   if ("error" in target) {
+    logErrorLazy("resolve-target", `model=${JSON.stringify(requested)} err=${target.error}`);
     sendError(res, 400, target.error, "unknown_provider");
     return;
   }
   const cfg = getProviderConfig(target.provider);
   if (cfg === null) {
+    logErrorLazy("unknown-provider", `provider=${target.provider}`);
     sendError(res, 400, `unknown provider "${target.provider}"`, "unknown_provider");
     return;
   }
@@ -1200,6 +1294,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   }
   const key = resolveKey(target.provider);
   if (key.key.length === 0) {
+    logErrorLazy("missing-key", `provider=${target.provider}`);
     sendError(res, 401, `no key for "${target.provider}" — set ${cfg.envVar} or run: codewhip auth login ${target.provider}`, "missing_provider_key");
     return;
   }
@@ -1213,6 +1308,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   if (!result.ok) {
+    logErrorLazy("turn-failed", `provider=${target.provider} model=${target.model} retryable=${result.retryable} err=${result.error}`);
     sendError(res, statusForError(result.retryable), result.error, result.retryable);
     return;
   }
@@ -1317,7 +1413,7 @@ export function startServe(opts: ServeOptions): http.Server {
     const shown = typeof addr === "object" && addr !== null ? `${addr.address}:${addr.port}` : `${opts.host}:${opts.port}`;
     console.log(`codewhip serve — OpenAI-compatible endpoint on http://${shown}`);
     console.log(`  POST /v1/chat/completions   (stream and non-stream; model = "<provider>:<model>")`);
-    console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers as "<provider>:<default-model>"${opts.pingModels ? ", ping-filtered" : ""})`);
+    console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers, live-catalog "<provider>:<model>" rows${opts.pingModels ? ", ping-filtered" : ""}, 60s cache)`);
     console.log(`  GET  /health`);
     console.log(`  GET  /playground            model playground UI`);
     console.log(`  GET  /stats                 aggregated provider health (no per-request history)`);

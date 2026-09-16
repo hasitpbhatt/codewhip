@@ -130,8 +130,10 @@ function defaultFor(provider: string): string {
   return getProviderConfig(provider)?.defaultModel ?? "";
 }
 
-/** One read-only listing call. Never throws — failures return a string. */
-export async function listModels(provider: string, apiKey: string): Promise<ModelsResult> {
+/** One read-only listing call. Never throws — failures return a string.
+ *  `timeoutMs` lets the serve path probe catalogs on a tighter budget than
+ *  the CLI's default. */
+export async function listModels(provider: string, apiKey: string, timeoutMs = MODELS_TIMEOUT_MS): Promise<ModelsResult> {
   if (apiKey.length === 0) {
     return { ok: false, error: "missing api key" };
   }
@@ -161,12 +163,12 @@ export async function listModels(provider: string, apiKey: string): Promise<Mode
     try {
       res = await fetch(url, {
         headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       const name = err instanceof Error ? err.name : "";
       if (name === "TimeoutError" || name === "AbortError") {
-        lastError = `${provider} models listing timed out after ${MODELS_TIMEOUT_MS}ms`;
+        lastError = `${provider} models listing timed out after ${timeoutMs}ms`;
         if (hosts.length > 1) continue;
         recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: "timeout", host, error: lastError.slice(0, 120) });
         return { ok: false, error: lastError };

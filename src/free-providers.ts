@@ -47,7 +47,7 @@ export const FREE_CHAIN: readonly FreeProviderEntry[] = [
   { id: "kilo", freeOffer: "Kilo gateway ':free' models — anonymous, no key, no headers", keyNeeded: "no", limits: "free-model daily caps unpublished — wait and retry" },
   { id: "opencode", freeOffer: "OpenCode Zen free models — anonymous ('public' key + identity headers, handled by codewhip)", keyNeeded: "no", limits: "small per-IP anonymous quota (FreeUsageLimitError on 429); published quotas none" },
   { id: "empero", freeOffer: "Empero free endpoint (glm-5.3-flash) — no signup; prompts may be logged", keyNeeded: "no", limits: "unpublished; declared maintenance since >= 2026-09-11 (503 'maintenance' on re-probe 2026-09-14) — model set changing, re-verify on return" },
-  { id: "pollinations", freeOffer: "Pollinations.ai — anonymous, no key, no signup (OpenAI-compatible text+image)", keyNeeded: "no", limits: "per-IP rate-limited (~1 req/s) — back off and retry" },
+  { id: "pollinations", freeOffer: "Pollinations.ai — anonymous, no key, no signup (OpenAI-compatible text+image)", keyNeeded: "no", limits: "per-IP rate-limited; anonymous tier shares one budgeted key — when drained, replies arrive as a budget message in content (usage 0), not an error" },
   { id: "groq", freeOffer: "Groq free tier on open models", keyNeeded: "free-key", limits: "~30 req/min per model, ~14.4k req/day" },
   { id: "openrouter", freeOffer: "OpenRouter :free models", keyNeeded: "free-key", limits: "50 req/day without credits; 1000/day after a $10 credit purchase" },
   { id: "gemini", freeOffer: "Gemini free tier (flash)", keyNeeded: "free-key", limits: "small in 2026 (tens of req/day) — wait and retry" },
