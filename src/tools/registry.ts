@@ -8,6 +8,7 @@ import { BASH_TIMEOUT_MS, bashTool, isBashArgs } from "./bash.js";
 import { WEBFETCH_TIMEOUT_MS, isWebfetchArgs, webfetchTool } from "./webfetch.js";
 import { delegateTool } from "./delegate.js";
 import { delegateManyTool } from "./delegate_many.js";
+import { runInBackgroundTool, taskOutputTool, taskStopTool } from "./background.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
 // carries zero runtime deps. Week-1 ships static OpenAI specs + per-tool
@@ -172,6 +173,9 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
   },
   delegate: delegateTool,
   delegate_many: delegateManyTool,
+  run_in_background: runInBackgroundTool,
+  task_output: taskOutputTool,
+  task_stop: taskStopTool,
 };
 
 /**
@@ -196,5 +200,8 @@ export function toolSpecs(depth = 0): ToolSpec[] {
     TOOLS.webfetch.spec,
     TOOLS.delegate.spec,
     TOOLS.delegate_many.spec,
+    TOOLS.run_in_background.spec,
+    TOOLS.task_output.spec,
+    TOOLS.task_stop.spec,
   ];
 }
