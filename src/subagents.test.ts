@@ -84,9 +84,9 @@ describe("subagents", () => {
     }
   });
 
-  it("toolSpecs: depth 0 sees all 8 tools; children see only read+search (no network, no delegation)", () => {
+  it("toolSpecs: depth 0 sees all 11 tools; children see only read+search (no network, no delegation)", () => {
     const names0 = toolSpecs(0).map((s) => s.name);
-    strictEqual(names0.length, 8);
+    strictEqual(names0.length, 11);
     ok(names0.includes("delegate") && names0.includes("delegate_many"));
     const names1 = toolSpecs(1).map((s) => s.name);
     strictEqual(names1.length, 2);
@@ -119,8 +119,8 @@ describe("subagents", () => {
       ok(childSystem.includes("READ-ONLY SUBAGENT RUN"));
       ok(!childSystem.includes("Delegable subagents"));
       // Child advertised specs are read+search (no network, no delegation);
-      // parent saw all 8.
-      strictEqual(record[0]?.toolCount, 8);
+      // parent saw all 11 (incl. background tools).
+      strictEqual(record[0]?.toolCount, 11);
       strictEqual(record[1]?.toolCount, 2);
       // Usage folds honestly into the parent's totals and buckets.
       strictEqual(r.promptTokens, 100 + 50 + 50 + 10);

@@ -9,7 +9,10 @@ export type ToolName =
   | "bash"
   | "webfetch"
   | "delegate"
-  | "delegate_many";
+  | "delegate_many"
+  | "run_in_background"
+  | "task_output"
+  | "task_stop";
 
 export type ToolResult = {
   ok: boolean;
@@ -41,4 +44,8 @@ export type ToolContext = {
   compactTokens?: number;
   /** Parent's runId — stamped on the child's outcome record for attribution. */
   parentRunId?: string;
+  /** This run's runId — present when invoked from the loop; lets tools (e.g.
+   *  background tasks) write audit entries under the correct run without a
+   *  separate plumbing path. */
+  runId?: string;
 };

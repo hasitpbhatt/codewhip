@@ -153,7 +153,11 @@ export type LoopResult = {
 };
 
 function lookupTool(name: string): ToolDef | null {
-  if (name === "read" || name === "search" || name === "edit" || name === "write" || name === "bash" || name === "webfetch" || name === "delegate" || name === "delegate_many") {
+  if (
+    name === "read" || name === "search" || name === "edit" || name === "write" ||
+    name === "bash" || name === "webfetch" || name === "delegate" || name === "delegate_many" ||
+    name === "run_in_background" || name === "task_output" || name === "task_stop"
+  ) {
     return TOOLS[name];
   }
   return null;
@@ -735,6 +739,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
                 parentRunId: runId,
+                runId,
               },
               parsed,
               signal
