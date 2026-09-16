@@ -676,50 +676,6 @@ promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.metaKey){e.prevent
  </body></html>`;
 }
 
-function statsHtml(summary: ReturnType<typeof summarizeCalls>): string {
-  const totalCalls = summary.total;
-  const overallSuccess = summary.providers.length ? summary.providers.reduce((a,p)=>a+p.ok,0)/Math.max(1,summary.providers.reduce((a,p)=>a+p.total,0)) : 0;
-  const providers = summary.providers.map(p => {
-    const rows = p.models.map(m => {
-      const ok = m.successRate * 100;
-      const bar = `<div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden"><div style="width:${ok}%;height:100%;background:${ok>=80?'#137333':ok>=50?'#b8860b':'#d00'}"></div></div>`;
-      const fail = m.lastFailureTs ? new Date(m.lastFailureTs).toLocaleString() : '—';
-      const errors = Object.entries(m.errorKinds).map(([k,v])=>`<span class="pill">${k}: ${v}</span>`).join('');
-      return `<div class="card model">
-        <div class="model-head"><strong>${escapeHtml(m.model)}</strong><span class="pill">${m.total} calls</span><span class="pill ${ok>=80?'ok':''}">${ok.toFixed(1)}% ok</span></div>
-        ${bar}
-        <div class="meta">last failure: ${fail} ${m.lastFailureOutcome ? '('+escapeHtml(m.lastFailureOutcome)+')' : ''}</div>
-        <div class="errors">${errors}</div>
-      </div>`;
-    }).join('');
-    return `<section class="provider">
-      <h2>${escapeHtml(p.provider)} <span class="pill">${p.total} calls</span><span class="pill">${(p.successRate*100).toFixed(1)}% ok</span></h2>
-      <div class="grid">${rows}</div>
-    </section>`;
-  }).join('');
-  return `<!doctype html><html lang=en><head><meta charset=utf-8><title>codewhip stats</title><style>
-:root{--bg:#fafafa;--fg:#111;--muted:#666;--border:#ddd;--card:#fff;--accent:#0a7bff}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e6e6;--muted:#9aa;--border:#333;--card:#161a21;--accent:#4da3ff}}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
-header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0}
-h1{margin:0;font-size:1.2rem;font-weight:600}
-.container{max-width:1100px;margin:0 auto;padding:1.5rem}
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
-.provider h2{margin:.5rem 0 1rem;color:var(--fg)}
-.model-head{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.5rem}
-.meta{font-size:.85rem;color:var(--muted);margin:.5rem 0}
-.errors{margin-top:.5rem}
-.pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;background:var(--border);font-size:.75rem;margin-right:.5rem}
-.pill.ok{background:#e6f4ea;color:#137333}
-</style></head><body>
-<header><h1>codewhip stats — provider/model health</h1></header>
-<div class="container">
-<div class="card"><strong>Total calls:</strong> ${totalCalls} • <strong>Success rate:</strong> ${(overallSuccess*100).toFixed(1)}%</div>
-${providers || '<p>No data yet.</p>'}
-</div></body></html>`;
-}
-
 /** Body of `POST /auth/_custom`, before validation. */
 type CustomProviderBody = {
   id?: unknown;
@@ -898,9 +854,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return;
   }
   // Only /health is public (load-balancer checks must work without the
-  // bearer). Everything else — playground, stats, the auth UI/API, /v1/* —
-  // sits behind the token when one is configured: /stats leaks provider
-  // usage history and the auth UI spends your keys.
+  // bearer). Everything else — playground, the auth UI/API, /v1/* — sits
+  // behind the token when one is configured: the auth UI spends your keys.
+  // There is deliberately no /stats here: per-request history stays out of
+  // the proxy entirely (see `codewhip stats` for the local CLI view).
   if (opts.token !== undefined) {
     if (!bearerMatches(req.headers.authorization, opts.token)) {
       sendError(res, 401, "missing or invalid bearer token for this server", "invalid_api_key");
@@ -909,17 +866,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   }
   if (req.method === "GET" && path === "/playground") {
     sendHtml(res, playgroundHtml());
-    return;
-  }
-  if (req.method === "GET" && path === "/stats") {
-    const summary = summarizeCalls(readProviderCalls());
-    const url = req.url ?? "";
-    const wantJson = /[?&]format=json/.test(url) || (req.headers.accept ?? "").includes("application/json");
-    if (wantJson) {
-      sendJson(res, 200, summary);
-    } else {
-      sendHtml(res, statsHtml(summary));
-    }
     return;
   }
   if (opts.authUi && path.startsWith(AUTH_UI)) {
@@ -1083,7 +1029,6 @@ export function startServe(opts: ServeOptions): http.Server {
     console.log(`  GET  /v1/models             (${listAllProviderConfigs().length} providers as "<provider>:<default-model>"${opts.pingModels ? ", ping-filtered" : ""})`);
     console.log(`  GET  /health`);
     console.log(`  GET  /playground            model playground UI`);
-    console.log(`  GET  /stats                 provider/model success/failure stats`);
     if (opts.authUi) {
       console.log(`  GET  /auth                  provider key manager UI (register a custom endpoint there too)`);
     }

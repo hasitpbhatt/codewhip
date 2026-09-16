@@ -394,11 +394,11 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
-  it("gates playground, stats and the auth UI behind the token (health stays public)", async () => {
+  it("gates playground and the auth UI behind the token (health stays public)", async () => {
     const h = await harness({ token: "s3cret", authUi: true }, () => openAiReply("x"));
     try {
       strictEqual((await h.client(`${h.base}/health`)).status, 200);
-      for (const p of ["/playground", "/stats", "/stats?format=json", "/auth"]) {
+      for (const p of ["/playground", "/auth"]) {
         strictEqual((await h.client(`${h.base}${p}`)).status, 401, p);
         const authed = await h.client(`${h.base}${p}`, { headers: { authorization: "Bearer s3cret" } });
         strictEqual(authed.status, 200, p);
@@ -408,11 +408,24 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
-  it("leaves playground and stats public when no token is configured (loopback default)", async () => {
+  it("leaves playground public when no token is configured (loopback default)", async () => {
     const h = await harness({}, () => openAiReply("x"));
     try {
       strictEqual((await h.client(`${h.base}/playground`)).status, 200);
-      strictEqual((await h.client(`${h.base}/stats`)).status, 200);
+    } finally {
+      await h.close();
+    }
+  });
+  it("serves no per-request history: /stats is an unknown route", async () => {
+    const h = await harness({ token: "s3cret", authUi: true }, () => openAiReply("x"));
+    try {
+      // The bearer gate runs before routing, so an unauthenticated /stats
+      // still 401s — but even an authenticated caller gets 404: there is
+      // no history to serve, gated or otherwise.
+      strictEqual((await h.client(`${h.base}/stats`)).status, 401);
+      const authed = await h.client(`${h.base}/stats`, { headers: { authorization: "Bearer s3cret" } });
+      strictEqual(authed.status, 404);
+      strictEqual((await h.client(`${h.base}/stats?format=json`, { headers: { authorization: "Bearer s3cret" } })).status, 404);
     } finally {
       await h.close();
     }
