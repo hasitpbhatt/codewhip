@@ -421,7 +421,9 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     baseUrl: "https://text.pollinations.ai",
     chatPath: "/openai/chat/completions",
     modelsPath: "/openai/models",
-    defaultModel: "mistral",
+    // Live-probed 2026-09-16: /openai/models lists only "openai-fast"; the
+    // legacy "mistral" id now 404s ("visit enter.pollinations.ai").
+    defaultModel: "openai-fast",
     envVar: "POLLINATIONS_API_KEY",
     keyUrl: "https://pollinations.ai",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
@@ -1449,7 +1451,10 @@ function foldSseChunk(data: string, into: SseAccumulated, acc: Map<number, { id:
   } catch {
     return; // keep-alive comments, heartbeats, malformed events
   }
-  if (chunk.usage !== undefined) {
+  // != null covers explicit JSON null too: pollinations' anonymous tier can
+  // emit `"usage": null` on the budget-exhausted chunk — `null.prompt_tokens`
+  // would crash the fold and surface as a mislabeled "network error".
+  if (chunk.usage != null) {
     into.usage = { prompt: toCount(chunk.usage.prompt_tokens), completion: toCount(chunk.usage.completion_tokens) };
   }
   const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;

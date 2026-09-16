@@ -67,8 +67,8 @@
     "typecheck": "tsc --noEmit",
     "typecheck:lib": "tsc --noEmit --project tsconfig.lib.json",
     "lint": "oxlint src --deny-warnings",
-    "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:lib": "tsx --test \"src/lib/**/*.test.ts\"",
+    "test": "tsx --test src/**/*.test.ts",
+    "test:lib": "tsx --test src/lib/**/*.test.ts",
     "bench": "tsx src/bench/cli.ts",
     "serve": "node dist/serve.js",
     "deploy": "wrangler deploy",
@@ -93,7 +93,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.20.2",
-    "oxlint": "^1.82.0",
+    "oxlint": "^1.83.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "wrangler": "^3.105.0"
