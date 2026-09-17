@@ -2,6 +2,7 @@ import { PROVIDERS, type ProviderId } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
 import { resolveKey } from "./auth.js";
 import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
+import type { OutcomeRecord } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
 
@@ -156,12 +157,15 @@ export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: s
     return { provider, model, note: "implement → frontier free tier" };
   }
   if (taskClass === "polish") {
-    const provider = "sensenova";
-    const model = PROVIDERS.sensenova.defaultModel;
+    // Priced $0 free-tier hop (verified 2026-09-11; 97% ok over 120 calls
+    // per local provider-stats 2026-09-17) — the launch-gate route: priced,
+    // so polishGate can actually pass. Keyless anonymous, never bills.
+    const provider = "kilo";
+    const model = PROVIDERS.kilo.defaultModel;
     if (!healthOk(provider, model)) {
       return { error: `auto route for 'polish' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
     }
-    return { provider, model, note: "polish → cheapest inference" };
+    return { provider, model, note: "polish → cheapest inference (priced $0 free tier)" };
   }
   return localRoute(dir);
 }
@@ -273,4 +277,43 @@ export function polishGate(cost: number | null): { pass: boolean; reason: string
   return cost < 0.05
     ? { pass: true, reason: `polish cost $${cost.toFixed(4)} < $0.05` }
     : { pass: false, reason: `polish cost $${cost.toFixed(4)} ≥ $0.05` };
+}
+
+type PolishSignals = Pick<OutcomeRecord, "task_class" | "model" | "usageByModel">;
+
+/**
+ * Polish-run detector for `trust`: records written since 2026-09-17 carry
+ * task_class; older ones fall back to model-substring markers from each
+ * routing era (sensenova/flash/haiku, then kilo :free/north-mini). Never throws.
+ */
+export function isPolishRun(r: PolishSignals): boolean {
+  if (r.task_class !== undefined) return r.task_class === "polish";
+  const models = [r.model, ...(r.usageByModel ?? []).map((b) => `${b.label}:${b.model}`)];
+  return models.some((m) =>
+    m.includes("sensenova") || m.includes("flash") || m.includes("haiku") ||
+    m.includes("north-mini") || m.includes(":free") || m.includes("-free"));
+}
+
+/**
+ * Total a run's priced spend across usageByModel buckets (mirrors metrics);
+ * falls back to the bare model id with a first-colon provider split for
+ * records without buckets. Null when any leg is untracked — never fiction.
+ */
+export function polishRunCost(r: Pick<OutcomeRecord, "model" | "usage" | "usageByModel">): number | null {
+  const buckets = r.usageByModel;
+  if (buckets !== undefined && buckets.length > 0) {
+    let total = 0;
+    for (const b of buckets) {
+      const c = estimateCost(b.label as ProviderId, b.model, b.prompt, b.completion);
+      if (c === null) return null;
+      total += c;
+    }
+    return total;
+  }
+  // Model ids themselves contain colons ("kilo:cohere/north-mini-code:free"),
+  // so split on the FIRST one — a naive split prices the wrong key and
+  // reports OPEN after a real PASS.
+  const sep = r.model.indexOf(":");
+  if (sep === -1) return null;
+  return estimateCost(r.model.slice(0, sep) as ProviderId, r.model.slice(sep + 1), r.usage.prompt, r.usage.completion);
 }

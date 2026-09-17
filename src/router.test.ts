@@ -3,7 +3,7 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, isAutoEligible, polishGate, resolveRoute, routeFor } from "./router.js";
+import { classify, estimateCost, isAutoEligible, isPolishRun, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
 import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
 import { PROVIDERS } from "./provider.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
@@ -83,11 +83,11 @@ describe("router", () => {
     strictEqual(c.taskClass, "implement");
     ok(c.reason.length > 0);
   });
-  it("routes implement → nvidia, polish → sensenova, private → error", () => {
+  it("routes implement → nvidia, polish → kilo (priced $0), private → error", () => {
     const impl = routeFor("implement");
     ok(!("error" in impl) && impl.provider === "nvidia");
     const pol = routeFor("polish");
-    ok(!("error" in pol) && pol.provider === "sensenova");
+    ok(!("error" in pol) && pol.provider === "kilo");
     const priv = routeFor("private", noLocalDir);
     ok("error" in priv && (priv as { error: string }).error.includes("local provider"));
   });
@@ -106,13 +106,16 @@ describe("router", () => {
       strictEqual(r.auto, false);
     }
   });
-  it("auto-routes a polish prompt to sensenova", () => {
+  it("auto-routes a polish prompt to the priced kilo hop (gate can pass)", () => {
     const r = resolveRoute({ prompt: "fix typo in docs", defaultProvider: "nvidia", defaultModel: "moonshotai/kimi-k3" });
     ok(!("error" in r));
     if (!("error" in r)) {
-      strictEqual(r.provider, "sensenova");
+      strictEqual(r.provider, "kilo");
       strictEqual(r.taskClass, "polish");
       strictEqual(r.auto, true);
+      // Priced $0 (verified free-tier entry) — the launch gate is passable.
+      strictEqual(estimateCost(r.provider, r.model, 14977, 1449), 0);
+      strictEqual(polishGate(estimateCost(r.provider, r.model, 14977, 1449)).pass, true);
     }
   });
   it("refuses private prompts without an explicit provider", () => {
@@ -185,6 +188,30 @@ describe("router", () => {
     ok(polishGate(0).pass);
     ok(!polishGate(null).pass);
     ok(!polishGate(0.06).pass);
+  });
+  it("isPolishRun prefers task_class, falls back to routing-era markers", () => {
+    const base = { model: "m", usage: { prompt: 1, completion: 1 } } as const;
+    ok(isPolishRun({ ...base, task_class: "polish" }));
+    ok(!isPolishRun({ ...base, task_class: "implement" }));
+    // Legacy: sensenova era bare id, kilo era bare id and buckets.
+    ok(isPolishRun({ ...base, model: "sensenova-6.8-flash-lite" }));
+    ok(isPolishRun({ ...base, model: "cohere/north-mini-code:free" }));
+    ok(isPolishRun({ ...base, usageByModel: [{ label: "kilo", model: "cohere/north-mini-code:free", prompt: 1, completion: 1 }] }));
+    ok(!isPolishRun({ ...base, model: "moonshotai/kimi-k3" }));
+  });
+  it("polishRunCost totals buckets; untracked legs and bare ids stay null", () => {
+    strictEqual(
+      polishRunCost({ model: "cohere/north-mini-code:free", usage: { prompt: 14977, completion: 1449 }, usageByModel: [{ label: "kilo", model: "cohere/north-mini-code:free", prompt: 14977, completion: 1449 }] }),
+      0
+    );
+    // One untracked leg poisons the total — never partial-fiction.
+    strictEqual(
+      polishRunCost({ model: "m", usage: { prompt: 1, completion: 1 }, usageByModel: [{ label: "kilo", model: "cohere/north-mini-code:free", prompt: 1, completion: 1 }, { label: "sensenova", model: "sensenova-6.8-flash-lite", prompt: 1, completion: 1 }] }),
+      null
+    );
+    // No buckets: first-colon split prices "prov:model", bare ids stay null.
+    strictEqual(polishRunCost({ model: "groq:openai/gpt-oss-120b", usage: { prompt: 1000, completion: 1000 } }), 0);
+    strictEqual(polishRunCost({ model: "cohere/north-mini-code:free", usage: { prompt: 1, completion: 1 } }), null);
   });
   it("routes private → the one registered local runtime, loopback only", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-one-"));

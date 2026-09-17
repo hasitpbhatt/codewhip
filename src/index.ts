@@ -14,12 +14,12 @@ import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
 import { listSessions, loadSession, saveSession } from "./sessions.js";
-import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type UsageBucket } from "./outcomes.js";
+import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
-import { writeShareBundle } from "./share.js";
-import { estimateCost, polishGate, resolveRoute, type TaskClass } from "./router.js";
+import { renderShareMarkdown, writeShareBundle } from "./share.js";
+import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
@@ -59,6 +59,8 @@ type RunOptions = {
   plan: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
+  /** With --share: also print a pasteable Markdown receipt block to stdout. */
+  sharePrint: boolean;
   /**
    * Opt-in conversation memory: resume a prior session (bare = most recent,
    * else that prefix) and persist the new transcript on exit. Implies
@@ -91,6 +93,7 @@ function printRunOptions(): void {
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
+  console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
   console.log("  --continue [prefix]  resume a prior session (bare = most recent, prefix >=4 chars) and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
 }
@@ -350,6 +353,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let free = false;
   let plan = false;
   let share = false;
+  let sharePrint = false;
   let noStream = false;
   let cont = false;
   let continuePrefix: string | undefined;
@@ -431,6 +435,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
       noStream = true;
     } else if (a === "--share") {
       share = true;
+    } else if (a === "--print") {
+      sharePrint = true;
     } else if (a === "--continue" || a.startsWith("--continue=")) {
       cont = true;
       const eq = a.indexOf("=");
@@ -451,11 +457,12 @@ function parseRunArgs(args: string[]): RunOptions | null {
       return fail(`unknown flag: ${a}`);
     }
   }
+  if (sharePrint && !share) return fail("--print needs --share");
   return {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share, sharePrint,
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
@@ -744,6 +751,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       prompt: opts.prompt,
       model: opts.model,
       label: opts.provider,
+      taskClass: route.taskClass,
       cwd: process.cwd(),
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
@@ -823,6 +831,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         process.exitCode = 1;
       } else {
         console.log(`share: ${shared.path} (sha256:${shared.hash.slice(0, 16)}…)`);
+        if (opts.sharePrint) {
+          console.log("");
+          console.log(renderShareMarkdown(shared.bundle, shared.hash));
+        }
       }
     }
     // Opt-in persistence lands on every loop exit path (success/error/cancel):
@@ -1529,17 +1541,14 @@ function cmdTrust(args: string[]): void {
   }
 
   // 3. Polish gate — evaluate from the last polish run's actual cost
+  // (task_class when recorded; model-substring markers for older runs).
   const outcomes = readOutcomeRecords(cwd);
-  const polishRuns = outcomes.filter((r) => {
-    // Polished runs route to sensenova (cheapest inference)
-    return r.model.includes("sensenova") || r.model.includes("flash") || r.model.includes("haiku");
-  });
+  const polishRuns = outcomes.filter(isPolishRun);
   let polishGateStatus = "no polish run recorded";
   let polishGatePassed = false;
   if (polishRuns.length > 0) {
-    const lastPolish = polishRuns[polishRuns.length - 1];
-    const [prov, pmodel] = lastPolish.model.split(":");
-    const cost = estimateCost(prov as ProviderId, pmodel ?? "", lastPolish.usage.prompt, lastPolish.usage.completion);
+    const lastPolish = polishRuns[polishRuns.length - 1] as OutcomeRecord;
+    const cost = polishRunCost(lastPolish);
     const gate = polishGate(cost);
     polishGatePassed = gate.pass;
     polishGateStatus = gate.pass ? `PASS (${gate.reason})` : `OPEN (${gate.reason})`;

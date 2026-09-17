@@ -13,7 +13,7 @@ governance. H2 = credible open alternative to Claude Code's closed trust.
 
 ## Build status
 
-H1 DONE (2026-09-17, explicit decision). `codewhip run` is live (loop, tools, policy jail, audit chain, outcomes+remembered, init/run/--share, 3-class router mechanism, CI + packs, policy promotion). Launch gate WAIVED, not passed: polish <$0.05 is unproven (polish routes to untracked sensenova — `router.ts` `PRICE_PER_1K` has no sensenova entry, so `polishGate` can never pass).
+H1 DONE (2026-09-17). `codewhip run` is live (loop, tools, policy jail, audit chain, outcomes+remembered, init/run/--share, 3-class router mechanism, CI + packs, policy promotion). Launch gate PASSED with a real priced run: polish auto-route (kilo:cohere/north-mini-code:free, priced $0) fixed 12 typos to verdict `accepted` at $0.0000 < $0.05 (run `28589c84`, receipt on file).
 
 ## Next (post-H1 polish)
 
@@ -26,12 +26,12 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [x] **Subagents & delegation** — read-only child runs (`delegate`, `delegate_many` ≤4 concurrent) behind declarative `.codewhip/agents/` files + 3 built-ins; depth-capped, plan-mode children, child calls on the global audit chain under their own runIds, child usage folded into the parent receipt. *(shipped 2026-09-12 — overturns the earlier committee kill-list call, which assumed delegation would fork the audit model; the global chain composes instead)*
 - [x] **Trust certificate** — `codewhip trust` prints chain/policy/polish-gate/memory/keys state with contextual next steps (`--json` for CI). *(shipped 2026-09-12)*
 - [ ] **REPL slash commands** — `/model`, `/free`; free-chain visibility in-run.
-- [ ] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain.
-- [ ] **Passable gate** — price `sensenova/alibaba/mistral` or re-route polish to a priced <$0.05 route; derive price key from `PROVIDERS` and never fiction-price.
+- [x] **Pasteable artifact** — `run --share --print` prints a Markdown receipt block anchored to the audit chain. *(shipped 2026-09-17: `renderShareMarkdown` + `--print` flag, audit_tail + bundle hash + sig line)*
+- [x] **Passable gate** — polish re-routed to priced $0 kilo hop; real run `28589c84` passed at $0.0000 with verdict `accepted`. *(shipped 2026-09-17 — supersedes the WAIVED ruling the same day)*
 - [ ] **Truth to model** — reword tool specs so the model does not believe chaining is permitted; fix the search comment that incorrectly claims `read` skips secrets. *(Repeat-call guard shipped 2026-09-12: identical idempotent calls are memoized in-run, cleared on edit/write, recorded as `allow:loop:repeat-call`.)*
 - [x] **Pack honesty** — starter-pack `.env*` denies fire on both `edit` and `write` (`deny write:` twins, pinned by a content-vs-enforcement test). *(shipped 2026-09-17)*
 - [ ] **Reporting honesty** — decision buckets (allow/deny/remembered/policy), untracked spend handling, `--last`/`--replay` parity, empty export failure, `missing===2` clarity.
-- [ ] **Drift + hygiene** — settle tool count wording, single-shot vs REPL labeling, receipt legend for $ tracking, gate WAIVED label, dead branches, REPL receipt, remove vacuous assertions.
+- [ ] **Drift + hygiene** — settle tool count wording, single-shot vs REPL labeling, receipt legend for $ tracking, polish-gate label wording, dead branches, REPL receipt, remove vacuous assertions.
 - [x] **Multi-turn sessions** — `run --continue [prefix]` resumes the newest (bare) or one (≥4-char unique prefix) saved transcript and persists the post-compaction transcript on every loop exit path; `codewhip sessions` lists newest-first with redacted previews; REPL threads one in-memory transcript and saves once on `.exit` *(shipped 2026-09-14 — sessions v1, opt-in, redacted, system-stripped)*
 
 ## H2 backlog (ordered)
@@ -82,9 +82,9 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
    only via explicit `--yolo`.
 7. No eval team / prompt guild / consultancy; humans-per-task is anti-leverage.
 8. No public launch, partnerships, or content flywheel until polish <$0.05
-   with receipts (launch-gate half WAIVED 2026-09-17 by explicit decision —
-   polish unproven, not passed); no unbounded memory without redaction +
-   policy scope (still holds).
+   with receipts (satisfied 2026-09-17: run `28589c84`, $0.0000, verdict
+   `accepted`); no unbounded memory without redaction + policy scope
+   (still holds).
 
 ## Metrics (bars — readable via `codewhip metrics`)
 

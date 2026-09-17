@@ -84,15 +84,50 @@ export function sharePath(cwd: string, runId: string): string {
   return path.join(cwd, ".codewhip", `share-${runId}.json`);
 }
 
-/** Write the bundle. Returns the path + content hash (the shareable link). */
-export function writeShareBundle(cwd: string, input: ShareInput): { path: string; hash: string } | { error: string } {
+/** Write the bundle. Returns path + content hash (the shareable link) + bundle. */
+export function writeShareBundle(cwd: string, input: ShareInput): { path: string; hash: string; bundle: ShareBundle } | { error: string } {
   try {
     fs.mkdirSync(path.join(cwd, ".codewhip"), { recursive: true });
-    const { json } = buildShareBundle(cwd, input);
+    const { bundle, json } = buildShareBundle(cwd, input);
     const outPath = sharePath(cwd, input.runId);
     fs.writeFileSync(outPath, json + "\n", "utf8");
-    return { path: outPath, hash: sha256Hex(json) };
+    return { path: outPath, hash: sha256Hex(json), bundle };
   } catch {
     return { error: "share: failed to write bundle (disk write)" };
   }
+}
+
+function oneLine(s: string): string {
+  return s.replace(/[\r\n|]+/g, " ").slice(0, 120);
+}
+
+/**
+ * Pasteable Markdown receipt block for `run --share --print`: the same
+ * redacted bundle, rendered for chat/PR paste. Anchored via audit_tail +
+ * bundle hash — a reader verifies with `codewhip audit --verify`.
+ */
+export function renderShareMarkdown(bundle: ShareBundle, hash: string): string {
+  const deny = bundle.tool_calls.filter((t) => t.policy.startsWith("deny")).length;
+  const allow = bundle.tool_calls.filter((t) => t.policy.startsWith("allow")).length;
+  const lines = [
+    `## codewhip run ${bundle.runId} (${bundle.model}, ${bundle.ts})`,
+    ``,
+    `${bundle.receipt}`,
+    `usage: ${bundle.usage.prompt} prompt + ${bundle.usage.completion} completion tokens`,
+    `decisions: ${allow} allow / ${deny} deny across ${bundle.tool_calls.length} tool call(s)`,
+    ``,
+    `result: ${bundle.result_redacted}`,
+  ];
+  if (bundle.error !== null) lines.push(`error: ${bundle.error}`);
+  lines.push(``, `| seq | tool | policy | preview |`, `| --- | --- | --- | --- |`);
+  for (const t of bundle.tool_calls) {
+    lines.push(`| ${t.seq} | ${t.tool} | ${t.policy} | ${oneLine(t.preview_redacted)} |`);
+  }
+  lines.push(
+    ``,
+    `audit_tail: ${bundle.audit_tail === "" ? "(no chain yet)" : bundle.audit_tail}`,
+    `bundle sha256: ${hash}`,
+    `signature: ${bundle.bundle_sig ?? "unsigned (no repo key)"} — verify: codewhip audit --verify`,
+  );
+  return lines.join("\n");
 }
