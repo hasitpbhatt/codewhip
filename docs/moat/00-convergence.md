@@ -169,3 +169,12 @@ P1 — trust that spreads:
   `SOUL.md` stage flipped, Undo checkbox ticked (already shipped:
   `src/checkpoints.ts` + loop snapshots + `rollback` CLI). Next slice:
   pack honesty (starter-pack denies must fire on both `edit` and `write`).
+
+- 2026-09-17 — **Launch gate PASSED with a real priced run (supersedes the
+  WAIVED ruling the same day).** Polish re-routed from untracked sensenova
+  to the verified-$0 kilo hop (`cohere/north-mini-code:free`, in
+  `PRICE_PER_1K` since 2026-09-11, 97% ok over 120 local calls): un-overridden
+  auto-route run `28589c84` fixed 12 typos to verdict `accepted`,
+  receipt 14977+1449 tokens / $0.0000 < $0.05, `polish gate: PASS` printed.
+  No fiction-pricing — the $0 is the verified free-tier entry, the run is
+  metered, the verdict is recorded. Kill-list rule 8 launch half satisfied.

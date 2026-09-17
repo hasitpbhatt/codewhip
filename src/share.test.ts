@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { appendEntry, chainTail } from "./audit.js";
-import { buildShareBundle, sharePath, writeShareBundle, type ShareInput } from "./share.js";
+import { buildShareBundle, renderShareMarkdown, sharePath, writeShareBundle, type ShareInput } from "./share.js";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-share-"));
 
@@ -79,5 +79,28 @@ describe("share", () => {
     const onDisk = fs.readFileSync(result.path, "utf8").trim();
     strictEqual(onDisk, JSON.stringify(JSON.parse(onDisk)));
     ok(onDisk.includes("r-share-1"));
+  });
+
+  it("renders a pasteable Markdown block anchored to the audit chain", () => {
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    const { bundle } = buildShareBundle(cwd, input());
+    const md = renderShareMarkdown(bundle, "deadbeef");
+    ok(md.includes("## codewhip run r-share-1"), md);
+    ok(md.includes(bundle.receipt), md);
+    ok(md.includes("1 allow / 1 deny across 2 tool call(s)"), md);
+    ok(md.includes(`audit_tail: ${chainTail(cwd)}`), md);
+    ok(md.includes("bundle sha256: deadbeef"), md);
+    ok(md.includes("verify: codewhip audit --verify"), md);
+    ok(md.includes("| 1 | bash | deny:denylist:rm-rf |"), md);
+    // Redacted at the bundle layer — the renderer must not leak secrets.
+    ok(!md.includes("sk-abcDEF123xyz"), md);
+    ok(!md.includes("admin@example.com"), md);
+    ok(!md.includes("postgres://"), md);
+  });
+
+  it("marks unsigned bundles honestly in Markdown", () => {
+    const { bundle } = buildShareBundle(cwd, input());
+    strictEqual(bundle.bundle_sig, null);
+    ok(renderShareMarkdown(bundle, "h").includes("unsigned (no repo key)"));
   });
 });

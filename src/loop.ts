@@ -45,6 +45,8 @@ export type LoopArgs = {
   model: string;
   /** Primary provider label for receipts (e.g. "nvidia"). */
   label: ProviderId;
+  /** Routing class this run was dispatched under (recorded to outcomes when set). */
+  taskClass?: string;
   cwd: string;
   maxSteps: number;
   yolo: boolean;
@@ -787,6 +789,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
     ...(args.parentRunId === undefined ? {} : { parent_run_id: args.parentRunId }),
+    ...(args.taskClass === undefined ? {} : { task_class: args.taskClass }),
   });
 
   return {

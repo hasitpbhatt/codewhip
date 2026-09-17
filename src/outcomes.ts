@@ -48,6 +48,10 @@ export type OutcomeRecord = {
   verdict: null | Verdict;
   /** Optional since v1-freeze: per-provider usage mix (failover runs). */
   usageByModel?: UsageBucket[];
+  /** Optional since 2026-09-17: routing class (implement|polish|private) the
+   * loop ran under. Absent on older records and non-CLI runs — readers must
+   * fall back to model-substring markers, never assume it. */
+  task_class?: string;
   /** Optional since v1-freeze: retry/failover trail. Old readers ignore it. */
   failovers?: FailoverRecord[];
   /** Optional since subagents: set on child runs — spend is already folded

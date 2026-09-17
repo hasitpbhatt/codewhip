@@ -8,6 +8,7 @@ import { makeFakePort, textTurn, toolTurn, rateLimited, timeoutFailure, serverFa
 import { listRules } from "./remember-store.js";
 import type { RememberedRule } from "./remember-store.js";
 import { readAuditLog, verifyChain } from "./audit.js";
+import { readOutcomeRecords } from "./outcomes.js";
 import type { ToolResult } from "./tools/types.js";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-"));
@@ -16,7 +17,31 @@ function stubAsk(_q: string): Promise<"yes" | "always" | "no"> {
 }
 
 describe("loop", () => {
-  it("repeat guard: identical idempotent reads execute once and then nudge", async () => {
+  it("records task_class to outcomes when the run was dispatched with one", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-class-"));
+    const { port } = makeFakePort([textTurn("done")]);
+    await agentLoop({
+      prompt: "fix typo", model: "m", label: "nvidia", taskClass: "polish", cwd: runCwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      onEvent: () => undefined, remembered: listRules(runCwd),
+    });
+    const recs = readOutcomeRecords(runCwd);
+    strictEqual(recs.length, 1);
+    strictEqual(recs[0]?.task_class, "polish");
+  });
+  it("omits task_class when the run carries none (old readers stay fine)", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-noclass-"));
+    const { port } = makeFakePort([textTurn("done")]);
+    await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      onEvent: () => undefined, remembered: listRules(runCwd),
+    });
+    const recs = readOutcomeRecords(runCwd);
+    strictEqual(recs.length, 1);
+    strictEqual(recs[0]?.task_class, undefined);
+    strictEqual(JSON.stringify(recs[0]).includes("task_class"), false);
+  });  it("repeat guard: identical idempotent reads execute once and then nudge", async () => {
     const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-repeat-"));
     const target = path.join(runCwd, "f.txt");
     fs.writeFileSync(target, "hello\n");
