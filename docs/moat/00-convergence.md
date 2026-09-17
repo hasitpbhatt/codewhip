@@ -159,3 +159,13 @@ P1 — trust that spreads:
   drift between runs). `share.ts` bundles never sweep `sessions/`; the REPL
   threads one in-memory transcript and saves once on `.exit`. Session-scoped
   (`s`) approvals stay per-invocation in v1 — noted follow-up, no scope creep.
+
+- 2026-09-17 — **H1 marked DONE, launch gate WAIVED (explicit decision).**
+  Polish <$0.05 is unproven *by construction*: `routeFor("polish")` targets
+  sensenova, which has no `PRICE_PER_1K` entry, so `polishGate` can never
+  pass. Docs-only close-out (zero per-run cost, no runtime change):
+  `docs/roadmap.md` Build status → DONE with the waiver recorded (not a
+  pass), kill-list rule 8 launch half annotated waived (memory half holds),
+  `SOUL.md` stage flipped, Undo checkbox ticked (already shipped:
+  `src/checkpoints.ts` + loop snapshots + `rollback` CLI). Next slice:
+  pack honesty (starter-pack denies must fire on both `edit` and `write`).
