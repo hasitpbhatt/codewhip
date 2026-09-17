@@ -913,7 +913,7 @@ async function send(){
       while(true){
         const {value,done}=await reader.read(); if(done) break;
         buf+=dec.decode(value,{stream:true});
-        const lines=buf.split('\\n'); buf=lines.pop();
+        const lines=buf.split('\n'); buf=lines.pop();
         for(const line of lines){
           if(!line.startsWith('data:')) continue;
           const data=line.slice(5).trim();
@@ -1116,6 +1116,9 @@ async function handleCustomRoutes(req: http.IncomingMessage, res: http.ServerRes
     }
     const cfg = getProviderConfig(result.id);
     // `local` is the signal the UI turns into "no credential needed".
+    // A new provider joins /v1/models on the next sweep — clear the cache so
+    // the playground shows it immediately rather than waiting for the TTL.
+    clearModelCatalogCache();
     sendJson(res, 201, {
       id: result.id,
       baseUrl: cfg?.baseUrl ?? "",
@@ -1131,6 +1134,8 @@ async function handleCustomRoutes(req: http.IncomingMessage, res: http.ServerRes
       return;
     }
     const result = removeCustomProvider(id);
+    // A removed provider leaves /v1/models on the next sweep.
+    clearModelCatalogCache();
     if (!result.ok) {
       sendJson(res, 404, { error: { message: result.error, code: "unknown_provider" } });
       return;
@@ -1195,11 +1200,16 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
     }
     const lockWarning = saveKey(id, p.key);
     if (lockWarning !== null) console.warn(`[codewhip serve] warning: ${lockWarning}`);
+    // A newly-stored key unlocks a provider's full catalog — drop the cached
+    // /v1/models sweep so the next load re-probes and expands the rows.
+    clearModelCatalogCache();
     sendJson(res, 200, { id, source: "file" });
     return true;
   }
   if (req.method === "DELETE") {
     clearKey(id);
+    // A removed key shrinks the catalog back to the default-model row.
+    clearModelCatalogCache();
     sendJson(res, 200, { id, source: resolveKey(id).source });
     return true;
   }
