@@ -11,6 +11,7 @@ import {
   policyMdPath,
   type PromotedDeny,
 } from "./policy-store.js";
+import { defaultPacksDir } from "./pack.js";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-pstore-"));
 
@@ -66,6 +67,18 @@ describe("policy-store", () => {
     strictEqual(matchesPromoted("edit", ".env", g), null);
     // Anchored: "src/.env.local" does not match ".env.*" (documented).
     strictEqual(matchesPromoted("edit", "src/.env.local", g), null);
+  });
+  it("shipped starter pack denies .env on both edit and write (pack honesty)", () => {
+    // The pack ships verbatim into ./policy.md and matchesPromoted requires
+    // an exact tool match — an edit-only .env deny is a phantom claim for
+    // write. This test pins the content to the enforcement.
+    const starter = fs.readFileSync(path.join(defaultPacksDir(), "starter", "policy.md"), "utf8");
+    fs.writeFileSync(policyMdPath(cwd), starter, "utf8");
+    const loaded = loadPromotedDenies(cwd);
+    for (const tool of ["edit", "write"]) {
+      ok(matchesPromoted(tool, ".env", loaded) !== null, `${tool} .env`);
+      ok(matchesPromoted(tool, ".env.local", loaded) !== null, `${tool} .env.local`);
+    }
   });
   it("appends idempotently with a header on first write", () => {
     strictEqual(appendPromotedDeny(cwd, "bash", "npm publish *", 3), true);

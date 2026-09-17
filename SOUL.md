@@ -16,7 +16,7 @@ Naval Ravikant personas who debated each other and converged
 - **What:** an open, model-agnostic, local-first terminal coding agent.
 - **What not:** not a TUI, not a desktop app, not an IDE fork, not a model lab,
   not a connector marketplace, not an enterprise sales deck.
-- **Stage:** H1 core shipped. `codewhip run` is live with policy-checked loop, audit chain, and metered receipts. Launch gate is OPEN pending a real <$0.05 polish run with receipts; the roadmap (`docs/roadmap.md`) tracks the remaining post-H1 polish.
+- **Stage:** H1 DONE (2026-09-17, explicit decision). `codewhip run` is live with policy-checked loop, audit chain, and metered receipts. Launch gate WAIVED, not passed (polish <$0.05 unproven); the roadmap (`docs/roadmap.md`) tracks the remaining post-H1 polish.
 
 ## 2. Mission
 
