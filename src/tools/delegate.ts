@@ -2,6 +2,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
 import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
+import { allocateChildBudgets } from "../budget.js";
 
 /**
  * The `delegate` tool: spawn one read-only subagent with a fresh context and
@@ -63,6 +64,16 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
   }
   // Visible start (the child's own events follow, prefixed [agent]) so the
   // user never watches silent silence between provider turns.
+  // Adaptive budget: single child gets 85% share, 15% reserved for parent collation.
+  const budget = ctx.remainingBudget === undefined
+    ? undefined
+    : allocateChildBudgets(ctx.remainingBudget, 1);
+  if (budget !== undefined) {
+    ctx.onChildEvent?.(
+      `[budget] parent=${budget.parentBudget} coord=${budget.coordinationBudget}` +
+      ` child=${budget.children[0]?.allocated ?? 0} (85% share, 15% reserve)`
+    );
+  }
   ctx.onChildEvent?.(`[${agent.name}] started: ${args.task.slice(0, 120)}`);
   const r = await runChildAgent({
     cwd: ctx.cwd,
@@ -73,7 +84,7 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
     label: ctx.label,
     depth: ctx.depth,
     signal,
-    tokenBudget: ctx.remainingBudget,
+    tokenBudget: budget?.children[0]?.allocated,
     compactTokens: ctx.compactTokens,
     models: ctx.rotationModels,
     retryWait: ctx.retryWait,

@@ -37,7 +37,24 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
     const m = snap.meter;
     const rollbackId = snap.runId ? snap.runId.slice(0, 8) : "<pending>";
     const revoke = snap.pending ? ` | revoke: Esc` : "";
+    const budget = snap.budget;
+    if (budget !== null) {
+      const childTotal = budget.children.reduce((s, c) => s + c.allocated, 0);
+      const budgetLine = `budget: parent=${budget.parentBudget} coord=${budget.coordinationBudget} children=${childTotal}`;
+      return `rollback: ${rollbackId}  |  ${budgetLine}  |  tokens: ${m.tokens}  |  est: $${m.estCost.toFixed(4)}  |  /model /free /plan /rollback /sessions${revoke}`;
+    }
     return `rollback: ${rollbackId}  |  tokens: ${m.tokens}  |  est: $${m.estCost.toFixed(4)}  |  /model /free /plan /rollback /sessions${revoke}`;
+  }
+
+  function renderBudgetCards(snap: TuiModelSnapshot): string | null {
+    if (snap.budget === null) return null;
+    const lines: string[] = ["BUDGET ALLOCATION:"];
+    for (const c of snap.budget.children) {
+      const pct = c.allocated > 0 ? Math.round((c.used / c.allocated) * 100) : 0;
+      lines.push(`  [${c.status}] ${c.id}: ${c.used}/${c.allocated} tokens (${pct}%)`);
+    }
+    lines.push(`  coordination reserve: ${snap.budget.coordinationBudget} tokens`);
+    return lines.join("\n");
   }
 
   function renderDiffPreview(snap: TuiModelSnapshot): string | null {
@@ -60,6 +77,11 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
     parts.push(renderHeader());
     parts.push("");
     parts.push(renderTranscript(snap));
+    const budget = renderBudgetCards(snap);
+    if (budget) {
+      parts.push("");
+      parts.push(budget);
+    }
     const diff = renderDiffPreview(snap);
     if (diff) {
       parts.push("");
