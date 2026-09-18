@@ -24,11 +24,18 @@ export type MeterCounters = {
   mix: Record<string, string>;
 };
 
+export type DiffPreview = {
+  rel: string;
+  lines: string[];
+};
+
 export type TuiModelSnapshot = {
   tail: string[];
   pending: PendingApproval | null;
   background: BackgroundCard[];
   meter: MeterCounters;
+  diffPreview: DiffPreview | null;
+  runId: string | null;
 };
 
 const MAX_TAIL_LINES = 200;
@@ -39,6 +46,8 @@ export class TuiModel {
   private pending: PendingApproval | null = null;
   private background: BackgroundCard[] = [];
   private meter: MeterCounters = { tokens: 0, estCost: 0, mix: {} };
+  private diffPreview: DiffPreview | null = null;
+  private runId: string | null = null;
 
   // Poll callback set by the bridge; called every POLL_INTERVAL_MS.
   // The bridge owns the actual background-task polling; the model just
@@ -98,6 +107,29 @@ export class TuiModel {
     this.onTick?.();
   }
 
+  // --- Diff preview from captureBefore (~15 lines) ---
+  setDiffPreview(rel: string, content: string | null): void {
+    const lines = content ? content.split("\n").slice(0, 15) : ["(new file)"];
+    this.diffPreview = { rel, lines };
+    this.onTick?.();
+  }
+
+  clearDiffPreview(): void {
+    this.diffPreview = null;
+    this.onTick?.();
+  }
+
+  // --- Run ID for rollback footer ---
+  setRunId(id: string): void {
+    this.runId = id;
+    this.onTick?.();
+  }
+
+  // --- Background task polling ---
+  pollBackground(cards: { id: string; label: string; status: "running" | "done" | "error"; preview: string }[]): void {
+    this.setBackground(cards);
+  }
+
   // --- Snapshot for the view ---
   snapshot(): TuiModelSnapshot {
     return {
@@ -105,6 +137,8 @@ export class TuiModel {
       pending: this.pending,
       background: [...this.background],
       meter: { ...this.meter, mix: { ...this.meter.mix } },
+      diffPreview: this.diffPreview,
+      runId: this.runId,
     };
   }
 

@@ -18,6 +18,7 @@ import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRe
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
+import { getTaskStatuses } from "./tools/background.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
 import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
@@ -766,13 +767,25 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   let askUserFn: AskUser;
   let onEventFn: (e: LoopEvent) => void;
   let tuiBridge: { stop: () => void } | null = null;
+  let tuiModel: { setRunId: (id: string) => void } | null = null;
   if (opts.tui && !opts.noTui) {
     console.log("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
     try {
       const tuiMod = await import("./tui/bridge.js");
       const { TuiModel } = await import("./tui/model.js");
       const model = new TuiModel();
-      const bridge = tuiMod.createTuiBridge({ model, signal: ctrl.signal });
+      tuiModel = model;
+      const bridge = tuiMod.createTuiBridge({
+        model,
+        signal: ctrl.signal,
+        cwd: process.cwd(),
+        pollBackground: () => getTaskStatuses().map((t) => ({
+          id: t.id,
+          label: t.command.slice(0, 40),
+          status: t.status,
+          preview: t.outputPreview,
+        })),
+      });
       bridge.start();
       tuiBridge = bridge;
       askUserFn = bridge.askUser;
@@ -813,6 +826,8 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       history,
       onEvent: onEventFn,
     });
+    // Set runId on the TUI model for the rollback footer.
+    tuiModel?.setRunId(result.runId);
     // Thread the transcript forward: single-shot saves below; REPL feeds it
     // back in-memory and saves once on .exit (no per-line files).
     const continued = result.messages.slice(1);

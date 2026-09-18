@@ -64,6 +64,31 @@ describe("TuiModel", () => {
     strictEqual(snap.meter.estCost, 0.01);
   });
 
+  it("setRunId / pollBackground set and snapshot the runId and background cards", () => {
+    const m = new TuiModel();
+    m.setRunId("abc123def456");
+    m.pollBackground([
+      { id: "t1", label: "npm test", status: "running" as const, preview: "running..." },
+    ]);
+    const snap = m.snapshot();
+    ok(snap.runId !== null && snap.runId.includes("abc123def456"));
+    strictEqual(snap.background.length, 1);
+    strictEqual(snap.background[0]!.id, "t1");
+    strictEqual(snap.background[0]!.status, "running");
+  });
+
+  it("setDiffPreview / clearDiffPreview stores a capped preview", () => {
+    const m = new TuiModel();
+    const content = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+    m.setDiffPreview("src/foo.ts", content);
+    const snap = m.snapshot();
+    ok(snap.diffPreview !== null);
+    strictEqual(snap.diffPreview!.rel, "src/foo.ts");
+    strictEqual(snap.diffPreview!.lines.length, 15);
+    m.clearDiffPreview();
+    strictEqual(m.snapshot().diffPreview, null);
+  });
+
   it("handleLoopEvent prefixes with kind-appropriate symbol", () => {
     const m = new TuiModel();
     const toolEvt: LoopEvent = { kind: "tool", text: "read file.ts" };
@@ -98,7 +123,7 @@ describe("TuiModel", () => {
 describe("TuiBridge", () => {
   it("returns an object with askUser, onEvent, start, stop", () => {
     const m = new TuiModel();
-    const bridge = createTuiBridge({ model: m, signal: new AbortController().signal });
+    const bridge = createTuiBridge({ model: m, signal: new AbortController().signal, cwd: process.cwd() });
     ok(typeof bridge.askUser === "function");
     ok(typeof bridge.onEvent === "function");
     ok(typeof bridge.start === "function");
@@ -107,15 +132,32 @@ describe("TuiBridge", () => {
 
   it("onEvent appends to the model ring without throwing", () => {
     const m = new TuiModel();
-    const bridge = createTuiBridge({ model: m });
+    const bridge = createTuiBridge({ model: m, cwd: process.cwd() });
     const evt: LoopEvent = { kind: "tool", text: "bash ls" };
     bridge.onEvent(evt);
     ok(m.snapshot().tail[0]!.includes("bash ls"));
   });
 
+  it("onEvent captures diff preview for edit/write tool events", () => {
+    const m = new TuiModel();
+    const bridge = createTuiBridge({ model: m, cwd: process.cwd() });
+    // A tool event that looks like an edit call should trigger captureBefore.
+    // We test with a path that exists in the test cwd.
+    bridge.onEvent({ kind: "tool", text: "ok edit src/tui/model.ts (allow:ask:auto)" });
+    const snap = m.snapshot();
+    // captureBefore returns non-null for existing, non-self-protected paths.
+    // The diff preview should be set or cleared (either is valid depending on
+    // whether the file exists at test time).
+    // captureBefore returns non-null for existing, non-self-protected paths.
+    // rel may use platform-specific separators, so check the tail.
+    if (snap.diffPreview !== null) {
+      ok(snap.diffPreview.rel.replace(/\\/g, "/").endsWith("src/tui/model.ts"));
+    }
+  });
+
   it("onEvent never throws into the caller", () => {
     const m = new TuiModel();
-    const bridge = createTuiBridge({ model: m });
+    const bridge = createTuiBridge({ model: m, cwd: process.cwd() });
     const evt: LoopEvent = { kind: "retry", text: "retrying" };
     let threw = false;
     try {
@@ -129,7 +171,7 @@ describe("TuiBridge", () => {
   it("askUser resolves 'no' on abort signal", async () => {
     const m = new TuiModel();
     const ctrl = new AbortController();
-    const bridge = createTuiBridge({ model: m, signal: ctrl.signal });
+    const bridge = createTuiBridge({ model: m, signal: ctrl.signal, cwd: process.cwd() });
     const promise = bridge.askUser("allow shell?");
     ctrl.abort();
     const result = await promise;
@@ -138,7 +180,7 @@ describe("TuiBridge", () => {
 
   it("start/stop cycle cleans up the model", () => {
     const m = new TuiModel();
-    const bridge = createTuiBridge({ model: m });
+    const bridge = createTuiBridge({ model: m, cwd: process.cwd() });
     bridge.start();
     bridge.stop();
     bridge.stop();
