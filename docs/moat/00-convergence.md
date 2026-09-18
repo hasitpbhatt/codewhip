@@ -177,4 +177,15 @@ P1 — trust that spreads:
   auto-route run `28589c84` fixed 12 typos to verdict `accepted`,
   receipt 14977+1449 tokens / $0.0000 < $0.05, `polish gate: PASS` printed.
   No fiction-pricing — the $0 is the verified free-tier entry, the run is
-  metered, the verdict is recorded. Kill-list rule 8 launch half satisfied.
+   metered, the verdict is recorded. Kill-list rule 8 launch half satisfied.
+
+- 2026-09-18 — **TUI spike converged (OpenTUI, headless default).** Full
+  verdict: `docs/moat/05-tui-spike.md`. No `LoopEvent` widening (bridge =
+  approval-as-promise, fail-closed `no`); lazy optional import, headless
+  builds/tests with pkg absent; `src/tui/{bridge,model,view}` <300 lines.
+  Ship: transcript-thin + composer + meter, y/s/a/n + revoke hint, ~15-line
+  `captureBefore` preview, rollback footer (no picker), 500ms poll tail-only,
+  `/model /free /plan /rollback /sessions`, Esc/Ctrl-C parity, `--no-tui`
+  fallback. Kill: queue (zero), markdown/diff-rich, pickers, themes, mouse,
+  streaming, share-hosted, history file, new persisted files. Zero new
+  writers — persistence/redaction/perms via existing contracts only.

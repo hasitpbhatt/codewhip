@@ -21,7 +21,7 @@ import { oneminPort } from "./onemin.js";
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "bynara" | "atria" | "onerouter" | "xpiki";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" | "bynara" | "atria" | "onerouter" | "xpiki";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -102,6 +102,11 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "voltai", // community gateway, free tier.
   "electronhub", // community gateway, free tier.
   // User-sourced gateways (2026-09-16).
+  "freetheai", // OpenAI-compatible.
+  "gmicloud", // OpenAI-compatible.
+  "inferx", // OpenAI-compatible.
+  "kkiai", // OpenAI-compatible.
+  "seekai", // OpenAI-compatible.
   "xkiro", // OpenAI-compatible, /v1/models works without key.
   "gonkarouter", // OpenAI-compatible router.
   "bazaarlink", // OpenAI SDK drop-in.
@@ -1149,6 +1154,66 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     envVar: "CAVOTI_API_KEY",
     keyUrl: "https://cavoti.com",
     timeoutMs: 8000,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  freetheai: {
+    id: "freetheai",
+    brand: "FreeTheAI",
+    baseUrl: "https://api.freetheai.xyz",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "FREETHEAI_API_KEY",
+    keyUrl: "https://api.freetheai.xyz/v1",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  gmicloud: {
+    id: "gmicloud",
+    brand: "GMiCloud",
+    baseUrl: "https://gmicloud.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "GMI_CLOUD_API_KEY",
+    keyUrl: "https://gmicloud.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  inferx: {
+    id: "inferx",
+    brand: "InferX",
+    baseUrl: "https://model.inferx.net",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "INFERX_API_KEY",
+    keyUrl: "https://model.inferx.net/endpoints/v1",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  kkiai: {
+    id: "kkiai",
+    brand: "KKAI",
+    baseUrl: "https://www.kkiai.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "KKIAI_API_KEY",
+    keyUrl: "https://www.kkiai.com/v1",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  seekai: {
+    id: "seekai",
+    brand: "SeekAI",
+    baseUrl: "https://seekai.cc",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "SEEKAI_API_KEY",
+    keyUrl: "https://seekai.cc",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "OpenAI-compatible — key required",
   },
   getunikey: {

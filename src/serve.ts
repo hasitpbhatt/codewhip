@@ -460,6 +460,8 @@ function writeSyntheticStream(
  * Cached 60s: a sweep is one network call per configured provider and
  * /v1/models gets hit on every playground load. Staleness is bounded by the
  * TTL, so a newly added key expands its provider's catalog within a minute.
+ * `?refresh=1` bypasses the TTL for a caller that just changed a key and
+ * wants the expanded catalog now (the playground's refresh button).
  */
 type CatalogRow = {
   cfg: ReturnType<typeof listAllProviderConfigs>[number];
@@ -481,10 +483,11 @@ export function clearModelCatalogCache(): void {
  *  catalog, short enough that 75 providers sweep in one bounded round. */
 const SERVE_MODELS_TIMEOUT_MS = 2_000;
 
-async function modelList(opts: ServeOptions): Promise<Record<string, unknown>> {
+async function modelList(opts: ServeOptions, force = false): Promise<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000);
   let rows: CatalogRow[];
-  if (catalogCache !== null && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
+  const fresh = catalogCache !== null && !force && Date.now() - catalogCache.at < CATALOG_TTL_MS;
+  if (fresh && catalogCache !== null) {
     rows = catalogCache.rows;
   } else {
     rows = await Promise.all(
@@ -806,7 +809,7 @@ main{display:grid;grid-template-columns:360px 1fr;gap:var(--s5);align-items:star
 ${uiHeader("codewhip playground", "playground", "requests run through the local proxy — auto picks a healthy free model")}
 <main>
 <section class="card">
-<label for="modelfilter">Model <span class="small" id="modelBadge">loading…</span> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
+<label for="modelfilter">Model <span class="small" id="modelBadge">loading…</span> <button id="refresh" class="ghost" style="padding:2px 8px;margin-left:var(--s2)">refresh</button> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
 <input id="modelfilter" type="search" placeholder="Filter — type a provider or model" autocomplete="off">
 <select id="model" style="margin-top:var(--s2)"></select>
 <label for="system" style="margin-top:var(--s4)">System <span class="small">optional, sent with every request</span></label>
@@ -870,10 +873,12 @@ function renderModels(){
   if(saved){modelSel.value=saved; if(modelSel.value!==saved) localStorage.removeItem('codewhip.model');}
   badge.textContent=allModels.length+' models'+(q?' · '+n+' match':'');
 }
-async function loadModels(){
+async function loadModels(force){
   const retry=$('#retry'); retry.hidden=true;
   try{
-    const res=await fetch('/v1/models');
+    // force=true appends ?refresh=1 so the server re-sweeps every provider's
+    // catalog instead of serving the 60s cache — the refresh button's path.
+    const res=await fetch('/v1/models'+(force?'?refresh=1':''));
     if(!res.ok) throw new Error(String(res.status));
     const j=await res.json();
     allModels=(j.data||[]).map(m=>m.id).sort();
@@ -883,8 +888,9 @@ async function loadModels(){
     retry.hidden=false;
   }
 }
-$('#retry').addEventListener('click',loadModels);
-loadModels();
+$('#retry').addEventListener('click',()=>loadModels(false));
+$('#refresh').addEventListener('click',async()=>{badge.textContent='refreshing…'; await loadModels(true);});
+loadModels(false);
 filterEl.addEventListener('input',renderModels);
 modelSel.addEventListener('change',()=>{try{localStorage.setItem('codewhip.model',modelSel.value);}catch{}});
 $('#clear').addEventListener('click',()=>{chat.textContent=''; err.textContent=''; messages=[];});
@@ -1256,7 +1262,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return;
   }
   if (req.method === "GET" && path === "/v1/models") {
-    const list = await modelList(opts);
+    // ?refresh=1 bypasses the 60s catalog TTL — the playground's refresh
+    // button and any caller that just changed a key use it to force a sweep.
+    const force = /(?:^|[?&])refresh=(?:1|true)(?:&|$)/.test(url);
+    const list = await modelList(opts, force);
     sendJson(res, 200, list);
     return;
   }
