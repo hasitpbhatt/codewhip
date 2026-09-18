@@ -42,6 +42,14 @@ export type FreeProviderRow = FreeProviderEntry & {
  * allowance to spend. Reachable via `--provider 1min` only. Same reasoning as
  * the rot repair above — the invariant is about money, not about whether the
  * endpoint answers.
+ *
+ * Trial-credit repair 2026-09-18: one-time signup grants are NOT free, so
+ * `xai` (promo credits), `novita` (~$0.5-1), `qianfan` (trial tokens),
+ * `deepseek` (new-user credits), `ppio` (trial), `scaleway` (1M one-time),
+ * `friendli` ($10 one-time), `nscale` ($5 one-time), `nebius` ($1 + card),
+ * and `ai21` ($10 expiring) left the chain. They stay builtins reachable via
+ * `--provider`. Renewable daily/monthly tiers (hyperbolic daily, cohere
+ * monthly, coze daily resets) stay: renewal is what makes a tier free.
  */
 export const FREE_CHAIN: readonly FreeProviderEntry[] = [
   { id: "kilo", freeOffer: "Kilo gateway ':free' models — anonymous, no key, no headers", keyNeeded: "no", limits: "free-model daily caps unpublished — wait and retry" },
@@ -56,19 +64,14 @@ export const FREE_CHAIN: readonly FreeProviderEntry[] = [
   { id: "mistral", freeOffer: "Mistral free mode", keyNeeded: "free-key", limits: "caps RPS + tokens/min + tokens/month — see Limits in console.mistral.ai" },
   { id: "sambanova", freeOffer: "SambaNova Cloud free tier (fast RDU inference)", keyNeeded: "free-key", limits: "~200k tokens/day" },
   { id: "hyperbolic", freeOffer: "Hyperbolic free daily credits", keyNeeded: "free-key", limits: "free daily allowance on open models" },
-  { id: "xai", freeOffer: "xAI Grok promo free credits", keyNeeded: "free-key", limits: "promo credits via data-sharing program" },
   { id: "huggingface", freeOffer: "Hugging Face serverless inference free quota", keyNeeded: "free-key", limits: "serverless free quota" },
   { id: "upstage", freeOffer: "Upstage Solar free tier", keyNeeded: "free-key", limits: "free tier" },
-  { id: "novita", freeOffer: "Novita AI free trial credits", keyNeeded: "free-key", limits: "trial credits (~$0.5–$1)" },
   { id: "parasail", freeOffer: "Parasail free tier", keyNeeded: "free-key", limits: "free tier" },
   { id: "volcengine", freeOffer: "Volcengine Ark Doubao free quota", keyNeeded: "free-key", limits: "Doubao free quota" },
-  { id: "qianfan", freeOffer: "Baidu Qianfan ERNIE free trial tokens", keyNeeded: "free-key", limits: "ERNIE free trial tokens" },
   { id: "hunyuan", freeOffer: "Tencent Hunyuan free quota", keyNeeded: "free-key", limits: "Hunyuan free quota" },
   { id: "moonshot", freeOffer: "Moonshot Kimi free API quota", keyNeeded: "free-key", limits: "Kimi free quota" },
-  { id: "deepseek", freeOffer: "DeepSeek free API credits (new users)", keyNeeded: "free-key", limits: "free credits for new users" },
   { id: "minimax", freeOffer: "MiniMax free API quota", keyNeeded: "free-key", limits: "free API quota" },
   { id: "stepfun", freeOffer: "StepFun free API quota", keyNeeded: "free-key", limits: "free quota" },
-  { id: "ppio", freeOffer: "PPIO free trial credits", keyNeeded: "free-key", limits: "trial credits" },
   // Free-tier candidates harvested 2026-09-13 (freellm.net + peer directories,
   // each confirmed on >=2 independent lists). All keyed: none carries an
   // anonymousKey, so the chain only grows for a provider once its key exists.
@@ -85,12 +88,21 @@ export const FREE_CHAIN: readonly FreeProviderEntry[] = [
   { id: "inference", freeOffer: "Inference.net open-model endpoints", keyNeeded: "free-key", limits: "~30 req/min under a fair-use policy" },
   { id: "hetzner", freeOffer: "Hetzner Inference API — experimental, EU-hosted", keyNeeded: "free-key", limits: "no SLA; 3M in / 60k out tokens per 60s while experimental" },
   { id: "venice", freeOffer: "Venice.ai privacy-first models", keyNeeded: "free-key", limits: "10 req/min; provider advertises no prompt logging" },
-  { id: "scaleway", freeOffer: "Scaleway Generative APIs — EU/GDPR-hosted", keyNeeded: "free-key", limits: "1M free tokens one-time per model" },
-  { id: "friendli", freeOffer: "Friendli Inference trial credits", keyNeeded: "free-key", limits: "$10 one-time trial credits; ~60 req/min" },
-  { id: "nscale", freeOffer: "Nscale inference — no card required", keyNeeded: "free-key", limits: "$5 one-time signup credit, then fair-use metering" },
-  { id: "nebius", freeOffer: "Nebius Token Factory", keyNeeded: "free-key", limits: "$1 free grant (card on file required); ~60 req/min" },
-  { id: "ai21", freeOffer: "AI21 Studio — Jamba models", keyNeeded: "free-key", limits: "$10 trial credits expiring after 3 months; 200 req/min" },
   { id: "coze", freeOffer: "Coze (ByteDance) hosted bots — GPT-4o-class via proxy", keyNeeded: "free-key", limits: "token-metered with daily resets; varies per proxied model" },
+  // Completeness batch 2026-09-18 (freellm.sh + YoannDev90 + freellms.org +
+  // nejib1 + llm24.net + ineed + findkey). First-party free tiers first, then
+  // volatile community relays (daily caps, fast timeouts — never private code).
+  // Trial/paid aggregators (together, deepinfra, fireworks, cometapi, mkeai,
+  // apiyi) are builtins but stay OUT of this chain: trial credit is not free.
+  { id: "githubmodels", freeOffer: "GitHub Models free tier", keyNeeded: "free-key", limits: "15 req/min low-tier, 150 req/day (Copilot Free)" },
+  { id: "aihubmix", freeOffer: "AIHubMix free tier on open models", keyNeeded: "free-key", limits: "free tier — limits unpublished" },
+  { id: "fastrouter", freeOffer: "FastRouter free models", keyNeeded: "free-key", limits: "free models — limits unpublished" },
+  { id: "vercel", freeOffer: "Vercel AI Gateway free tier", keyNeeded: "free-key", limits: "free tier — provider-prefixed model ids" },
+  { id: "zenmux", freeOffer: "ZenMux $0/M-token models", keyNeeded: "free-key", limits: "$0/M tokens — API key required" },
+  { id: "llmgateway", freeOffer: "LLM Gateway free=true models", keyNeeded: "free-key", limits: "free=true models — limits unpublished" },
+  { id: "suyu", freeOffer: "Suyu free relay (daily call caps)", keyNeeded: "free-key", limits: "~30-200 calls/day per model; volatile relay" },
+  { id: "voapi", freeOffer: "VoAPI gongyi relay (daily checkin quota)", keyNeeded: "free-key", limits: "daily checkin quota; volatile relay" },
+  { id: "nio", freeOffer: "NIO gongyi-group relay", keyNeeded: "free-key", limits: "free 公益 token group; volatile relay" },
   { id: "llm7", freeOffer: "anonymous gateway — works with no key at all", keyNeeded: "no", limits: "heavily rate-limited; a free dash.llm7.io token raises limits" },
 ];
 
