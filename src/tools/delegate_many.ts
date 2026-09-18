@@ -3,6 +3,7 @@ import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
 import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
 import { DELEGATE_TIMEOUT_MS } from "./delegate.js";
+import { allocateChildBudgets } from "../budget.js";
 
 /**
  * The `delegate_many` tool: fan one task out to several read-only subagents
@@ -88,25 +89,33 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
     }
     agents.push({ name: def.name, def, task: e.task });
   }
-  // Aggregate-budget honesty: the parent's remaining budget is split across
-  // the fan-out — each child enforces its share live (per-child budget),
-  // so N concurrent children cannot overspend N x remaining.
-  const share = ctx.remainingBudget === undefined ? undefined : Math.max(1, Math.floor(ctx.remainingBudget / agents.length));
-  for (const { name, task } of agents) {
-    ctx.onChildEvent?.(`[${name}] started: ${task.slice(0, 120)}`);
+  // Adaptive budget allocation: split remaining budget across children with
+  // an 85% child share and 15% coordination reserve so parent can collate
+  // after fan-out. Each child enforces its allocated share live.
+  const budget = ctx.remainingBudget === undefined
+    ? undefined
+    : allocateChildBudgets(ctx.remainingBudget, agents.length);
+  if (budget !== undefined) {
+    for (const { name, task } of agents) {
+      ctx.onChildEvent?.(`[${name}] started: ${task.slice(0, 120)}`);
+    }
+    ctx.onChildEvent?.(
+      `[budget] parent=${budget.parentBudget} coord=${budget.coordinationBudget}` +
+      ` children=${budget.children.reduce((s, c) => s + c.allocated, 0)} (${agents.length} children, 85% share, 15% reserve)`
+    );
   }
   const runs = await Promise.all(
-    agents.map(({ def, task }) =>
+    agents.map((agentEntry, i) =>
       runChildAgent({
         cwd: ctx.cwd,
-        agent: def,
-        task,
+        agent: agentEntry.def,
+        task: agentEntry.task,
         port: ctx.port,
         model: ctx.model,
         label: ctx.label,
         depth: ctx.depth,
         signal,
-        tokenBudget: share,
+        tokenBudget: budget?.children[i]?.allocated,
         compactTokens: ctx.compactTokens,
         models: ctx.rotationModels,
         retryWait: ctx.retryWait,
