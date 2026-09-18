@@ -8,6 +8,8 @@ import type { TuiModel, TuiModelSnapshot, PendingApproval, BackgroundCard } from
 export type TuiViewDeps = {
   model: TuiModel;
   signal?: AbortSignal;
+  /** Callback to execute slash commands from the composer. */
+  onSlashCommand?: (cmd: SlashCommand) => void;
 };
 
 export type TuiViewHandle = {
@@ -20,6 +22,15 @@ export type SlashCommand = {
   cmd: "/model" | "/free" | "/plan" | "/rollback" | "/sessions" | "/help";
   args: string[];
 };
+
+export function parseSlashCommand(input: string): SlashCommand | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) return null;
+  const parts = trimmed.split(/\s+/);
+  const cmd = parts[0] as SlashCommand["cmd"];
+  if (!["/model", "/free", "/plan", "/rollback", "/sessions", "/help"].includes(cmd)) return null;
+  return { cmd, args: parts.slice(1) };
+}
 
 // --- Fallback view (readline) — used when OpenTUI is absent ---
 
