@@ -7,7 +7,21 @@ const MAX_RESULTS = 50;
 const MAX_FILES = 2000;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_CHARS = 4000;
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".codewhip"]);
+// Build-output and dependency trees eat the 2,000-file budget before real
+// source. Making this policy-configurable would extend the frozen
+// codewhip-policy.yaml schema (needs a recorded ruling per
+// docs/moat/00-convergence.md) — until then these are built-in, and a repo
+// with an unusual layout can search specific globs to work around gaps.
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  ".codewhip",
+  "target",
+  "vendor",
+  "__pycache__",
+  "build",
+]);
 
 function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");

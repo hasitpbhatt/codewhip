@@ -1,11 +1,5 @@
 import { sha256Hex } from "./hash.js";
 
-export type BudgetState = {
-  total: number;
-  allocated: number;
-  remaining: number;
-};
-
 export type ChildAllocation = {
   id: string;
   allocated: number;
@@ -54,49 +48,4 @@ export function allocateChildBudgets(
     coordinationBudget: coordBudget,
     children,
   };
-}
-
-export function createBudgetState(total: number): BudgetState {
-  return { total, allocated: 0, remaining: total };
-}
-
-export function consumeBudget(state: BudgetState, used: number): void {
-  state.allocated += used;
-  state.remaining = Math.max(0, state.total - state.allocated);
-}
-
-export function canBorrowFromPool(
-  poolRemaining: number,
-  childAllocation: number,
-  childUsed: number
-): number {
-  const childRemaining = childAllocation - childUsed;
-  const borrowable = Math.max(0, poolRemaining - childRemaining);
-  return borrowable;
-}
-
-export function recalculateAllocation(
-  parentRemaining: number,
-  originalChildren: ChildAllocation[],
-  childrenCount: number,
-  options: { childShare?: number; coordinationReserve?: number } = {}
-): BudgetAllocationResult {
-  const allocation = allocateChildBudgets(parentRemaining, childrenCount, options);
-  allocation.children.forEach((child, i) => {
-    if (i < originalChildren.length) {
-      const orig = originalChildren[i]!;
-      child.used = orig.used;
-      if (child.allocated < orig.used) {
-        child.allocated = orig.used;
-      }
-    }
-  });
-  return allocation;
-}
-
-export function formatBudgetDebug(budget: BudgetAllocationResult): string {
-  const total = budget.parentBudget;
-  const coord = budget.coordinationBudget;
-  const childTotal = budget.children.reduce((s, c) => s + c.allocated, 0);
-  return `budget: parent=${total} coord=${coord} children=${childTotal} (${budget.children.length} children)`;
 }

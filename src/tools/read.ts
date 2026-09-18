@@ -56,6 +56,23 @@ export async function readTool(ctx: ToolContext, args: ReadArgs): Promise<ToolRe
   if (stat.size > 1024 * 1024) {
     return { ok: false, output: "read: file too large (>1MB), use search instead" };
   }
+  // Binary sniff (same \0 heuristic search uses): a PNG fed through utf8
+  // decode would push mojibake into the transcript and waste the model's
+  // context. Refuse with a hint instead.
+  try {
+    const head = Buffer.alloc(8192);
+    const fd = fs.openSync(safe, "r");
+    try {
+      const got = fs.readSync(fd, head, 0, head.length, 0);
+      if (got > 0 && head.subarray(0, got).includes(0)) {
+        return { ok: false, output: "read: binary file — this tool reads text only (images/fonts/archives are out of scope)" };
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    return { ok: false, output: `read: failed: ${(err as Error).message}` };
+  }
   try {
     const text = fs.readFileSync(safe, "utf8");
     const lines = text.split("\n");

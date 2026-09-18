@@ -1,0 +1,5 @@
+{
+  "name": "csv-empty-guard",
+  "class": "implement",
+  "prompt": "parseCsv in parse.mjs returns a bogus row for empty input. Make it return [] for an empty string (and for whitespace-only input), without breaking normal rows."
+}

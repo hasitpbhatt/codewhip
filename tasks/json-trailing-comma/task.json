@@ -1,0 +1,5 @@
+{
+  "name": "json-trailing-comma",
+  "class": "polish",
+  "prompt": "data.json is invalid JSON (a trailing comma). Fix it so the file parses, without changing any values."
+}

@@ -1,0 +1,5 @@
+{
+  "name": "fix-slice-count",
+  "class": "implement",
+  "prompt": "picks.mjs: lastN(arr, n) must return the LAST n items of arr. It currently returns one too many. Fix it."
+}

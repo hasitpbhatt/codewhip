@@ -2,6 +2,7 @@ import { estimateCost } from "./router.js";
 import { listRules } from "./remember-store.js";
 import { readOutcomeRecords, type OutcomeRecord } from "./outcomes.js";
 import { readVerdictMap } from "./verdict.js";
+import { readEvalRecords, summarizeEval, type ClassScore } from "./eval-store.js";
 import type { ProviderId } from "./provider.js";
 
 export type MetricsSummary = {
@@ -27,6 +28,12 @@ export type MetricsSummary = {
   rejected: number;
   /** accepted / verdicts; null when no verdicts yet. */
   successRate: number | null;
+  /**
+   * Machine-graded task success from `codewhip eval` (.codewhip/eval.jsonl,
+   * latest run per task wins). Undefined when no eval has ever run — the bar
+   * line then says so instead of pretending to measure.
+   */
+  eval?: { polish: ClassScore | null; implement: ClassScore | null };
 };
 
 export function loadOutcomeRecords(cwd: string): OutcomeRecord[] {
@@ -136,7 +143,12 @@ export function summarizeCwd(cwd: string, nowMs: number = Date.now()): MetricsSu
   const rules = listRules(cwd);
   const validTs = rules.map((r) => r.ts).filter((t) => Number.isFinite(Date.parse(t))).sort();
   const oldest = validTs.length === 0 ? null : (validTs[0] as string);
-  return summarize(records, rules.length, oldest, nowMs);
+  const summary = summarize(records, rules.length, oldest, nowMs);
+  const evalRecords = readEvalRecords(cwd);
+  if (evalRecords.length > 0) {
+    summary.eval = summarizeEval(evalRecords);
+  }
+  return summary;
 }
 
 export function renderMetrics(s: MetricsSummary): string {
@@ -154,5 +166,15 @@ export function renderMetrics(s: MetricsSummary): string {
       ? `  task success: unmeasurable — no verdicts recorded yet (bar: ≥70% polish / ≥50% implement)`
       : `  task success: ${(s.successRate * 100).toFixed(0)}% accepted (${s.accepted}/${s.verdicts} verdicts: ${s.edited} edited, ${s.reverted} reverted, ${s.rejected} rejected)`,
   ];
+  if (s.eval !== undefined) {
+    for (const [cls, score] of Object.entries(s.eval)) {
+      if (score === null) continue;
+      const pct = Math.round((score.pass / score.total) * 100);
+      const met = pct >= (cls === "polish" ? 70 : 50);
+      lines.push(`  eval [${cls}]: ${score.pass}/${score.total} tasks pass (${pct}%) — bar ${cls === "polish" ? "≥70%" : "≥50%"} ${met ? "MET" : "NOT MET"} (machine-graded, latest run per task)`);
+    }
+  } else if (s.runs > 0) {
+    lines.push(`  eval: never run — codewhip eval measures the task-success bars against the fixture tasks`);
+  }
   return lines.join("\n");
 }

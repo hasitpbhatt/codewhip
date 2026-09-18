@@ -3,7 +3,6 @@
 // background card states, and meter counters.
 
 import type { LoopEvent } from "../loop.js";
-import type { ChildAllocation, BudgetAllocationResult } from "../budget.js";
 
 export type ApprovalKind = "deny:shell" | "deny:edit" | "allow:ask" | "allow:yolo" | "other";
 
@@ -17,13 +16,6 @@ export type BackgroundCard = {
   label: string;
   status: "running" | "done" | "error";
   preview: string;
-};
-
-export type BudgetCard = {
-  id: string;
-  allocated: number;
-  used: number;
-  status: "pending" | "running" | "done" | "error";
 };
 
 export type MeterCounters = {
@@ -41,7 +33,6 @@ export type TuiModelSnapshot = {
   tail: string[];
   pending: PendingApproval | null;
   background: BackgroundCard[];
-  budget: BudgetAllocationResult | null;
   meter: MeterCounters;
   diffPreview: DiffPreview | null;
   runId: string | null;
@@ -55,7 +46,6 @@ export class TuiModel {
   private pending: PendingApproval | null = null;
   private background: BackgroundCard[] = [];
   private meter: MeterCounters = { tokens: 0, estCost: 0, mix: {} };
-  private budget: BudgetAllocationResult | null = null;
   private diffPreview: DiffPreview | null = null;
   private runId: string | null = null;
 
@@ -135,23 +125,6 @@ export class TuiModel {
     this.onTick?.();
   }
 
-  // --- Budget allocation ---
-  setBudget(b: BudgetAllocationResult): void {
-    this.budget = b;
-    this.onTick?.();
-  }
-
-  updateBudgetChild(childId: string, used: number, status: ChildAllocation["status"]): void {
-    if (this.budget === null) return;
-    for (const child of this.budget.children) {
-      if (child.id === childId) {
-        child.used = used;
-        child.status = status;
-      }
-    }
-    this.onTick?.();
-  }
-
   // --- Background task polling ---
   pollBackground(cards: { id: string; label: string; status: "running" | "done" | "error"; preview: string }[]): void {
     this.setBackground(cards);
@@ -163,7 +136,6 @@ export class TuiModel {
       tail: [...this.ring],
       pending: this.pending,
       background: [...this.background],
-      budget: this.budget,
       meter: { ...this.meter, mix: { ...this.meter.mix } },
       diffPreview: this.diffPreview,
       runId: this.runId,

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
-import { freeChainIds, listFreeProviders } from "./free-providers.js";
+import { freeChainCandidates, freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
 import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type FailoverTarget } from "./loop.js";
@@ -22,10 +23,12 @@ import { getTaskStatuses } from "./tools/background.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
 import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
+import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
+import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
 import { removeRule } from "./remember-store.js";
-import { isVerdict, resolveRunPrefix, setVerdict } from "./verdict.js";
+import { isVerdict, proposeVerdict, resolveRunPrefix, setVerdict, type Verdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import type { ServeOptions } from "./serve.js";
 import {
@@ -152,6 +155,12 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip free — list the free-provider chain (read-only: no key, no network).");
       console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
       return true;
+    case "eval":
+      console.log("codewhip eval [--task <name>] [--provider <p>] [--model <m>] [--free] [--max-steps 25] [--timeout-sec 600] [--keep]");
+      console.log("  Runs the agent against the fixture tasks in tasks/ (disposable temp dirs) and machine-grades each with its checker.");
+      console.log("  Feeds .codewhip/eval.jsonl → codewhip metrics reports the task-success bars (≥70% polish / ≥50% implement).");
+      console.log("  Exit 0 only when every selected task passes — CI-usable. --keep keeps temp dirs for debugging.");
+      return true;
     case "serve":
       console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui] [--ping-models]");
       console.log("  Exposes the provider registry as an OpenAI-compatible HTTP server:");
@@ -201,6 +210,7 @@ function printCommandHelp(topic: string): boolean {
       return true;
     case "verdict":
       console.log("codewhip verdict <runId-prefix> <accepted|edited|reverted|rejected> — record human judgment (prefix ok, >=4 chars).");
+      console.log("codewhip verdict --auto <runId-prefix> — propose a verdict from checkpoints + git, confirm with one keypress.");
       console.log("  Every run prints its runId; verdicts feed codewhip metrics (task-success bar).");
       return true;
     case "demo":
@@ -768,6 +778,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   let onEventFn: (e: LoopEvent) => void;
   let tuiBridge: { stop: () => void } | null = null;
   let tuiModel: { setRunId: (id: string) => void } | null = null;
+  // Live /model switch (TUI only): the bridge validates and stages a port;
+  // the loop consumes it at the next turn boundary. Headless runs ignore it.
+  let pendingSwitch: FailoverTarget | null = null;
+  const takePendingSwitch = (): FailoverTarget | null => {
+    const t = pendingSwitch;
+    pendingSwitch = null;
+    return t;
+  };
   if (opts.tui && !opts.noTui) {
     console.log("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
     try {
@@ -785,6 +803,25 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
           status: t.status,
           preview: t.outputPreview,
         })),
+        switchModel: (provider, modelId) => {
+          const cfg = getProviderConfig(provider);
+          if (cfg === undefined || cfg === null) {
+            return `/model: unknown provider "${provider}" (see: codewhip provider list)`;
+          }
+          const { key, source } = resolveKey(cfg.id);
+          if (key.length === 0) {
+            return `/model: no key for ${cfg.id} — codewhip auth login ${cfg.id}, or pick a provider with one`;
+          }
+          const nextModel = modelId ?? cfg.defaultModel;
+          pendingSwitch = { label: cfg.id, model: nextModel, port: makePortForConfig(cfg, key, opts.timeoutMs, source) };
+          return `model: switching to ${cfg.id}:${nextModel} from the next turn (receipts will show the mix)`;
+        },
+        describeFree: () => {
+          const all = listFreeProviders();
+          const usable = freeChainCandidates();
+          const keyless = all.filter((r) => r.keyNeeded === "no").length;
+          return `free chain: ${usable.length}/${all.length} hops usable now (${keyless} keyless) — \`codewhip free\` lists them; rerun with --free to start on one`;
+        },
       });
       bridge.start();
       tuiBridge = bridge;
@@ -822,6 +859,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       retryWait: opts.retryWait,
       failovers: failoverTargets,
       models: opts.models,
+      takePendingSwitch,
       tokenBudget: opts.tokenBudget,
       history,
       onEvent: onEventFn,
@@ -1096,9 +1134,121 @@ function cmdFree(): void {
   }
 }
 
-const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY [--chat-path /…] [--models-path /…] [--key-url https://…] [--brand <name>] [--timeout-ms 45000]';
+/** Fixture tasks ship at the package root (uncompiled) — resolve from this file. */
+function defaultEvalTasksRoot(): string {
+  const here = fileURLToPath(import.meta.url);
+  const pkgRoot = path.resolve(path.dirname(here), "..");
+  const local = path.join(process.cwd(), EVAL_TASKS_DIR);
+  if (fs.existsSync(local)) return local;
+  return path.join(pkgRoot, EVAL_TASKS_DIR);
+}
 
-function cmdProvider(args: string[]): void {
+async function cmdEval(args: string[]): Promise<void> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i !== -1 ? args[i + 1] : undefined;
+  };
+  const only = flag("--task");
+  const keep = args.includes("--keep");
+  const maxSteps = Number(flag("--max-steps") ?? 25);
+  const tokenBudgetRaw = flag("--token-budget");
+  const tokenBudget = tokenBudgetRaw !== undefined ? Number(tokenBudgetRaw) : undefined;
+  const timeoutSec = Number(flag("--timeout-sec") ?? 600);
+  const tasksRoot = flag("--tasks") ?? defaultEvalTasksRoot();
+  if (!Number.isFinite(maxSteps) || maxSteps < 1 || maxSteps > 100) {
+    console.error("codewhip eval: --max-steps must be 1..100");
+    process.exitCode = 1;
+    return;
+  }
+  if (!Number.isFinite(timeoutSec) || timeoutSec < 30 || timeoutSec > 3600) {
+    console.error("codewhip eval: --timeout-sec must be 30..3600");
+    process.exitCode = 1;
+    return;
+  }
+  if (tokenBudget !== undefined && (!Number.isFinite(tokenBudget) || tokenBudget < 1000)) {
+    console.error("codewhip eval: --token-budget must be a number >= 1000");
+    process.exitCode = 1;
+    return;
+  }
+  // Provider/model resolution mirrors `run`: explicit flags win, --free walks
+  // to the first usable chain hop, otherwise the run default (nvidia).
+  let provider = flag("--provider");
+  let model = flag("--model");
+  if (model !== undefined && provider === undefined) {
+    console.error("codewhip eval: --model needs --provider (or use --free)");
+    process.exitCode = 1;
+    return;
+  }
+  if (args.includes("--free")) {
+    const head = freeChainCandidates()[0];
+    if (head === undefined) {
+      console.error("codewhip eval: --free found no runnable free provider — see: codewhip free");
+      process.exitCode = 1;
+      return;
+    }
+    provider = head;
+  }
+  provider = provider ?? "nvidia";
+  const cfg = getProviderConfig(provider);
+  if (cfg === null || cfg === undefined) {
+    console.error(`codewhip eval: unknown provider "${provider}" (see: codewhip provider list)`);
+    process.exitCode = 1;
+    return;
+  }
+  const { key, source } = resolveKey(cfg.id);
+  if (key.length === 0) {
+    missingKeyHelp(cfg.id);
+    process.exitCode = 1;
+    return;
+  }
+  model = model ?? cfg.defaultModel;
+  const { tasks, errors } = listEvalTasks(tasksRoot, only);
+  for (const e of errors) {
+    console.error(`eval: task "${e.name}" skipped — ${e.error}`);
+  }
+  if (tasks.length === 0) {
+    console.error(`codewhip eval: no runnable tasks under ${tasksRoot}${only !== undefined ? ` matching "${only}"` : ""}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`eval: ${tasks.length} task(s) · ${provider}:${model}${source === "anonymous" ? " (anonymous)" : ""} · max-steps ${maxSteps} · per-task timeout ${timeoutSec}s`);
+  console.log("eval: fixtures run in disposable temp dirs — yolo armed there (the dir is the sandbox; the denylist still applies), checkers live outside the agent's reach.");
+  const { results } = await runEval({
+    tasksRoot,
+    cwd: process.cwd(),
+    only,
+    port: makePortForConfig(cfg, key, undefined, source),
+    provider: cfg.id,
+    model,
+    maxSteps,
+    tokenBudget,
+    taskTimeoutMs: timeoutSec * 1000,
+    keepTemp: keep,
+    onLog: (line) => console.log(line),
+  });
+  if (results.length === 0) {
+    console.error("eval: no tasks ran");
+    process.exitCode = 1;
+    return;
+  }
+  const passed = results.filter((r) => r.pass).length;
+  const promptTokens = results.reduce((s, r) => s + r.promptTokens, 0);
+  const completionTokens = results.reduce((s, r) => s + r.completionTokens, 0);
+  console.log("");
+  console.log(`eval: ${passed}/${results.length} task(s) pass this run · receipt: ${promptTokens} prompt + ${completionTokens} completion tokens (est. where the provider hides usage)`);
+  const allTime = summarizeEval(readEvalRecords(process.cwd()));
+  const barFor = (cls: string): string => (cls === "polish" ? "≥70%" : "≥50%");
+  for (const [cls, score] of Object.entries(allTime)) {
+    if (score === null) continue;
+    const pct = Math.round((score.pass / score.total) * 100);
+    const met = pct >= (cls === "polish" ? 70 : 50);
+    console.log(`eval bar [${cls}]: ${score.pass}/${score.total} pass (${pct}%) — bar ${barFor(cls)} ${met ? "MET" : "NOT MET"} (latest run per task wins)`);
+  }
+  console.log("eval: history in .codewhip/eval.jsonl — codewhip metrics folds it into the task-success bars.");
+  if (passed < results.length) process.exitCode = 1;
+}
+
+const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY [--chat-path /…] [--models-path /…] [--key-url https://…] [--brand <name>] [--timeout-ms 45000]';function cmdProvider(args: string[]): void {
   const sub = args[0] ?? "list";
   if (sub === "list") {
     const all = listAllProviderConfigs();
@@ -1385,8 +1535,75 @@ function cmdPack(args: string[]): void {
 
 function cmdVerdict(args: string[]): void {
   const cwd = process.cwd();
+  // --auto: propose a verdict from mechanical evidence (checkpoints vs the
+  // tree, git cross-check) and confirm interactively — removes the manual
+  // crank (remembering runIds, diffing by hand) while keeping the judgment
+  // human-attached.
+  if (args[0] === "--auto") {
+    const prefix = args[1] ?? "";
+    if (prefix.length < 4) {
+      console.error("verdict: usage — codewhip verdict --auto <runId-prefix> (prefix >=4 chars; runIds print at the end of every run)");
+      process.exitCode = 1;
+      return;
+    }
+    const hits = resolveRunPrefix(cwd, prefix);
+    if (hits.length === 0) {
+      console.error(`verdict: no run starts with "${prefix}"`);
+      process.exitCode = 1;
+      return;
+    }
+    if (hits.length > 1) {
+      console.error(`verdict: ambiguous prefix "${prefix}" (${hits.length} runs) — use more chars`);
+      process.exitCode = 1;
+      return;
+    }
+    const runId = hits[0] as string;
+    const proposal = proposeVerdict(cwd, runId);
+    if ("error" in proposal) {
+      console.error(`verdict: ${proposal.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`verdict: proposal for ${runId.slice(0, 8)} — ${proposal.verdict} (confidence: ${proposal.confidence})`);
+    for (const line of proposal.evidence) {
+      console.log(`  · ${line}`);
+    }
+    if (process.stdin.isTTY !== true) {
+      console.error("verdict: non-interactive session — confirm by passing an explicit verdict: codewhip verdict <prefix> <accepted|edited|reverted|rejected>");
+      process.exitCode = 1;
+      return;
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("record this verdict? [y]es / [n]o, or type a different one (accepted/edited/reverted/rejected): ", (answer) => {
+      rl.close();
+      const a = answer.trim().toLowerCase();
+      let chosen: Verdict | null = null;
+      if (a === "y" || a === "yes") chosen = proposal.verdict;
+      else if (isVerdict(a)) chosen = a;
+      else if (a === "n" || a === "no" || a.length === 0) {
+        console.log("verdict: nothing recorded.");
+        return;
+      } else {
+        console.error(`verdict: "${a}" is not a judgment — nothing recorded.`);
+        process.exitCode = 1;
+        return;
+      }
+      if (!setVerdict(cwd, runId, chosen)) {
+        console.error("verdict: failed to write (disk write)");
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`verdict: ${runId.slice(0, 8)} → ${chosen} (.codewhip/verdicts.jsonl — feeds codewhip metrics)`);
+    });
+    return;
+  }
   const prefix = args[0] ?? "";
   const value = args[1] ?? "";
+  if (prefix === "--auto" || prefix === "-a") {
+    console.error("verdict: usage — codewhip verdict --auto <runId-prefix>");
+    process.exitCode = 1;
+    return;
+  }
   if (prefix.length < 4) {
     console.error(`verdict: prefix "${prefix}" is too short (need >=4 chars of the runId; see: codewhip metrics)`);
     process.exitCode = 1;
@@ -1844,6 +2061,10 @@ async function main(): Promise<void> {
   }
   if (command === "metrics") {
     console.log(renderMetrics(summarizeCwd(process.cwd())));
+    return;
+  }
+  if (command === "eval") {
+    await cmdEval(args.slice(1));
     return;
   }
   if (command === "stats") {

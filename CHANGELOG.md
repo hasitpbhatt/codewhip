@@ -5,6 +5,89 @@ All notable changes to this project are documented here. Format follows
 [SemVer](https://semver.org/). Every run prints its receipts
 (`tokens / model mix / $`) — cost behavior changes are called out explicitly.
 
+## [0.3.0] — 2026-09-18
+
+Competitive-reality pass (analysis in `docs/moat/10-competitive-reality.md`):
+the gap list a side-by-side with Claude Code produced, with the highest-value
+items fixed the same day. Cost behavior: unchanged — receipts keep their
+shape; eval adds a machine-graded measurement layer.
+
+### Added
+
+- **`codewhip eval`** — the task-success bars (≥70% polish / ≥50% implement)
+  were demanded by the metrics table but never measured; now they are. 12
+  fixture tasks ship in `tasks/` (4 polish / 8 implement), each a tiny repo
+  with a checker script validated to fail on the broken fixture and pass on
+  the solved one. The runner copies each fixture to a disposable temp dir,
+  runs the real loop headless there (yolo armed — the dir is the sandbox,
+  the denylist still applies), grades with the checker, merges the run's
+  outcome row into the host `outcomes.jsonl`, and appends
+  `.codewhip/eval.jsonl` (latest run per task wins). `codewhip metrics`
+  reports the per-class bars (MET/NOT MET). Exit 0 only when everything
+  selected passes (CI-usable). Flags: `--task`, `--provider/--model/--free`,
+  `--max-steps`, `--token-budget`, `--timeout-sec`, `--tasks`, `--keep`.
+- **`codewhip verdict --auto <prefix>`** — verdicts are the claimed
+  compounding moat, but they were only written by manual CLI call; a
+  compounding asset nobody feeds does not compound. `--auto` proposes
+  accepted/edited/reverted from the run's checkpoint manifests vs the tree
+  as it stands (git `status --porcelain` cross-check flags unexplained dirt
+  and drops confidence), prints the evidence, and records on one keypress
+  (explicit verdict override welcome). The judgment stays human-attached;
+  the remembering is done for them. Non-interactive sessions refuse and
+  point at the explicit form.
+- **Live `/model` in the TUI** — `agentLoop` accepts `takePendingSwitch`, a
+  per-turn hook: `/model <provider>[:<model>]` validates the target, builds
+  the port, and the loop swaps it at the next turn boundary; receipts
+  bucket usage per model, so the switch is visible in the mix. `/free`
+  prints in-run free-chain visibility (usable/total hops, keyless count).
+  `/plan` states honestly that plan mode is run-scoped (rerun with
+  `--plan`) instead of silently noting a no-op.
+- **System prompt steering** — grew from 22 lines with what the tool specs
+  cannot carry: workspace/jail context, git conventions (`git status`/
+  `git diff` before claiming tree state; never commit/push unasked),
+  `delegate`/`delegate_many` guidance for read-heavy exploration, and an
+  answer shape (lead with outcome, then evidence). Still deliberately
+  token-efficient — it is re-sent every turn.
+
+### Fixed
+
+- **onemin tool-call template** — the prompt example shown to 1min models
+  had literal `MUN` where the `<tool_call>`/`</tool_call>` tags belong (the
+  only non-OpenAI adapter's emulated tool-calling degraded silently), and
+  the test asserted the broken string. Fixed, and a drift-guard test now
+  requires the rendered example to round-trip through the parser, so the
+  doc and the parser cannot diverge again.
+- **`src/lib` registry fork** — the library export carried its own copy of
+  the provider registry and free chain, ~20 providers and one free-chain
+  prune behind the CLI (nvidia pointed at the wrong host and default
+  model). Both tables now live in Node-free leaves (`provider-registry.ts`,
+  `free-chain.ts`) shared by the CLI and the lib (the Workers bundle must
+  not touch `node:fs`); the facade is pinned by drift-guard tests, one of
+  which statically walks the lib's import graph asserting no `node:` import.
+- **`read` binary files** — a null-byte sniff (same heuristic `search`
+  uses) refuses images/fonts/archives with a hint instead of pushing
+  mojibake into the transcript.
+- **`edit` line endings** — the whitespace-insensitive fallback rewrote
+  CRLF files with the model's LF newString, mixing endings (the old test
+  baked the bug in). The rewrite now normalizes to the file's dominant
+  EOL; LF files are untouched.
+- **`search` skip list** — `target`/`vendor`/`__pycache__`/`build` now skip
+  like `node_modules`, so build trees stop eating the 2,000-file budget
+  before real source. Policy-configurable skip-dirs would extend the
+  frozen schema (needs a recorded ruling); the built-in list is the honest
+  slice.
+- **Dead code** — unused `budget.ts` exports and the vestigial TUI budget
+  cards (`setBudget`/`updateBudgetChild` were never called; budget info
+  flows as text events) removed.
+
+### Changed
+
+- **Package identity** — npm name `codewhip-proxy` → `codewhip`
+  (description, keywords, duplicate `engines` key fixed; `prepublishOnly`
+  runs lint+typecheck+build+test; the `tasks/` fixtures ship in the
+  package). README quickstart documents the `npm i -g codewhip` /
+  `npx codewhip` path alongside clone-and-build.
+
 ## [0.2.0] — 2026-09-13
 
 ### Added

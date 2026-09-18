@@ -52,10 +52,23 @@ describe("onemin prompt building", () => {
   });
 it("states the exact block shape and lists every tool with its schema", () => {
     const specs = renderToolSpecs([readTool]);
-    ok(specs.includes('MUN{"name": "search", "arguments": {"query": "foo"}}MUN'), specs);
+    ok(specs.includes('<tool_call>{"name": "search", "arguments": {"query": "foo"}}</tool_call>'), specs);
     ok(specs.includes("### read"), specs);
     ok(specs.includes("Read a file from disk."), specs);
     ok(specs.includes('"required":["path"]'), specs);
+  });
+  it("renders an example that the parser itself accepts — the doc and the parser cannot drift", () => {
+    // Regression guard: the example block shown to the model must round-trip
+    // through parseEmulatedToolCalls. A corrupted template (e.g. literal
+    // "MUN" where the tags belong) fails here instead of degrading the
+    // provider silently.
+    const specs = renderToolSpecs([readTool]);
+    const line = specs.split("\n").find((l) => l.trim().startsWith("<tool_call>"));
+    ok(line !== undefined, `no example block in specs:\n${specs}`);
+    const r = parseEmulatedToolCalls(line as string);
+    strictEqual(r.toolCalls.length, 1);
+    strictEqual(r.toolCalls[0].name, "search");
+    strictEqual(r.toolCalls[0].argsJson, '{"query":"foo"}');
   });
   it("labels every role — with no messages[] array the labels carry the structure", () => {
     const msgs: LoopMsg[] = [

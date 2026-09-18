@@ -1,0 +1,5 @@
+{
+  "name": "remove-dead-code",
+  "class": "implement",
+  "prompt": "util.mjs exports legacyFn, which nothing uses anymore. Remove the legacyFn function and its export entirely. Keep keepMe working."
+}

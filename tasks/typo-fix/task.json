@@ -1,0 +1,5 @@
+{
+  "name": "typo-fix",
+  "class": "polish",
+  "prompt": "In this repo, the word \"recieve\" is misspelled throughout src/app.mjs. Fix every occurrence to \"receive\". Change nothing else."
+}

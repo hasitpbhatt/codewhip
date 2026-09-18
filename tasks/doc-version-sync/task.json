@@ -1,0 +1,5 @@
+{
+  "name": "doc-version-sync",
+  "class": "polish",
+  "prompt": "README.md states a version that no longer matches pkg.json. Update ONLY the version line in README.md to match pkg.json's version field. Change nothing else."
+}

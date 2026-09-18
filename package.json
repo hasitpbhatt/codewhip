@@ -1,7 +1,7 @@
 {
-  "name": "codewhip-proxy",
-  "version": "0.2.0",
-  "description": "OpenAI-compatible proxy library with smart routing for LLM providers",
+  "name": "codewhip",
+  "version": "0.3.0",
+  "description": "Model-agnostic terminal coding agent — policy-checked loop, signed audit trail, metered receipts, free-provider chain",
   "author": "Hasit Bhatt",
   "repository": {
     "type": "git",
@@ -49,6 +49,7 @@
   },
   "files": [
     "dist",
+    "tasks",
     "workers",
     "README.md",
     "LICENSE"
@@ -71,22 +72,20 @@
     "test:lib": "tsx --test src/lib/**/*.test.ts",
     "bench": "tsx src/bench/cli.ts",
     "serve": "node dist/serve.js",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm test",
     "deploy": "wrangler deploy",
     "deploy:dev": "wrangler dev"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "keywords": [
     "codewhip",
-    "proxy",
+    "coding-agent",
+    "cli",
+    "agent",
     "openai",
     "llm",
-    "ai",
     "router",
-    "cloudflare",
-    "workers",
-    "serverless",
+    "audit",
+    "policy",
     "typescript",
     "esm"
   ],

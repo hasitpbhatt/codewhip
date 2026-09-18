@@ -1,0 +1,5 @@
+{
+  "name": "implement-slugify",
+  "class": "implement",
+  "prompt": "Implement slugify in slug.mjs per its docstring: lowercase, trim, collapse runs of spaces/hyphens into a single hyphen, strip anything that is not a lowercase letter, digit, or hyphen. Do not change the exported name."
+}

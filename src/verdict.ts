@@ -1,5 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import { readManifest } from "./checkpoints.js";
+import { sha256Hex } from "./hash.js";
 
 /**
  * Verdict signal (P1): human judgment attached to a run AFTER it finishes.
@@ -62,7 +65,7 @@ export function readVerdictMap(cwd: string): Map<string, VerdictRecord> {
   return out;
 }
 
-/** Resolve a (possibly short) runId prefix to full ids. Empty when no match. */
+/** Prefix resolve over outcomes+verdicts. Empty when no match. */
 export function resolveRunPrefix(cwd: string, prefix: string): string[] {
   if (prefix.length < 4) return [];
   const hits: string[] = [];
@@ -82,4 +85,83 @@ export function resolveRunPrefix(cwd: string, prefix: string): string[] {
     if (id.startsWith(prefix) && !hits.includes(id)) hits.push(id);
   }
   return hits;
+}
+
+export type AutoProposal = {
+  verdict: Verdict;
+  confidence: "high" | "low";
+  evidence: string[];
+};
+
+/**
+ * Mechanical verdict proposal for a finished run. Compares the run's
+ * checkpoint manifest against the tree as it stands now: a file equal to its
+ * before-image means the run's edit did not survive (rolled back or reverted);
+ * a file still differing means the edit is live. Git status, when available,
+ * catches tree changes the manifest cannot explain (bash-side mutations) and
+ * drops confidence accordingly. This only PROPOSES — the human confirms in
+ * `codewhip verdict --auto` — because "accepted" mechanically means "edits
+ * survived", not "tests passed".
+ */
+export function proposeVerdict(cwd: string, runId: string): AutoProposal | { error: string } {
+  const entries = readManifest(cwd, runId);
+  if (entries.length === 0) {
+    return { error: "no checkpoints for this run (nothing was edited/written) — judge manually" };
+  }
+  let live = 0;
+  let undone = 0;
+  const evidence: string[] = [];
+  const manifestFiles = new Set<string>();
+  for (const e of entries) {
+    manifestFiles.add(e.file.split("\\").join("/"));
+    const abs = path.resolve(cwd, e.file);
+    let current: string | null = null;
+    try {
+      current = fs.readFileSync(abs, "utf8");
+    } catch {
+      current = null; // missing file = creation undone (or deleted since)
+    }
+    const before = sha256Hex(current ?? "");
+    if (before === e.sha256) {
+      undone += 1;
+      evidence.push(`${e.file}: matches before-image (edit not in the tree)`);
+    } else if (!e.existed && current === null) {
+      undone += 1;
+      evidence.push(`${e.file}: created by the run, now gone`);
+    } else {
+      live += 1;
+      evidence.push(`${e.file}: still differs from before-image (edit live)`);
+    }
+  }
+  let confidence: AutoProposal["confidence"] = undone === 0 || live === 0 ? "high" : "low";
+  // Git cross-check: tree dirt the manifest cannot explain means the run (or
+  // a later actor) mutated files outside the checkpointed set — any mechanical
+  // read of "is the edit live" is then unreliable.
+  const git = spawnGitStatus(cwd);
+  if (git !== null) {
+    const extra = git.filter((f) => !manifestFiles.has(f));
+    if (extra.length > 0) {
+      confidence = "low";
+      evidence.push(`git reports ${extra.length} changed file(s) outside this run's checkpoints (e.g. ${extra.slice(0, 3).join(", ")})`);
+    }
+  }
+  // Mechanical mapping: everything undone → reverted; everything live →
+  // accepted (edits survived; tests are the human's call); mixed → edited.
+  const verdict: Verdict = live === 0 ? "reverted" : undone === 0 ? "accepted" : "edited";
+  return { verdict, confidence, evidence };
+}
+
+/** porcelain paths (M/A/D/?? …), or null when git is absent/unusable. */
+function spawnGitStatus(cwd: string): string[] | null {
+  try {
+    const r = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", timeout: 10_000 });
+    if (r.status !== 0 || typeof r.stdout !== "string") return null;
+    return r.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => l.slice(3).trim().replace(/^"|"$/g, "").split("\\").join("/"));
+  } catch {
+    return null;
+  }
 }
