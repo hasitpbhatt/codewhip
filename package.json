@@ -91,6 +91,14 @@
     "esm"
   ],
   "license": "MIT",
+  "peerDependencies": {
+    "opentui": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "opentui": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.20.2",
     "oxlint": "^1.83.0",

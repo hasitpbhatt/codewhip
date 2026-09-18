@@ -9,7 +9,7 @@ import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProvide
 import { freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
-import { agentLoop, type ApprovalAnswer, type FailoverTarget } from "./loop.js";
+import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type FailoverTarget } from "./loop.js";
 import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
@@ -76,6 +76,10 @@ type RunOptions = {
   /** Explicit --class routing override (undefined = auto-classify). */
   taskClass?: TaskClass;
   modelExplicit: boolean;
+  /** Opt into the TUI view (lazy-loads OpenTUI; headless stays default). */
+  tui: boolean;
+  /** Force 80-col screen-reader-safe output (overrides --tui). */
+  noTui: boolean;
 };
 
 function printRunOptions(): void {
@@ -96,6 +100,8 @@ function printRunOptions(): void {
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
   console.log("  --continue [prefix]  resume a prior session (bare = most recent, prefix >=4 chars) and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
+  console.log("  --tui                opt into the terminal UI (lazy-loads OpenTUI; headless stays default; may not be available in all environments)");
+  console.log("  --no-tui             force 80-col screen-reader-safe output (overrides --tui)");
 }
 
 function printKeysHelp(): void {
@@ -355,6 +361,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let share = false;
   let sharePrint = false;
   let noStream = false;
+  let tui = false;
+  let noTui = false;
   let cont = false;
   let continuePrefix: string | undefined;
   const positional: string[] = [];
@@ -437,6 +445,10 @@ function parseRunArgs(args: string[]): RunOptions | null {
       share = true;
     } else if (a === "--print") {
       sharePrint = true;
+    } else if (a === "--tui") {
+      tui = true;
+    } else if (a === "--no-tui") {
+      noTui = true;
     } else if (a === "--continue" || a.startsWith("--continue=")) {
       cont = true;
       const eq = a.indexOf("=");
@@ -466,6 +478,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
+    tui,
+    noTui,
     ...(continuePrefix === undefined ? {} : { continuePrefix }),
   };
 }
@@ -746,6 +760,37 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     ctrl.abort();
   };
   process.on("SIGINT", onSigint);
+
+  // TUI bridge: lazy-import on --tui; headless uses the existing readline
+  // promptApproval + console.log onEvent. --no-tui forces headless.
+  let askUserFn: AskUser;
+  let onEventFn: (e: LoopEvent) => void;
+  let tuiBridge: { stop: () => void } | null = null;
+  if (opts.tui && !opts.noTui) {
+    console.log("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
+    try {
+      const tuiMod = await import("./tui/bridge.js");
+      const { TuiModel } = await import("./tui/model.js");
+      const model = new TuiModel();
+      const bridge = tuiMod.createTuiBridge({ model, signal: ctrl.signal });
+      bridge.start();
+      tuiBridge = bridge;
+      askUserFn = bridge.askUser;
+      onEventFn = (e: LoopEvent) => bridge.onEvent(e);
+    } catch {
+      console.log("!! --tui armed but OpenTUI unavailable — falling back to headless prompts.");
+      askUserFn = promptApproval;
+      onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+    }
+  } else if (opts.noTui) {
+    console.log("!! --no-tui armed: forced 80-col screen-reader-safe output (no TUI).");
+    askUserFn = promptApproval;
+    onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+  } else {
+    askUserFn = promptApproval;
+    onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+  }
+
   try {
     const result = await agentLoop({
       prompt: opts.prompt,
@@ -758,7 +803,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       stdinIsTTY: process.stdin.isTTY === true,
       port: makePortForConfig(runCfg, apiKey, opts.timeoutMs, keySource),
       signal: ctrl.signal,
-      askUser: promptApproval,
+      askUser: askUserFn,
       remembered: listRules(process.cwd()),
       planMode: opts.plan,
       retryWait: opts.retryWait,
@@ -766,7 +811,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       models: opts.models,
       tokenBudget: opts.tokenBudget,
       history,
-      onEvent: (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`),
+      onEvent: onEventFn,
     });
     // Thread the transcript forward: single-shot saves below; REPL feeds it
     // back in-memory and saves once on .exit (no per-line files).
@@ -856,6 +901,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       }
     }
   } finally {
+    tuiBridge?.stop();
     process.removeListener("SIGINT", onSigint);
   }
 }
