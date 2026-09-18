@@ -7,7 +7,7 @@ import { FREE_CHAIN, freeChainIds, freeChainCandidates, listFreeProviders } from
 import { PROVIDERS, PROVIDER_IDS } from "./provider.js";
 import { getProviderConfig } from "./custom-providers.js";
 
-const CHAIN_ORDER = "kilo,opencode,empero,pollinations,groq,openrouter,gemini,zai,nvidia,mistral,sambanova,hyperbolic,xai,huggingface,upstage,novita,parasail,volcengine,qianfan,hunyuan,moonshot,deepseek,minimax,stepfun,ppio,cloudflare,modelscope,ovhcloud,ollama,cohere,siliconflow,aionlabs,agnes,requesty,inference,hetzner,venice,scaleway,friendli,nscale,nebius,ai21,coze,llm7";
+const CHAIN_ORDER = "kilo,opencode,empero,pollinations,groq,openrouter,gemini,zai,nvidia,mistral,sambanova,hyperbolic,huggingface,upstage,parasail,volcengine,hunyuan,moonshot,minimax,stepfun,cloudflare,modelscope,ovhcloud,ollama,cohere,siliconflow,aionlabs,agnes,requesty,inference,hetzner,venice,coze,githubmodels,aihubmix,fastrouter,vercel,zenmux,llmgateway,suyu,voapi,nio,llm7";
 
 // Isolate key resolution from the developer's real config dir: candidates
 // tests must see only env vars + anonymous keys, never stored files.
@@ -95,7 +95,7 @@ describe("free-providers", () => {
   });
   it("listFreeProviders() joins the chain with the registry columns", () => {
     const rows = listFreeProviders();
-    strictEqual(rows.length, 44);
+    strictEqual(rows.length, 43);
     for (const r of rows) {
       const cfg = PROVIDERS[r.id];
       strictEqual(r.envVar, cfg.envVar, r.id);
@@ -118,6 +118,14 @@ describe("free-providers", () => {
     }
     // lepton ceased operations 2025-05-20 — it is not a provider at all now.
     ok(!(PROVIDER_IDS as readonly string[]).includes("lepton"), "lepton must not be a builtin");
+  });
+  it("trial-credit grants stay out of the chain (trial repair 2026-09-18)", () => {
+    // One-time signup credit is not a free tier: it bills once exhausted.
+    // Renewable daily/monthly tiers (hyperbolic, cohere, coze) are unaffected.
+    for (const id of ["xai", "novita", "qianfan", "deepseek", "ppio", "scaleway", "friendli", "nscale", "nebius", "ai21", "together", "deepinfra", "fireworks", "cometapi", "mkeai", "apiyi"]) {
+      ok(!freeChainIds().includes(id as never), `${id} must not be a free-chain hop`);
+      ok(PROVIDERS[id as keyof typeof PROVIDERS] !== undefined, `${id} stays a builtin (usable via --provider)`);
+    }
   });
   it("freeChainIds() is a pure view of FREE_CHAIN", () => {
     const ids = freeChainIds();

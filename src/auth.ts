@@ -91,10 +91,32 @@ type StoredCreds = {
   seldonApiKey?: unknown;
   cavotiApiKey?: unknown;
   getunikeyApiKey?: unknown;
+  // 2026-09-18: freellm free providers.
+  freetheaiApiKey?: unknown;
+  gmicloudApiKey?: unknown;
+  inferxApiKey?: unknown;
+  kkiaiApiKey?: unknown;
+  seekaiApiKey?: unknown;
   bynaraApiKey?: unknown;
   atriaApiKey?: unknown;
   onerouterApiKey?: unknown;
   xpikiApiKey?: unknown;
+  // 2026-09-18: completeness batch (free tiers + trial aggregators + relays).
+  githubmodelsApiKey?: unknown;
+  aihubmixApiKey?: unknown;
+  fastrouterApiKey?: unknown;
+  vercelApiKey?: unknown;
+  zenmuxApiKey?: unknown;
+  llmgatewayApiKey?: unknown;
+  togetherApiKey?: unknown;
+  deepinfraApiKey?: unknown;
+  fireworksApiKey?: unknown;
+  cometapiApiKey?: unknown;
+  suyuApiKey?: unknown;
+  voapiApiKey?: unknown;
+  nioApiKey?: unknown;
+  mkeaiApiKey?: unknown;
+  apiyiApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -175,10 +197,32 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   seldon: "seldonApiKey",
   cavoti: "cavotiApiKey",
   getunikey: "getunikeyApiKey",
+  // 2026-09-18: freellm free providers.
+  freetheai: "freetheaiApiKey",
+  gmicloud: "gmicloudApiKey",
+  inferx: "inferxApiKey",
+  kkiai: "kkiaiApiKey",
+  seekai: "seekaiApiKey",
   bynara: "bynaraApiKey",
   atria: "atriaApiKey",
   onerouter: "onerouterApiKey",
   xpiki: "xpikiApiKey",
+  // 2026-09-18: completeness batch.
+  githubmodels: "githubmodelsApiKey",
+  aihubmix: "aihubmixApiKey",
+  fastrouter: "fastrouterApiKey",
+  vercel: "vercelApiKey",
+  zenmux: "zenmuxApiKey",
+  llmgateway: "llmgatewayApiKey",
+  together: "togetherApiKey",
+  deepinfra: "deepinfraApiKey",
+  fireworks: "fireworksApiKey",
+  cometapi: "cometapiApiKey",
+  suyu: "suyuApiKey",
+  voapi: "voapiApiKey",
+  nio: "nioApiKey",
+  mkeai: "mkeaiApiKey",
+  apiyi: "apiyiApiKey",
 };
 
 function customFieldFor(provider: string): string {

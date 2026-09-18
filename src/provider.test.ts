@@ -217,7 +217,7 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 75);
+    strictEqual(PROVIDER_IDS.length, 95);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");
@@ -231,7 +231,7 @@ describe("provider", () => {
     strictEqual(DEFAULT_CHAT_TIMEOUT_MS, 120000);
     // Community gateways get a shorter timeout (8s) — they're volatile and
     // we'd rather fail fast than hang. Every other builtin must use the default.
-    const shortTimeout = new Set(["zukijourney", "nagaai", "zanityai", "kimetsu", "navyapi", "mnn", "hcap", "voltai", "electronhub", "xkiro", "gonkarouter", "bazaarlink", "seldon", "cavoti", "getunikey", "bynara", "atria", "onerouter", "xpiki"]);
+    const shortTimeout = new Set(["zukijourney", "nagaai", "zanityai", "kimetsu", "navyapi", "mnn", "hcap", "voltai", "electronhub", "xkiro", "gonkarouter", "bazaarlink", "seldon", "cavoti", "getunikey", "bynara", "atria", "onerouter", "xpiki", "suyu", "voapi", "nio", "mkeai", "apiyi"]);
     for (const id of PROVIDER_IDS) {
       if (shortTimeout.has(id)) {
         strictEqual(PROVIDERS[id].timeoutMs, 8000, `${id} should use the community-gateway timeout`);

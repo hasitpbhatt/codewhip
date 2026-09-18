@@ -48,7 +48,14 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain;
   SSE streaming + first-byte/idle timeouts + timeout-classification fix shipped
   2026-09-12; +18 free-key tiers and the lepton/chutes/cerebras rot repair
-  shipped 2026-09-13 — 53 builtins, 44 free-chain hops). 2026-09-13 also added
+     shipped 2026-09-13 — 53 builtins, 44 free-chain hops at the time; 2026-09-18
+   trial-credit repair + completeness batch — 95 builtins, 43 free-chain hops:
+   one-time signup grants are not free, so xai/novita/qianfan/deepseek/ppio/
+   scaleway/friendli/nscale/nebius/ai21 left the chain but stay reachable via
+   `--provider`; 15 providers added (githubmodels, aihubmix, fastrouter,
+   vercel, zenmux, llmgateway, suyu, voapi, nio join the chain; together,
+   deepinfra, fireworks, cometapi, mkeai, apiyi stay out as trial/paid). Also
+   added 2026-09-13:
   `1min` as the first non-OpenAI-shaped provider (its own `port: "onemin"`
   adapter: flattened prompt, prompt-injected tool calls, estimated usage) and
   `codewhip serve`, an OpenAI-compatible HTTP front end over the whole registry

@@ -21,7 +21,7 @@ import { oneminPort } from "./onemin.js";
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" | "bynara" | "atria" | "onerouter" | "xpiki";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" | "mkeai" | "apiyi";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -117,6 +117,24 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "atria", // OpenAI-compatible.
   "onerouter", // OpenAI-compatible router.
   "xpiki", // OpenAI-compatible.
+  // 2026-09-18: completeness batch (freellm.sh + YoannDev90 + freellms.org +
+  // nejib1 + llm24.net + ineed + findkey). First-party free tiers join
+  // FREE_CHAIN; trial/paid aggregators and volatile relays stay builtins-only.
+  "githubmodels", // GitHub Models free tier (Copilot-Free limits).
+  "aihubmix", // AIHubMix free tier.
+  "fastrouter", // FastRouter free models.
+  "vercel", // Vercel AI Gateway free tier.
+  "zenmux", // ZenMux $0/M-token models.
+  "llmgateway", // LLM Gateway free=true models.
+  "together", // Together AI trial credits — NOT free, builtin only.
+  "deepinfra", // DeepInfra trial credits — NOT free, builtin only.
+  "fireworks", // Fireworks AI trial credits — NOT free, builtin only.
+  "cometapi", // CometAPI paid aggregator — NOT free, builtin only.
+  "suyu", // Suyu free relay (daily call caps) — volatile, fast timeout.
+  "voapi", // VoAPI gongyi relay (daily checkin quota) — volatile, fast timeout.
+  "nio", // NIO gongyi-group relay — volatile, fast timeout.
+  "mkeai", // MKEAI trial quota — NOT free, builtin only.
+  "apiyi", // ApiYi trial quota — NOT free, builtin only.
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -1275,6 +1293,193 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://api.xpiki.com",
     timeoutMs: 8000,
     rateLimitedHint: "OpenAI-compatible — key required",
+  },
+  // === Completeness batch 2026-09-18 ===
+  // Sources: freellm.sh, YoannDev90/awesome-free-ai-api, freellms.org,
+  // nejib1/Free-LLM, llm24.net/providers, info.ineed.web.id/free-ai-resources,
+  // findkey.openjoy.asia/sites.json. Default models are best-known slugs, NOT
+  // live-probed: confirm with `codewhip models <id>` before relying on one.
+  // First-party free tiers below join FREE_CHAIN; trial/paid rows stay out
+  // (trial credit is not free — see free-providers.ts).
+  githubmodels: {
+    id: "githubmodels",
+    brand: "githubmodels",
+    baseUrl: "https://models.github.ai/inference",
+    chatPath: "/chat/completions",
+    modelsPath: "/models",
+    defaultModel: "openai/gpt-4o-mini",
+    envVar: "GITHUBMODELS_API_KEY",
+    keyUrl: "https://github.com/marketplace/models",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier: 15 req/min low-tier models, 150 req/day (Copilot Free)",
+  },
+  aihubmix: {
+    id: "aihubmix",
+    brand: "aihubmix",
+    baseUrl: "https://aihubmix.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "AIHUBMIX_API_KEY",
+    keyUrl: "https://aihubmix.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier on open models — limits unpublished, wait and retry",
+  },
+  fastrouter: {
+    id: "fastrouter",
+    brand: "fastrouter",
+    baseUrl: "https://go.fastrouter.ai",
+    chatPath: "/api/v1/chat/completions",
+    modelsPath: "/api/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "FASTROUTER_API_KEY",
+    keyUrl: "https://fastrouter.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free models — limits unpublished, wait and retry",
+  },
+  vercel: {
+    id: "vercel",
+    brand: "vercel",
+    baseUrl: "https://ai-gateway.vercel.sh",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "openai/gpt-4o-mini",
+    envVar: "VERCEL_API_KEY",
+    keyUrl: "https://vercel.com/ai-gateway",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free tier — provider-prefixed model ids (openai/..., anthropic/...)",
+  },
+  zenmux: {
+    id: "zenmux",
+    brand: "zenmux",
+    baseUrl: "https://zenmux.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "ZENMUX_API_KEY",
+    keyUrl: "https://zenmux.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "$0/M-token models — API key required, limits unpublished",
+  },
+  llmgateway: {
+    id: "llmgateway",
+    brand: "llmgateway",
+    baseUrl: "https://llmgateway.io",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "LLMGATEWAY_API_KEY",
+    keyUrl: "https://llmgateway.io",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free=true models — limits unpublished, wait and retry",
+  },
+  together: {
+    id: "together",
+    brand: "together",
+    baseUrl: "https://api.together.xyz",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "meta-llama/Llama-3.3-70B-Instruct",
+    envVar: "TOGETHER_API_KEY",
+    keyUrl: "https://api.together.xyz",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "trial credits (~$1 one-time) — NOT free, bills after the grant",
+  },
+  deepinfra: {
+    id: "deepinfra",
+    brand: "deepinfra",
+    baseUrl: "https://api.deepinfra.ai/v1/openai",
+    chatPath: "/chat/completions",
+    modelsPath: "/models",
+    defaultModel: "meta-llama/Llama-3.3-70B-Instruct",
+    envVar: "DEEPINFRA_API_KEY",
+    keyUrl: "https://deepinfra.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "trial credits (~$5, 90-day expiry) — NOT free, bills after the grant",
+  },
+  fireworks: {
+    id: "fireworks",
+    brand: "fireworks",
+    baseUrl: "https://api.fireworks.ai",
+    chatPath: "/inference/v1/chat/completions",
+    modelsPath: "/inference/v1/models",
+    defaultModel: "accounts/fireworks/models/llama-v3p3-70b-instruct",
+    envVar: "FIREWORKS_API_KEY",
+    keyUrl: "https://fireworks.ai",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "trial credits (~$1 one-time) — NOT free, bills after the grant",
+  },
+  cometapi: {
+    id: "cometapi",
+    brand: "cometapi",
+    baseUrl: "https://api.cometapi.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "COMETAPI_API_KEY",
+    keyUrl: "https://cometapi.com",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "paid aggregator — no free tier, bills from the first call",
+  },
+  suyu: {
+    id: "suyu",
+    brand: "suyu",
+    baseUrl: "https://free.suyu.io",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "SUYU_API_KEY",
+    keyUrl: "https://free.suyu.io",
+    timeoutMs: 8000,
+    rateLimitedHint: "community relay: daily call caps (GPT-4o ~30/d, Mini ~200/d) — volatile, never send private code",
+  },
+  voapi: {
+    id: "voapi",
+    brand: "voapi",
+    baseUrl: "https://demo.voapi.top",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "VOAPI_API_KEY",
+    keyUrl: "https://demo.voapi.top",
+    timeoutMs: 8000,
+    rateLimitedHint: "community relay: daily checkin quota — volatile, never send private code",
+  },
+  nio: {
+    id: "nio",
+    brand: "nio",
+    baseUrl: "https://api.nio.gs",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "NIO_API_KEY",
+    keyUrl: "https://api.nio.gs",
+    timeoutMs: 8000,
+    rateLimitedHint: "community relay: free 公益 token group — volatile, never send private code",
+  },
+  mkeai: {
+    id: "mkeai",
+    brand: "mkeai",
+    baseUrl: "https://api.mkeai.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "MKEAI_API_KEY",
+    keyUrl: "https://api.mkeai.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "trial quota (~$0.2 one-time) — NOT free, bills after the grant",
+  },
+  apiyi: {
+    id: "apiyi",
+    brand: "apiyi",
+    baseUrl: "https://apiyi.com",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "gpt-4o-mini",
+    envVar: "APIYI_API_KEY",
+    keyUrl: "https://apiyi.com",
+    timeoutMs: 8000,
+    rateLimitedHint: "trial quota (~$0.1 one-time) — NOT free, bills after the grant",
   },
 };
 
