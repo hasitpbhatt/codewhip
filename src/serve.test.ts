@@ -774,4 +774,40 @@ describe("serve /v1/models live catalog", () => {
       clearModelCatalogCache();
     }
   });
+
+  it("?refresh=1 bypasses the 60s cache and rebuilds the sweep", async () => {
+    clearModelCatalogCache();
+    const h = await harness({}, () => openAiReply("ok"));
+    try {
+      // First sweep: the stub answers with m-alpha/m-beta.
+      let catalog = [{ id: "m-alpha" }, { id: "m-beta" }];
+      globalThis.fetch = ((url: string) => {
+        if (url.endsWith("/models") || url.endsWith("/models/")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ object: "list", data: catalog }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            })
+          );
+        }
+        return Promise.resolve(openAiReply("ok"));
+      }) as unknown as typeof fetch;
+
+      const first = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
+      ok(first.data.some((m) => m.id === "pollinations:m-alpha"), "first sweep should expand");
+
+      // Upstream catalog changes; a cached request must still serve the old
+      // rows, while ?refresh=1 must re-sweep and pick the change up.
+      catalog = [{ id: "m-gamma" }];
+      const cached = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
+      ok(cached.data.some((m) => m.id === "pollinations:m-alpha"), "cached sweep must not re-fetch");
+
+      const refreshed = (await (await h.client(`${h.base}/v1/models?refresh=1`)).json()) as { data: Array<{ id: string }> };
+      ok(refreshed.data.some((m) => m.id === "pollinations:m-gamma"), "?refresh=1 must re-sweep");
+      ok(!refreshed.data.some((m) => m.id === "pollinations:m-alpha"), "stale row should be gone after refresh");
+    } finally {
+      await h.close();
+      clearModelCatalogCache();
+    }
+  });
 });
