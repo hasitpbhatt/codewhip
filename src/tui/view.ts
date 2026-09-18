@@ -35,7 +35,15 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
 
   function renderFooter(snap: TuiModelSnapshot): string {
     const m = snap.meter;
-    return `tokens: ${m.tokens} | est: $${m.estCost.toFixed(4)} | rollback: <prefix> | /model /free /plan /rollback /sessions`;
+    const rollbackId = snap.runId ? snap.runId.slice(0, 8) : "<pending>";
+    const revoke = snap.pending ? ` | revoke: Esc` : "";
+    return `rollback: ${rollbackId}  |  tokens: ${m.tokens}  |  est: $${m.estCost.toFixed(4)}  |  /model /free /plan /rollback /sessions${revoke}`;
+  }
+
+  function renderDiffPreview(snap: TuiModelSnapshot): string | null {
+    if (!snap.diffPreview) return null;
+    const lines = snap.diffPreview.lines.map((l) => `  ${l}`).join("\n");
+    return `DIFF (${snap.diffPreview.rel}):\n${lines}`;
   }
 
   function renderTranscript(snap: TuiModelSnapshot): string {
@@ -52,6 +60,11 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
     parts.push(renderHeader());
     parts.push("");
     parts.push(renderTranscript(snap));
+    const diff = renderDiffPreview(snap);
+    if (diff) {
+      parts.push("");
+      parts.push(diff);
+    }
     const p = renderPending(snap);
     if (p) {
       parts.push("");
