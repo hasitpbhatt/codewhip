@@ -98,6 +98,14 @@ export async function editTool(ctx: ToolContext, args: EditArgs): Promise<ToolRe
     };
   }
   const at = starts[0] as number;
-  const updated = [...lines.slice(0, at), args.newString, ...lines.slice(at + targetLines.length)].join("\n");
+  // The fallback rewrites whole lines, so the file's dominant EOL governs the
+  // result: a consistently-CRLF file must stay consistently CRLF (joining the
+  // \r-stripped rewrite with the model's LF newString would otherwise mix
+  // endings). Untouched-line CRs are stripped and re-applied uniformly.
+  let updated = [...lines.slice(0, at), args.newString, ...lines.slice(at + targetLines.length)].join("\n");
+  const crlfCount = (text.match(/\r\n/g) ?? []).length;
+  if (crlfCount * 2 > (text.split("\n").length - 1)) {
+    updated = updated.replace(/\r?\n/g, "\r\n");
+  }
   return writeEdit(safe, args.path, updated, "whitespace-insensitive");
 }

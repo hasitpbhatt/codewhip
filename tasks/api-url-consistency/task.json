@@ -1,0 +1,5 @@
+{
+  "name": "api-url-consistency",
+  "class": "implement",
+  "prompt": "client.mjs and legacy.mjs disagree on the API version. The current API is v2. Update legacy.mjs so both files use the same v2 base URL, exactly as client.mjs spells it."
+}

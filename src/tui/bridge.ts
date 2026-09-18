@@ -13,6 +13,14 @@ export type TuiBridgeDeps = {
   cwd: string;
   /** Optional poller: returns current background task statuses every 500ms. */
   pollBackground?: () => Array<{ id: string; label: string; status: "running" | "done" | "error"; preview: string }>;
+  /**
+   * Live /model switch (REPL slash commands, roadmap post-H1): validates the
+   * target and arms a port the loop picks up at the next turn boundary.
+   * Returns a user-facing confirmation line, or the reason it was refused.
+   */
+  switchModel?: (provider: string, model: string | null) => string;
+  /** Free-chain visibility in-run: one line describing usable free hops. */
+  describeFree?: () => string;
 };
 
 export type TuiBridge = {
@@ -31,7 +39,7 @@ export type TuiViewHandle = {
 const APPROVAL_TIMEOUT_MS = 30_000;
 
 export function createTuiBridge(deps: TuiBridgeDeps): TuiBridge {
-  const { model, signal, pollBackground } = deps;
+  const { model, signal, pollBackground, switchModel, describeFree } = deps;
 
   let view: TuiViewHandle | null = null;
   let _rollbackPrefix: string | null = null;
@@ -146,12 +154,32 @@ export function createTuiBridge(deps: TuiBridgeDeps): TuiBridge {
             model.appendEvent("rollback: usage /rollback <runId-prefix>");
           }
           break;
-        case "/model":
+        case "/model": {
+          // Live switch: the caller (index.ts) validates and builds the port;
+          // the loop applies it at the next turn boundary via takePendingSwitch.
+          if (switchModel === undefined) {
+            model.appendEvent("/model: not wired in this run (headless runs pick the model at launch)");
+            break;
+          }
+          if (cmd.args.length === 0) {
+            model.appendEvent("/model: usage /model <provider>[:<model>] — the switch applies from the next turn");
+            break;
+          }
+          const spec = cmd.args[0] ?? "";
+          const sep = spec.indexOf(":");
+          const provider = sep === -1 ? spec : spec.slice(0, sep);
+          const modelId = sep === -1 ? null : spec.slice(sep + 1);
+          model.appendEvent(switchModel(provider, modelId));
+          break;
+        }
         case "/free":
+          // Free-chain visibility in-run (roadmap post-H1 item).
+          model.appendEvent(describeFree !== undefined ? describeFree() : "/free: not wired in this run — see `codewhip free`");
+          break;
         case "/plan":
-          // These affect the running loop — emit as an event for visibility.
-          // Real implementation would require LoopEvent widening (killed in v1 spike).
-          model.appendEvent(`slash ${cmd.cmd}: noted (live model/provider change needs loop integration)`);
+          // Honest label: plan mode is run-scoped; a mid-run toggle would need
+          // permission-ladder re-arming, which the spike deliberately skipped.
+          model.appendEvent("/plan: plan mode is run-scoped — exit and rerun with --plan (mid-run toggle not supported)");
           break;
       }
       if (view !== null) view.renderTick();

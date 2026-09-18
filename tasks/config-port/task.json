@@ -1,0 +1,5 @@
+{
+  "name": "config-port",
+  "class": "polish",
+  "prompt": "Change the port in config.json from 3000 to 8080. Keep the file valid JSON and change nothing else."
+}

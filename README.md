@@ -33,25 +33,36 @@ uses it doesn't ship in H1.
 
 ## Quickstart
 
+Install (once published, `npm`-style; today: clone-and-build, both give the same `codewhip` command):
+
 ```sh
+# option A — from npm (after the first published release)
+npm install -g codewhip
+# or run without installing:
+npx codewhip demo --deny
+
+# option B — from source (works today)
 git clone https://github.com/hasitpbhatt/codewhip
-cd codewhip
-npm install
-npm run build
-node dist/index.js init              # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
-node dist/index.js demo --deny       # offline wedge demo: 5 disasters refused, $0, no key
-node dist/index.js run "fix the failing test" --free   # keyless first success (free chain, never bills)
-node dist/index.js auth login nvidia # default provider needs a key (free at build.nvidia.com) — or keep using --free
-node dist/index.js run "fix the failing test"
-node dist/index.js run "refactor auth" --token-budget 250000
-node dist/index.js trust              # needs init + one run first: chain, policy, keys, memory — one command
-node dist/index.js remember list      # what the agent auto-runs without asking (revoke: remember forget)
-node dist/index.js audit --verify     # re-walk seq/prev_hash + ed25519 signatures
+cd codewhip && npm install && npm run build
+npm link   # optional: puts `codewhip` on PATH from this repo's dist/
 ```
 
-(`npm i -g codewhip` arrives with the first published release — until then,
-`node dist/index.js …` from the repo root is the command. `npm run dev --
-…` skips the build.)
+Then, in any repo you want the agent to work on:
+
+```sh
+codewhip init              # 30s: AGENTS.md + codewhip-policy.yaml + local signing key
+codewhip demo --deny       # offline wedge demo: 5 disasters refused, $0, no key
+codewhip run "fix the failing test" --free   # keyless first success (free chain, never bills)
+codewhip auth login nvidia # default provider needs a key (free at build.nvidia.com) — or keep using --free
+codewhip run "fix the failing test"
+codewhip run "refactor auth" --token-budget 250000
+codewhip trust             # needs init + one run first: chain, policy, keys, memory — one command
+codewhip remember list     # what the agent auto-runs without asking (revoke: remember forget)
+codewhip audit --verify    # re-walk seq/prev_hash + ed25519 signatures
+```
+
+(If you installed from source without `npm link`, `node dist/index.js …`
+from the repo root is the command. `npm run dev -- …` skips the build.)
 
 Every run prints receipts: `tokens / model mix / $`. Receipts price known
 $0 routes (nvidia and the verified free-chain defaults); unpriced routes

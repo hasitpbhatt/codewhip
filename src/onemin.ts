@@ -73,9 +73,9 @@ export function renderToolSpecs(tools: ToolSpec[]): string {
   if (tools.length === 0) return "";
   const lines: string[] = [
     "# Tools",
-"You can call tools. To call one, reply with ONLY a block in exactly this form (repeat the block for multiple calls):",
+    "You can call tools. To call one, reply with ONLY a block in exactly this form (repeat the block for multiple calls):",
     "",
-    'MUN{"name": "search", "arguments": {"query": "foo"}}MUN',
+    '<tool_call>{"name": "search", "arguments": {"query": "foo"}}</tool_call>',
     "",
     "Rules:",
     "- Use only the tool names listed below.",

@@ -1,0 +1,5 @@
+{
+  "name": "error-message-format",
+  "class": "implement",
+  "prompt": "validate.mjs throws a generic error when name is missing. Change it so the thrown message is exactly: missing name"
+}

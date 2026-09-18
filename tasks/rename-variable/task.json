@@ -1,0 +1,5 @@
+{
+  "name": "rename-variable",
+  "class": "implement",
+  "prompt": "In stats.mjs the parameter \"d\" is a poor name. Rename it to \"data\" everywhere in that file (signature and uses). Behavior must not change."
+}

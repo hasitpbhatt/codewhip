@@ -69,6 +69,14 @@ export type LoopArgs = {
    * per run, on rate-limited/timeout/server turns only — never on auth/other failures.
    */
   models?: string[];
+  /**
+   * Live model switch (TUI /model): consulted at each turn boundary, before
+   * the step begins. Returning a target swaps the active label/model/port
+   * for that turn — the same shape failover assigns to `current`; receipts
+   * bucket usage per model, so the switch shows up as an extra mix row.
+   * Null = nothing pending.
+   */
+  takePendingSwitch?: () => FailoverTarget | null;
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
   tokenBudget?: number;
   /**
@@ -365,6 +373,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     if (args.signal?.aborted === true) {
       cancelled = true;
       break;
+    }
+    if (args.takePendingSwitch !== undefined) {
+      const switched = args.takePendingSwitch();
+      if (switched !== null) current = { ...switched };
     }
     steps = step;
     // Compaction gate (committee ruling 3): when a single provider call's

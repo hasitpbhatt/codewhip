@@ -323,6 +323,40 @@ describe("loop", () => {
     ok(ev.some((t) => t.includes("timed out") && t.includes("rotating")));
     strictEqual(record.map((c) => c.model).join(","), "a,b,c");
   });
+  it("takePendingSwitch swaps label/model/port at the next turn boundary (TUI /model)", async () => {
+    const readArgs = JSON.stringify({ path: "f.txt" });
+    const { port, record } = makeFakePort([toolTurn("read", readArgs), textTurn("done")]);
+    let armed = false;
+    const r = await agentLoop({
+      prompt: "hi", model: "a", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      remembered: listRules(cwd),
+      takePendingSwitch: () => {
+        // Arm only after the first provider call: turn 1 runs on the head
+        // model, and the switch applies at the next boundary (turn 2).
+        if (record.length === 0 || armed) return null;
+        armed = true;
+        return { label: "other", model: "z", port };
+      },
+    });
+    strictEqual(r.text, "done");
+    strictEqual(r.error, undefined);
+    strictEqual(record.map((c) => c.model).join(","), "a,z");
+    // Receipts split usage per model, so the switch is visible in the mix.
+    ok(r.usageByModel.some((b) => b.label === "other" && b.model === "z"), JSON.stringify(r.usageByModel));
+    ok(r.usageByModel.some((b) => b.label === "nvidia" && b.model === "a"), JSON.stringify(r.usageByModel));
+  });
+  it("a null takePendingSwitch never disturbs the run", async () => {
+    const { port, record } = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "a", label: "nvidia", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      remembered: listRules(cwd),
+      takePendingSwitch: () => null,
+    });
+    strictEqual(r.text, "done");
+    strictEqual(record.map((c) => c.model).join(","), "a");
+  });
   it("timeout never triggers retry-wait (waiting helps 429s, not slow models)", async () => {
     const ev: string[] = [];
     const { port } = makeFakePort([timeoutFailure()]);

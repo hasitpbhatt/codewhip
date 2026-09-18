@@ -1,0 +1,5 @@
+{
+  "name": "calc-wrong-op",
+  "class": "implement",
+  "prompt": "calc.mjs has a bug: add(a, b) returns the wrong result. Fix add so it returns the sum. Do not change sub."
+}

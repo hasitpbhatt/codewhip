@@ -34,10 +34,20 @@ describe("edit", () => {
     strictEqual(fs.readFileSync(f, "utf8"), "hello there");
     fs.rmSync(f, { force: true });
   });
-  it("matches blocks in a CRLF file", async () => {
+  it("matches blocks in a CRLF file and keeps the file's CRLF endings (no mixed endings)", async () => {
     const f = path.join(cwd, "crlf.txt");
     fs.writeFileSync(f, "alpha\r\nbeta", "utf8");
     const r = await editTool({ cwd }, { path: "crlf.txt", oldString: "alpha\nbeta", newString: "ALPHA\nBETA" });
+    strictEqual(r.ok, true);
+    // The old behavior silently flipped the whole file to LF; the file's
+    // dominant EOL must survive the rewrite instead.
+    strictEqual(fs.readFileSync(f, "utf8"), "ALPHA\r\nBETA");
+    fs.rmSync(f, { force: true });
+  });
+  it("an LF file stays LF through the whitespace-insensitive fallback", async () => {
+    const f = path.join(cwd, "lf.txt");
+    fs.writeFileSync(f, "alpha\nbeta", "utf8");
+    const r = await editTool({ cwd }, { path: "lf.txt", oldString: "alpha\nbeta", newString: "ALPHA\nBETA" });
     strictEqual(r.ok, true);
     strictEqual(fs.readFileSync(f, "utf8"), "ALPHA\nBETA");
     fs.rmSync(f, { force: true });
