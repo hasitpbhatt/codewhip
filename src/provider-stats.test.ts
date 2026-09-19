@@ -108,4 +108,21 @@ describe("provider-stats", () => {
     ok(out.includes("model-listing checks"), "expected a listing-check row");
     ok(!/\(listing\):/.test(out), "(listing) must not render as a model name");
   });
+
+  it("computes the rolling recency window and lastCallTs for auto gating", () => {
+    // 25 ok calls then one quota failure: lifetime ≈ 0.96, but the last-20
+    // window (19 ok + 1 fail) is what auto judges on. lastCallTs is the newest
+    // record regardless of outcome.
+    const records: ProviderCallRecord[] = [];
+    for (let i = 0; i < 25; i++) {
+      records.push(rec({ outcome: "ok", ts: `2026-09-11T00:${String(i).padStart(2, "0")}:00.000Z` }));
+    }
+    records.push(rec({ outcome: "quota", status: 429, ts: "2026-09-11T01:00:00.000Z" }));
+    const mh = summarizeCalls(records).providers[0]!.models[0]!;
+    strictEqual(mh.total, 26);
+    strictEqual(mh.recentTotal, 20);
+    strictEqual(mh.recentOk, 19);
+    strictEqual(mh.recentSuccessRate, 0.95);
+    strictEqual(mh.lastCallTs, "2026-09-11T01:00:00.000Z");
+  });
 });

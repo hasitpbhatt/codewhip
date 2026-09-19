@@ -41,6 +41,13 @@ export type ProviderCallRecord = {
 /** Model id used for `/models` listing checks — a check, not a model. */
 export const LISTING_MODEL = "(listing)";
 
+/**
+ * Recency window for auto-pick health gating: candidates are judged on their
+ * last N calls before their lifetime record, so recovery is immediate instead
+ * of waiting for lifetime dilution that an excluded model can never earn.
+ */
+export const RECENT_WINDOW = 20;
+
 const FILE = "provider-analytics.jsonl";
 
 function filePath(): string {
@@ -143,6 +150,12 @@ export type ModelHealth = {
   ok: number;
   failed: number;
   successRate: number; // 0..1
+  /** ISO ts of the newest recorded call (any outcome) — staleness input. */
+  lastCallTs?: string;
+  /** Rolling last-RECENT_WINDOW calls — the recency view auto gates on. */
+  recentOk: number;
+  recentTotal: number;
+  recentSuccessRate: number; // 0..1
   lastFailureTs?: string;
   lastFailureOutcome?: ProviderCallOutcome;
   errorKinds: Record<string, number>;
@@ -201,6 +214,12 @@ export function summarizeCalls(records: ProviderCallRecord[]): ProviderHealthSum
     const errorKinds: Record<string, number> = {};
     let lastFailureTs: string | undefined;
     let lastFailureOutcome: ProviderCallOutcome | undefined;
+    // Rolling recency window (chronological by ts — append order is normally
+    // already chronological; the sort pins it against clock skew).
+    const recent = [...recs]
+      .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+      .slice(-RECENT_WINDOW);
+    const recentOk = recent.filter((r) => r.outcome === "ok").length;
     for (const r of recs) {
       total += 1;
       if (r.outcome === "ok") {
@@ -230,6 +249,10 @@ export function summarizeCalls(records: ProviderCallRecord[]): ProviderHealthSum
       ok,
       failed,
       successRate: total === 0 ? 0 : ok / total,
+      lastCallTs: recs.reduce<string | undefined>((max, r) => (max === undefined || r.ts > max ? r.ts : max), undefined),
+      recentOk,
+      recentTotal: recent.length,
+      recentSuccessRate: recent.length === 0 ? 0 : recentOk / recent.length,
       lastFailureTs,
       lastFailureOutcome,
       errorKinds,

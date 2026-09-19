@@ -1,7 +1,7 @@
 import { PROVIDERS, type ProviderId } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
 import { resolveKey } from "./auth.js";
-import { readProviderCalls, summarizeCalls } from "./provider-stats.js";
+import { readProviderCalls, summarizeCalls, type ModelHealth } from "./provider-stats.js";
 import type { OutcomeRecord } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
@@ -62,15 +62,62 @@ export function classify(prompt: string): { taskClass: TaskClass; reason: string
  * remote model is an explicit `--provider`, which is informed consent and is
  * logged on the receipt line.
  */
+/**
+ * After this much silence a model's record is stale: the auto gate treats it
+ * as unproven again instead of condemned. Without the reset an excluded model
+ * never earns the new calls that would rehabilitate it — a bad hour would
+ * lock it out of auto forever (the explore/exploit ratchet).
+ */
+export const STALE_HEALTH_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Share of CLI random-mode auto picks spent on candidates the health gate
+ * excluded but that remain eligible and past their failure TTL — the epsilon
+ * in explore/exploit, so a failed route is re-discovered instead of never
+ * tried again. serve explores structurally: its health weights keep gated
+ * models in the pool at reduced probability instead of hard-excluding.
+ */
+export const EXPLORE_RATE = 0.1;
+
+/**
+ * Recency-aware success rate for auto gating: the rolling RECENT_WINDOW once
+ * it holds >= 5 calls, else the lifetime rate. Recency dominates so recovery
+ * is immediate; the lifetime floor keeps thin history honest.
+ */
+export function healthRate(mh: ModelHealth): number {
+  return mh.recentTotal >= 5 ? mh.recentSuccessRate : mh.successRate;
+}
+
+/**
+ * The auto-pick health gate (CLI random mode + serve `model: "auto"` — one
+ * rule, so the two cannot drift). No record or thin history passes (no data
+ * is not failure); stale records pass (unproven again, STALE_HEALTH_MS);
+ * otherwise the recency-aware rate must clear `floor`.
+ */
+export function healthPasses(mh: ModelHealth | undefined, floor: number): boolean {
+  if (mh === undefined) return true;
+  if (mh.total < 5) return true;
+  if (mh.lastCallTs !== undefined && Date.now() - new Date(mh.lastCallTs).getTime() > STALE_HEALTH_MS) return true;
+  return healthRate(mh) >= floor;
+}
+
+/**
+ * Explore/exploit pool selection for uniform random auto picks. Spends
+ * ~EXPLORE_RATE of picks (and all of them when nothing currently passes) on
+ * gated-out-but-eligible candidates; injected `rng` keeps it testable.
+ */
+export function pickExplorePool<T>(pass: T[], gatedOut: T[], rng: () => number): { pool: T[]; exploring: boolean } {
+  const wantExplore = gatedOut.length > 0 && (pass.length === 0 || rng() < EXPLORE_RATE);
+  return wantExplore ? { pool: gatedOut, exploring: true } : { pool: pass, exploring: false };
+}
+
 function healthOk(providerId: ProviderId, model: string) {
   const records = readProviderCalls();
   const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);
   if (!ph) return true; // no data yet
   const mh = ph.models.find((m) => m.model === model);
-  if (!mh) return true;
-  if (mh.total < 5) return true; // not enough data
-  return mh.successRate >= 0.7;
+  return healthPasses(mh, 0.7);
 }
 
 export const TTL_MS = {
@@ -122,10 +169,11 @@ export function isAutoEligible(providerId: string, model: string): boolean {
   return process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED === "1";
 }
 
-function pickRandomHealthy(): Route | { error: string } {
+export function pickRandomHealthy(rng: () => number = Math.random): Route | { error: string } {
   const configs = listAllProviderConfigs();
   const summary = summarizeCalls(readProviderCalls());
-  const candidates: { provider: string; model: string }[] = [];
+  const pass: { provider: string; model: string }[] = [];
+  const gatedOut: { provider: string; model: string }[] = [];
   for (const cfg of configs) {
     const provider = cfg.id as ProviderId;
     const model = cfg.defaultModel;
@@ -133,14 +181,20 @@ function pickRandomHealthy(): Route | { error: string } {
     if (isRecentlyFailed(provider, model)) continue;
     const ph = summary.providers.find((p) => p.provider === provider);
     const mh = ph?.models.find((m) => m.model === model);
-    if (mh && mh.total >= 5 && mh.successRate < 0.5) continue;
-    candidates.push({ provider, model });
+    (mh === undefined || healthPasses(mh, 0.5) ? pass : gatedOut).push({ provider, model });
   }
-  if (candidates.length === 0) {
+  const { pool, exploring } = pickExplorePool(pass, gatedOut, rng);
+  if (pool.length === 0) {
     return { error: "auto random: no healthy provider/model combos available — pass --provider to override" };
   }
-  const pick = candidates[Math.floor(Math.random() * candidates.length)];
-  return { provider: pick.provider as ProviderId, model: pick.model, note: "auto random → provider health & TTL deactivation" };
+  const pick = pool[Math.floor(rng() * pool.length)];
+  return {
+    provider: pick.provider as ProviderId,
+    model: pick.model,
+    note: exploring
+      ? "auto random → exploration probe (health-gated, TTL-respecting)"
+      : "auto random → provider health & TTL deactivation",
+  };
 }
 
 export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: string } {
