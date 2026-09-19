@@ -132,8 +132,8 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 | Signed releases | 🔲 Planned | See `docs/roadmap.md` |
 | OpenSSF Best Practices badge | 🔲 Planned | Scorecard action in CI |
 | CHANGELOG | 🔲 Planned | Per-release changelog |
+| License | ✅ MIT | MIT stays — no AGPL change. Freedom-first, no copyleft |
 | Multi-maintainer governance | 🔲 Planned | Path defined in `MAINTAINERS.md` |
-| AGPL for `serve` | 🔲 Decision needed | Copyleft for network-facing component |
 
 ## Governance docs map
 
