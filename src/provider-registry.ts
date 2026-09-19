@@ -9,7 +9,7 @@
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" |   "mkeai" | "apiyi" | "codiv" | "openai" | "perplexity" | "writer" | "lambda" | "featherless" | "metallama" | "yi" | "baichuan" | "internlm" | "iflytek" | "reka" | "sarvam" | "typhoon" | "plamo" | "liquid" | "inception" | "nous" | "byteplus" | "xiaomi" | "arcee" | "heroku" | "modal" | "baseten" | "predibase" | "monsterapi" | "wandb" | "aimlapi" | "bytez" | "synthetic" | "nanogpt" | "kie" | "morph" | "galadriel" | "v0" | "factory" | "poe" | "wrouter" | "arouter" | "tokenrouter";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" |   "mkeai" | "apiyi" | "codiv" | "openai" | "perplexity" | "writer" | "lambda" | "featherless" | "metallama" | "yi" | "baichuan" | "internlm" | "iflytek" | "reka" | "sarvam" | "typhoon" | "plamo" | "liquid" | "inception" | "nous" | "byteplus" | "xiaomi" | "arcee" | "heroku" | "modal" | "baseten" | "predibase" | "monsterapi" | "wandb" | "aimlapi" | "bytez" | "synthetic" | "nanogpt" | "kie" | "morph" | "galadriel" | "v0" | "factory" | "poe" | "wrouter" | "arouter" | "tokenrouter" | "darkbloom";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -171,6 +171,10 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   // 2026-09-20: tokenrouter — OpenAI-compatible gateway routing 13 providers,
   // flat subscription, zero token markup. API key format tr_....
   "tokenrouter",
+  // 2026-09-19: darkbloom.dev — private inference on attested Apple Silicon,
+  // OpenAI-compatible (base https://api.darkbloom.dev/v1, keys eigeninference-*).
+  // Prepaid credit, so builtin-only: NOT in FREE_CHAIN.
+  "darkbloom",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -2018,5 +2022,21 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://docs.tokenrouter.io",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "14-day free trial, then flat subscription — no card on free plan; 403 auto_routing_unavailable on free tier with auto model",
+  },
+  // 2026-09-19: darkbloom.dev — private inference on attested Apple Silicon
+  // (Layr-Labs d-inference). OpenAI-compatible; keys start with
+  // "eigeninference-". Prepaid credit: user carries a 150M-token balance for
+  // the prism-family model. Deliberately NOT in FREE_CHAIN.
+  darkbloom: {
+    id: "darkbloom",
+    brand: "darkbloom",
+    baseUrl: "https://api.darkbloom.dev",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "ternary-bonsai-2-27b",
+    envVar: "DARKBLOOM_API_KEY",
+    keyUrl: "https://console.darkbloom.dev/api-console",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    contextWindow: 262144,
   },
 };

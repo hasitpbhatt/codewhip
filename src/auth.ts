@@ -161,6 +161,8 @@ type StoredCreds = {
   arouterApiKey?: unknown;
   /** id is "tokenrouter" (api.tokenrouter.io). */
   tokenrouterApiKey?: unknown;
+  /** id is "darkbloom" (api.darkbloom.dev, keys start eigeninference-). */
+  darkbloomApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -308,6 +310,7 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   wrouter: "wrouterApiKey",
   arouter: "arouterApiKey",
   tokenrouter: "tokenrouterApiKey",
+  darkbloom: "darkbloomApiKey",
 };
 
 function customFieldFor(provider: string): string {
