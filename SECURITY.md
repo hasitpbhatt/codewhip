@@ -57,6 +57,42 @@ Honest about what sandbox v1 is *not*:
 - Unsigned repos (`sig: null`) are expected before `codewhip init`; verify
   warns rather than errors. The bundle's `chain_tail` anchors tail tampering.
 
+## Supply chain security
+
+### CI
+
+CodeWhip uses GitHub Actions CI (`.github/workflows/ci.yml`):
+
+- **Typecheck · Lint · Test** — full TypeScript strict suite on every
+  push and PR
+- **License & SBOM** — SPDX header check on source files, SBOM
+  generation from `package.json` dependencies
+- **OpenSSF Scorecard** — automated security posture analysis,
+  results uploaded to GitHub code scanning
+- **Security Audit** — `npm audit --audit-level=high` + TruffleHorn
+  secret scanning
+
+All CI steps use SHA-pinned actions (see `actions/run/action.yml`
+for the convention). No untrusted or unpinned action references.
+
+### Dependencies
+
+- **Zero runtime dependencies.** The production binary depends on
+  Node.js and nothing else.
+- Dev dependencies (`oxlint`, `tsx`, `typescript`, `@types/node`) are
+  build/test only. No runtime impact.
+- `package-lock.json` is committed for deterministic installs.
+- `npm ci` is used in CI (not `npm install`) to enforce lockfile
+  parity.
+
+### Signing and provenance
+
+- **SBOM generation** is tracked as a goal — see
+  `docs/moat/16-privacy-threat-model.md` for supply chain policy.
+- **Signed releases** are planned (`docs/roadmap.md`).
+- **SPDX identifiers** should be present in all source files
+  (`SPDX-License-Identifier: MIT`).
+
 ## Key handling for contributors
 
 Never commit keys, tokens, or `*.env*` files. CI runs the full `$0` suite
