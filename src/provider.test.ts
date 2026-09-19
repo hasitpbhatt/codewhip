@@ -217,7 +217,7 @@ describe("provider", () => {
       const port = makePort(id, "test-key");
       ok(typeof port === "function", id);
     }
-    strictEqual(PROVIDER_IDS.length, 135);
+    strictEqual(PROVIDER_IDS.length, 136);
     strictEqual(parseProviderId("sensenova"), "sensenova");
     strictEqual(parseProviderId("alibaba"), "alibaba");
     strictEqual(parseProviderId("llm7"), "llm7");
