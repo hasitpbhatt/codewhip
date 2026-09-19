@@ -85,6 +85,17 @@ docs: record four-lens H1 gap audit, correct README drift
 
 One concern per commit. Don't mix a feature with a revamp.
 
+## DCO
+
+Every contribution must be signed off with `Signed-off-by:` in the
+commit message. By signing off, you certify that you have the right to
+submit the contribution under the project's MIT license and agree to
+the Developer Certificate of Origin (DCO) terms
+(https://developercertificate.org/).
+
+PRs without a `Signed-off-by` line will not be merged. The CI does not
+enforce this automatically — the maintainer checks before merging.
+
 ## PR checklist
 
 - [ ] `npm run typecheck` passes
@@ -94,6 +105,8 @@ One concern per commit. Don't mix a feature with a revamp.
 - [ ] Run-affecting changes preserve cost receipts
 - [ ] README updated if commands, flags, or behavior changed
 - [ ] No secrets in the diff (keys, tokens, `*.env*` — see `SECURITY.md`)
+- [ ] `Signed-off-by: Name <email>` in the commit message
+- [ ] Added provider? Update `PROVIDER_IDS` count in `provider.test.ts` and `auth.test.ts`
 
 ## Safety
 

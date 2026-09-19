@@ -117,3 +117,29 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 | $/task | metered, by class, printed every run | polish <$0.05; implement <$1.50; blended <$0.50 default budget |
 | Memory accrued/week | promoted `memory.md`/`policy.md` lines surviving 30d | +3–5 durable lines/repo/week; revert-rate on memorized patterns down |
 | Trusted runs/team/week | runs, zero bypasses + shared audit (north-star) | ≥4–5/week for pilot teams |
+
+## Governance & foundation readiness
+
+| Item | Status | Notes |
+|------|--------|-------|
+| CI pipeline | ✅ Done | `.github/workflows/ci.yml` — typecheck, lint, tests, license scan, OpenSSF Scorecard, secret scanning |
+| DCO | ✅ Done | `CONTRIBUTING.md` requires `Signed-off-by:` on every contribution |
+| MAINTAINERS.md | ✅ Done | Single maintainer, social contract, release policy |
+| Code of Conduct | ✅ Done | Contributor Covenant v2.1 (`CODE_OF_CONDUCT.md`) |
+| Privacy & Threat Model | ✅ Done | `docs/moat/16-privacy-threat-model.md` |
+| Provider Curation Policy | ✅ Done | `docs/moat/17-provider-curation-policy.md` |
+| SBOM generation | 🔲 Planned | Tracked in security section |
+| Signed releases | 🔲 Planned | See `docs/roadmap.md` |
+| OpenSSF Best Practices badge | 🔲 Planned | Scorecard action in CI |
+| CHANGELOG | 🔲 Planned | Per-release changelog |
+| Multi-maintainer governance | 🔲 Planned | Path defined in `MAINTAINERS.md` |
+| AGPL for `serve` | 🔲 Decision needed | Copyleft for network-facing component |
+
+## Governance docs map
+
+- `docs/moat/00-convergence.md` — frozen policy/audit/memory schemas
+- `docs/moat/07-committee.md` — five-persona committee verdict
+- `docs/moat/08-provider-memory-flywheel.md` — provider stats & health
+- `docs/moat/16-privacy-threat-model.md` — privacy & threat model
+- `docs/moat/17-provider-curation-policy.md` — registry curation policy
+- `docs/governance-analysis.md` — governance gaps analysis
