@@ -498,6 +498,21 @@ bill pay-go. Reach it with `--provider hashneuron`. It is an **aggregator, not a
 model vendor**: its operator sees every prompt in plaintext, so never send
 secrets through it.
 
+`codiv` (2026-09-18) is a first-party **OpenAI-compatible inference host** at
+`https://api.codiv.ai` — no adapter needed, just a registry row. It serves open
+"System One" models; the chat default is `diffusiongemma-26b` (DiffusionGemma
+26B, a diffusion LM — output is denoised in 64-token blocks, so completions
+take seconds rather than milliseconds, and the server ignores sampling params
+codewhip never sends). Streaming, function tool calls, and OpenAI-shaped errors
+all match the shared adapter's expectations. It needs a key (`CODIV_API_KEY`;
+free signup, no card, at `https://codiv.ai/signup`): every account gets 10M
+text-generation tokens "while the experiment runs" (600 req/min), and an
+exhausted grant answers 429 `insufficient_quota` rather than a bill — the
+receipt prices it $0, but the allotment is finite. Like the one-time grants it
+stays **out of the free chain** (renewability unconfirmed); reach it with
+`--provider codiv`. Through `codewhip serve` it is exposed to any OpenAI
+client as `codiv:diffusiongemma-26b`.
+
 Every free-tier default is priced `$0` on the receipt — never fiction-priced,
 and non-free models on the same gateway print `cost untracked`. A loopback local
 runtime is priced `$0` too: that is a fact about your own machine rather than a
