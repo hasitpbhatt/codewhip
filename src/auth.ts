@@ -117,6 +117,8 @@ type StoredCreds = {
   nioApiKey?: unknown;
   mkeaiApiKey?: unknown;
   apiyiApiKey?: unknown;
+  /** id is "codiv" (api.codiv.ai) — OpenAI-compatible diffusion-LM host. */
+  codivApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -223,6 +225,7 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   nio: "nioApiKey",
   mkeai: "mkeaiApiKey",
   apiyi: "apiyiApiKey",
+  codiv: "codivApiKey",
 };
 
 function customFieldFor(provider: string): string {

@@ -252,6 +252,10 @@ const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> =
   // expires in 30 days, so a $0 sticker would be fiction.
   "zai:glm-5.3-flash": { input: 0, output: 0 },
   "empero:glm-5.3-flash": { input: 0, output: 0 },
+  // codiv (2026-09-18): free experiment tier — no card and no billing path;
+  // an exhausted grant answers 429 insufficient_quota rather than a bill, so
+  // $0 is the provider's own sticker, not a guess.
+  "codiv:diffusiongemma-26b": { input: 0, output: 0 },
 };
 
 export function estimateCost(provider: ProviderId, model: string, prompt: number, completion: number): number | null {

@@ -48,6 +48,21 @@ shape; eval adds a machine-graded measurement layer.
   `delegate`/`delegate_many` guidance for read-heavy exploration, and an
   answer shape (lead with outcome, then evidence). Still deliberately
   token-efficient — it is re-sent every turn.
+- **Builtin provider `codiv`** (api.codiv.ai): first-party OpenAI-compatible
+  inference host — native `/v1/chat/completions` with standard Bearer auth,
+  the standard `choices`/`usage` envelope, SSE with usage on the final chunk,
+  and function `tools`/`tool_choice`, so it rides the shared adapter as a pure
+  registry row (no new adapter code). Default model `diffusiongemma-26b`: a
+  diffusion LM denoises output in 64-token blocks, so completions take seconds
+  (the 120s default holds) and the server ignores sampling params codewhip
+  never sends. Free experiment tier — no card, 10M text-generation tokens per
+  account, 600 req/min — priced $0 on receipts (the provider's own sticker; an
+  exhausted grant answers 429 `insufficient_quota` rather than a bill). Out of
+  the free chain like the one-time grants (renewability unconfirmed); reach it
+  with `--provider codiv`, key at `CODIV_API_KEY` (signup:
+  https://codiv.ai/signup). `codewhip serve` fronts the whole registry, so
+  codiv is exposed to any OpenAI client as `codiv:diffusiongemma-26b` with no
+  serve-side changes.
 
 ### Fixed
 

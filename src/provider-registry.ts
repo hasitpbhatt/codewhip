@@ -9,7 +9,7 @@
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" | "mkeai" | "apiyi";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" | "mkeai" | "apiyi" | "codiv";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -123,6 +123,11 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "nio", // NIO gongyi-group relay — volatile, fast timeout.
   "mkeai", // MKEAI trial quota — NOT free, builtin only.
   "apiyi", // ApiYi trial quota — NOT free, builtin only.
+  // 2026-09-18: codiv.ai — first-party OpenAI-compatible inference host
+  // (DiffusionGemma 26B diffusion LM) with a native /v1/chat/completions.
+  // Free per-account allotment "while the experiment runs" — renewable status
+  // unconfirmed, so NOT in FREE_CHAIN (trial credit is not free).
+  "codiv",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -1477,5 +1482,21 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://apiyi.com",
     timeoutMs: 8000,
     rateLimitedHint: "trial quota (~$0.1 one-time) — NOT free, bills after the grant",
+  },
+  // Model id is from codiv's official API reference (only chat model listed),
+  // not a harvested slug — still confirm with `codewhip models codiv`.
+  // Diffusion LM: output denoised in 64-token blocks, completions take
+  // seconds — the 120s default is correct here, not the relay timeout.
+  codiv: {
+    id: "codiv",
+    brand: "codiv",
+    baseUrl: "https://api.codiv.ai",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "diffusiongemma-26b",
+    envVar: "CODIV_API_KEY",
+    keyUrl: "https://codiv.ai/signup",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "free experiment tier: 600 req/min/key; insufficient_quota means the account's token grant is spent",
   },
 };
