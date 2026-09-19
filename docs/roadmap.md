@@ -63,9 +63,15 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
    deepinfra, fireworks, cometapi, mkeai, apiyi stay out as trial/paid). Same
    day: `codiv` (api.codiv.ai — OpenAI-compatible diffusion-LM host, free
    per-account grant while the experiment runs) joins builtin-only, out of the
-   chain like the one-time grants. Also
+   chain like the one-time grants. 2026-09-19 cross-harvest (OmniRoute
+   registry + awesome-freellm/awesome-free-llm-apis/cool-ai-stuff, deduped):
+   96 → 134 builtins (incl. user-sourced `wrouter`/`arouter`, docs-verified),
+   all builtin-only via `--provider` (quotas unverified);
+   same day: `run --auto-failover` (the $0 chain with a quiet terminal —
+   hops recorded, not printed; private stays head-only) and silent serve
+   retry on `auto` (≤3 upstream attempts, winner in `serviced_by`; pinned
+   models never hop). Also
    added 2026-09-13:
-  `1min` as the first non-OpenAI-shaped provider (its own `port: "onemin"`
   adapter: flattened prompt, prompt-injected tool calls, estimated usage) and
   `codewhip serve`, an OpenAI-compatible HTTP front end over the whole registry
   — which is what lets a client that cannot speak 1min's schema still use it.

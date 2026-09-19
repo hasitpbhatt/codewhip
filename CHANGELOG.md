@@ -5,6 +5,44 @@ All notable changes to this project are documented here. Format follows
 [SemVer](https://semver.org/). Every run prints its receipts
 (`tokens / model mix / $`) — cost behavior changes are called out explicitly.
 
+## [Unreleased]
+
+Cost behavior: new builtins are unpriced (`cost untracked`, console
+pointer) except where noted; the free chain is unchanged (43 hops).
+
+### Added
+
+- **38 providers (96 → 134 builtins)** — OmniRoute registry + the
+  awesome-freellm/awesome-free-llm-apis/cool-ai-stuff readmes, deduped
+  against existing rows: first-party labs and clouds (openai, perplexity,
+  writer, lambda, featherless, metallama, yi, baichuan, internlm, iflytek,
+  reka, sarvam, typhoon, plamo, liquid, inception, nous, byteplus, xiaomi,
+  arcee) and keyed aggregators/GPU clouds (heroku, modal, baseten,
+  predibase, monsterapi, wandb, aimlapi, bytez, synthetic, nanogpt, kie,
+  morph, galadriel, v0, factory, poe) — plus user-sourced `wrouter`
+  (AccelsRouter, trial credit) and `arouter` (ARouter keyed gateway),
+  endpoints verified against their own docs. Reachable via `--provider`;
+  none joins `--free` (quotas unverified — trial credit is not free). Left out
+  deliberately: same-backend dupes, oauth/cookie/IDE/web-scraper entries,
+  non-bearer auths, image/audio-only and SDK-only providers, and relays
+  with no verifiable default model.
+- **`run --auto-failover`** — the $0-only chain with a quiet terminal:
+  backend hops are recorded in the outcome/audit (receipt still splits per
+  model) but not printed; total exhaustion still reports what was tried.
+  Private runs stay head-only (consent covers one target). Not with
+  `--free`/`--failover`.
+- **Silent serve retry on `auto`** — a fully-auto request hops to the next
+  healthy target on rate-limit/timeout/5xx (≤3 upstream attempts, each
+  failure server-logged, winner named in `serviced_by`). Pinned
+  `provider:model` requests never hop.
+
+### Fixed
+
+- **Test suite 133s → ~20s** — `background.test.ts` started an immortal
+  `ping` and never stopped it, pinning the runner until the 120s default
+  timeout killed the child. Tests now stop what they start, with an
+  `after()` backstop for leftovers.
+
 ## [0.3.0] — 2026-09-18
 
 Competitive-reality pass (analysis in `docs/moat/10-competitive-reality.md`):

@@ -333,6 +333,47 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
+  it("auto silently hops to the next healthy target on a 429 (client sees 200)", async () => {
+    let calls = 0;
+    const h = await harness({ provider: "auto", model: "auto" }, () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(JSON.stringify({ error: { message: "slow down", type: "rate_limit_error" } }), { status: 429, headers: { "content-type": "application/json" } })
+        : openAiReply("recovered");
+    });
+    try {
+      const res = await post(h.base, { model: "auto", messages: [{ role: "user", content: "hi" }] });
+      strictEqual(res.status, 200);
+      // Two upstream calls, one failure the client never sees.
+      strictEqual(h.upstream.length, 2);
+      const body = (await res.json()) as { choices: Array<{ message: { content: string } }>; serviced_by: string };
+      strictEqual(body.choices[0].message.content, "recovered");
+      ok(typeof body.serviced_by === "string" && body.serviced_by.length > 0, JSON.stringify(body));
+    } finally {
+      await h.close();
+    }
+  });
+  it("a pinned model never hops: its 429 is returned as-is", async () => {
+    const h = await harness({}, () => new Response("slow", { status: 429 }));
+    try {
+      // llm7 is keyless, so this exercises pinning rather than key resolution.
+      const res = await post(h.base, { model: "llm7:default", messages: [{ role: "user", content: "hi" }] });
+      strictEqual(res.status, 429);
+      strictEqual(h.upstream.length, 1);
+    } finally {
+      await h.close();
+    }
+  });
+  it("auto gives up after 3 upstream attempts and returns the last error", async () => {
+    const h = await harness({ provider: "auto", model: "auto" }, () => new Response("down", { status: 503 }));
+    try {
+      const res = await post(h.base, { model: "auto", messages: [{ role: "user", content: "hi" }] });
+      strictEqual(res.status, 502);
+      strictEqual(h.upstream.length, 3);
+    } finally {
+      await h.close();
+    }
+  });
   it("emits a well-formed SSE stream even though the upstream does not stream", async () => {
     const h = await harness({}, () => openAiReply("streamed"));
     try {

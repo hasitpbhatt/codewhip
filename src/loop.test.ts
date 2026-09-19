@@ -458,6 +458,26 @@ describe("loop", () => {
     strictEqual(r.failovers[0]?.from, "empero:m");
     strictEqual(r.failovers[0]?.to, "pollinations:mistral");
   });
+  it("quietFailover records the hop but prints nothing (silent backend)", async () => {
+    const ev: LoopEvent[] = [];
+    const primary = makeFakePort([serverFailure(503)]);
+    const t1 = makeFakePort([textTurn("done")]);
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "empero", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port: primary.port,
+      failovers: [{ label: "pollinations", model: "mistral", port: t1.port }],
+      quietFailover: true,
+      onEvent: (e) => ev.push(e), remembered: listRules(cwd),
+    });
+    strictEqual(r.text, "done");
+    // The hop stays on the audited record (from/to/reason)…
+    strictEqual(r.failovers.length, 1);
+    strictEqual(r.failovers[0]?.from, "empero:m");
+    strictEqual(r.failovers[0]?.to, "pollinations:mistral");
+    ok(r.failovers[0]?.reason.includes("503") === true, r.failovers[0]?.reason);
+    // …but no failover/retry chatter reaches the terminal.
+    strictEqual(ev.filter((e) => e.kind === "failover" || e.kind === "retry").length, 0);
+  });
   it("a terminal failure still never hops (the rotatable class is not a blanket)", async () => {
     const primary = makeFakePort([otherFailure()]);
     const t1 = makeFakePort([textTurn("done")]);
