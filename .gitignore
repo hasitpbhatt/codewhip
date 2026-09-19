@@ -3,6 +3,7 @@ dist/
 .codewhip/
 .opencode/
 .zcode/
+.workbuddy-ai/
 *.log
 *.tgz
 .env
