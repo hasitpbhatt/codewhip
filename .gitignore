@@ -2,6 +2,7 @@ node_modules/
 dist/
 .codewhip/
 .opencode/
+.zcode/
 *.log
 *.tgz
 .env
