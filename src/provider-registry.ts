@@ -1,12 +1,11 @@
 /**
  * Builtin provider registry — pure data, zero imports.
  *
- * Single source of truth for the provider table. Lives in its own
- * Node-free module because two consumers with opposite runtime
- * constraints both need it: this CLI's provider.ts (which uses node:fs
- * for host pinning and key storage) and src/lib + the Cloudflare worker
- * (which must never pull node builtins). Adding a builtin is still ONE
- * table row here and nothing else.
+ * Single source of truth for the provider table. Kept as a zero-import
+ * leaf: pure data stays out of the wire/auth machinery in provider.ts
+ * (which needs node:fs for host pinning and key storage), and any future
+ * non-Node consumer can reuse the table without dragging builtins in.
+ * Adding a builtin is still ONE table row here and nothing else.
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
@@ -181,6 +180,16 @@ export type ProviderConfig = {
    * needs its own translation layer.
    */
   port?: PortKind;
+  /**
+   * Context window (tokens) of this row's DEFAULT model, set ONLY when
+   * verified. The run's compaction ceiling derives from it (0.7×). Never
+   * fiction: an unverified window stays undefined and keeps the default 60k
+   * ceiling — a wrong number here either starves the model of context or
+   * kills runs on small-window relays (see
+   * docs/moat/torvalds-architecture-review.md). Windowless 400s are
+   * reclassified as rotation-class so the run survives regardless.
+   */
+  contextWindow?: number;
 };
 
 /**

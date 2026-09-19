@@ -33,11 +33,23 @@ export function estimateTokens(messages: LoopMsg[]): number {
 }
 
 function charLength(m: LoopMsg): number {
-  let chars = m.content.length + 24;
+  let chars = weightedLength(m.content) + 24;
   if (m.toolCalls !== undefined) {
-    for (const c of m.toolCalls) chars += c.name.length + c.argsJson.length + 16;
+    for (const c of m.toolCalls) chars += weightedLength(c.name) + weightedLength(c.argsJson) + 16;
   }
   return chars;
+}
+
+/**
+ * Token-weighted length: ASCII ≈ 4 chars/token, every non-ASCII codepoint
+ * (CJK, Cyrillic, emoji) ≈ 1 token. Plain chars/4 underestimated CJK ~4× —
+ * compaction fired late in exactly the killing direction
+ * (docs/moat/torvalds-architecture-review.md).
+ */
+function weightedLength(s: string): number {
+  let w = 0;
+  for (const ch of s) w += (ch.codePointAt(0) ?? 0) > 0x7f ? 4 : 1;
+  return w;
 }
 
 /** One contiguous run of messages: an assistant (or user/system) turn plus any tool responses it owns. */

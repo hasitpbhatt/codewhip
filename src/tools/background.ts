@@ -1,8 +1,8 @@
-import { execFile, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, type ChildProcess } from "node:child_process";
 import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
-import { CHAIN_RX, matchDenylist, matchWorktreeEscape } from "../policy.js";
+import { CHAIN_RX, matchDenylist, matchScriptBlock, matchWorktreeEscape } from "../policy.js";
 import { appendEntry } from "../audit.js";
 import { sha256Hex } from "../hash.js";
 
@@ -104,8 +104,34 @@ function guard(command: string): string | null {
     return "bash: shell chaining/statement separation is denied (newlines, ;, |, &, <, >, `, $())";
   }
   const escape = matchWorktreeEscape(command);
+  if (escape === null) {
+    const block = matchScriptBlock(command);
+    if (block !== null) return `bash: denied — ${block} (non-overridable)`;
+  }
   if (escape !== null) return `bash: denied — ${escape} (non-overridable)`;
   return null;
+}
+
+/**
+ * Kill the WHOLE process tree. On Windows, `child.kill()` (Node's SIGTERM)
+ * maps to TerminateProcess on the direct child only — the powershell.exe
+ * shell dies and every descendant (the dev server npm spawned) survives
+ * holding its port, which made every timed-out background task leak. `taskkill
+ * /T /F` takes the tree. On POSIX the child is spawned detached (own process
+ * group), so a group signal reaches npm/node descendants too.
+ */
+function treeKill(pid: number): void {
+  if (process.platform === "win32") {
+    try {
+      execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } catch { /* already gone */ }
+  } else {
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+    }
+  }
 }
 
 function spawn(cwd: string, command: string, timeoutMs: number): TaskState {
@@ -125,8 +151,24 @@ function spawn(cwd: string, command: string, timeoutMs: number): TaskState {
     timedOut: false,
     done: false,
     output: "",
-    child: execFile(shell, shellArgs, { cwd, timeout: timeoutMs, maxBuffer: 512 * 1024, windowsHide: true }),
+    // Node's own `timeout` is a BACKSTOP 5s after ours (in case treeKill
+    // fails); the real deadline is the kill timer below, which takes the
+    // whole tree instead of orphaning it.
+    child: execFile(shell, shellArgs, {
+      cwd,
+      timeout: timeoutMs + 5000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+      ...(isWin ? {} : { detached: true }),
+    }),
   };
+  let exited = false;
+  const killTimer = setTimeout(() => {
+    if (exited || state.killed || state.child.pid === undefined) return;
+    state.timedOut = true;
+    treeKill(state.child.pid);
+  }, timeoutMs);
+  killTimer.unref?.();
   let buf = "";
   const append = (s: string): void => {
     buf += s;
@@ -137,6 +179,8 @@ function spawn(cwd: string, command: string, timeoutMs: number): TaskState {
   state.child.stderr?.on("data", (d) => append(d.toString()));
   state.child.on("error", (err) => append(`\n[error] ${err.message}`));
   state.child.on("close", (code, signal) => {
+    exited = true;
+    clearTimeout(killTimer);
     state.exitCode = code;
     state.done = true;
     if (signal === "SIGTERM" || state.killed) state.killed = true;
@@ -252,10 +296,13 @@ export async function taskStop(
     return { ok: false, output: out };
   }
   state.killed = true;
-  if (!state.child.killed) {
-    state.child.kill("SIGTERM");
+  if (!state.child.killed && state.child.pid !== undefined) {
+    // Tree kill, not a bare SIGTERM: on win32 a bare kill orphans every
+    // descendant (the dev server keeps the port; the next run dies
+    // EADDRINUSE and blames the tool).
+    treeKill(state.child.pid);
   }
-  const out = `sent SIGTERM to ${state.id}`;
+  const out = `stopped ${state.id} (process tree killed)`;
   audit(ctx, "task_stop", JSON.stringify(args), out);
   return { ok: true, output: out };
 }

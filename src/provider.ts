@@ -22,9 +22,9 @@ import { oneminPort } from "./onemin.js";
 
 /**
  * Registry data (ids, configs, port kinds, timeout bounds) lives in
- * src/provider-registry.ts — a Node-free leaf. src/lib and the Cloudflare
- * worker import it directly; they cannot reach node:fs/path, which this
- * file needs for host pinning and key storage. The re-exports below keep
+ * src/provider-registry.ts — a zero-import data leaf (the former src/lib
+ * fork drifted 20 providers behind the CLI before it was deleted; see
+ * docs/moat/torvalds-architecture-review.md). The re-exports below keep
  * every existing `from "./provider.js"` import working unchanged.
  */
 import {
@@ -225,15 +225,23 @@ function httpFailure(
   // declared maintenance windows, and classifying that as terminal "other"
   // stranded the chain on exactly the failure it exists to survive. 4xx stays
   // terminal — a bad request repeats identically wherever it is sent.
+  // Context-overflow 400s are the one 4xx that does NOT repeat identically
+  // elsewhere: rotation/hop lands on a different model or provider where the
+  // same transcript can fit (and compaction keeps shrinking it). A flat 8k
+  // free relay used to kill the run terminally here — the exact population
+  // the free chain serves. Any other 400 stays terminal.
+  const contextOverflow =
+    status === 400 &&
+    /context length|context length exceeded|too many tokens|maximum context|context_window|prompt is too long|reduce the length/i.test(body);
   const retryable: RetryableKind =
     status === 429
       ? "rate-limited"
       : status === 401 || status === 403
         ? "auth"
-        : status >= 500 || status === 408
+        : status >= 500 || status === 408 || contextOverflow
           ? "server"
           : "other";
-  const failure: PortFailure = { ok: false, error: hint(status, body), retryable };
+  const failure: PortFailure = { ok: false, error: contextOverflow ? `${hint(status, body)} — context overflow joins the rotation/hop path` : hint(status, body), retryable };
   if (retryable === "rate-limited") {
     const wait = parseRetryAfter(res.headers.get("retry-after"));
     if (wait !== undefined) {

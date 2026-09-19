@@ -1,10 +1,10 @@
 /**
  * Free-chain data — pure, Node-free.
  *
- * The ordered --free hop list is shared by the CLI (src/free-providers.ts,
- * which joins registry columns and key resolution) and by src/lib for the
- * Workers build, which cannot import auth/provider persistence. Data only:
- * the reasoning for every hop lives in the comment on FREE_CHAIN.
+ * The ordered --free hop list is data-only (the reasoning for every hop
+ * lives in the comment on FREE_CHAIN); src/free-providers.ts joins the
+ * registry columns and key resolution on top of it. Kept Node-free so
+ * the table stays usable outside the CLI's persistence stack.
  */
 import type { BuiltinProviderId } from "./provider-registry.js";
 

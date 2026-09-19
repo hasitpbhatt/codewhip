@@ -154,6 +154,8 @@ export type LoopResult = {
   compact: { events: number; truncated: number; dropped: number };
   /** Identical idempotent calls served from the run memo instead of re-executing. */
   repeatCalls: number;
+  /** Audit entries this run failed to record (lock contention / disk) — nonzero means history has holes. */
+  auditDropped?: number;
   /**
    * Final transcript (post-compaction) on every exit path — success, error,
    * cancel. `--continue` persists `messages.slice(1)` (system rebuilt fresh
@@ -324,8 +326,23 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let failedOver = 0;
   /** Next unconsumed cross-provider target — each target: at most one hop. */
   let nextTarget = 0;
-  /** Same-provider models already attempted (head first). Bounds rotation: no cycles. */
-  const tried = new Set<string>([args.model]);
+  /**
+   * Same-provider rotation targets, PRE-RESOLVED against the head port and
+   * consumed by index (each once per run — no cycles). Resolving here is the
+   * fix for the /model × rotation interleaving: candidates used to be bare
+   * model ids resolved against whatever port `current` held, so after a live
+   * /model switch a 429 sent head-provider ids to the switched-to provider.
+   * Now rotation is gated on `current.port === args.port` — structurally
+   * impossible off the head port, no flag check to forget.
+   */
+  const rotationTargets: FailoverTarget[] = (args.models ?? [])
+    .filter((m) => m !== args.model)
+    .map((m) => ({ label: args.label, model: m, port: args.port }));
+  let nextRotation = 0;
+  /** Every label:model the run has dialed, for the exhausted-retry message. */
+  const tried = new Set<string>([`${args.label}:${args.model}`]);
+  /** A live /model switch was applied this turn — for terminal-failure attribution. */
+  let switchedThisTurn = false;
   /**
    * Run-scoped memo of idempotent tool results, keyed `tool:argsHash`. Cleared
    * whenever a successful edit/write changes the tree, so a legitimate re-read
@@ -335,6 +352,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
    */
   const memo = new Map<string, { output: string; repeats: number }>();
   let repeatCalls = 0;
+  let auditDropped = 0;
   const addUsage = (p: number, c: number, estimated: boolean): void => {
     promptTokens += p;
     completionTokens += c;
@@ -374,9 +392,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       cancelled = true;
       break;
     }
+    switchedThisTurn = false;
     if (args.takePendingSwitch !== undefined) {
       const switched = args.takePendingSwitch();
-      if (switched !== null) current = { ...switched };
+      if (switched !== null) {
+        current = { ...switched };
+        switchedThisTurn = true;
+      }
     }
     steps = step;
     // Compaction gate (committee ruling 3): when a single provider call's
@@ -429,7 +451,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         attempt.retryable !== "timeout" &&
         attempt.retryable !== "server"
       ) {
-        error = attempt.error;
+        // Terminal (auth/other/bad-request): the switch applied at this
+        // turn's boundary is the failure's context — say so instead of
+        // letting the user's /model silently vanish into an opaque error.
+        error = switchedThisTurn
+          ? `${attempt.error} — the live /model switch to ${current.label}:${current.model} failed terminally (it was applied at this turn's boundary)`
+          : attempt.error;
         break;
       }
       // Timeouts and upstream 5xx join the rotation path: a fresh attempt on a
@@ -443,7 +470,6 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         !timedOut &&
         args.retryWait === true &&
         !waitedOnce &&
-        failedOver === 0 &&
         attempt.retryAfterMs !== undefined &&
         attempt.retryAfterMs > 0
       ) {
@@ -458,20 +484,22 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         waitedMs += wait;
         continue;
       }
-      // Same-provider model rotation: each candidate once per run, on
-      // rate-limit or timeout. Ordered after the single retry-wait and
-      // before cross-provider failover (same-provider moves are cheaper
-      // than provider switches). Transcript carries over: same provider,
-      // same tool specs. Candidates belong to the head provider — once the
-      // chain has hopped they stop applying (wrong ids on the new port).
-      const next = failedOver === 0 ? (args.models ?? []).find((m) => !tried.has(m)) : undefined;
-      if (next !== undefined) {
-        tried.add(next);
+      // Same-provider model rotation: pre-resolved head-port targets, each
+      // once per run, on rate-limit or timeout. Ordered after the single
+      // retry-wait and before cross-provider failover (same-provider moves
+      // are cheaper than provider switches). Transcript carries over: same
+      // provider, same tool specs. Gated on the head PROVIDER label, not a
+      // hop counter — after a live /model switch (or any provider hop) the
+      // head provider's model ids must not be sent to the new port.
+      const rotation = current.label === args.label ? rotationTargets[nextRotation] : undefined;
+      if (rotation !== undefined) {
+        nextRotation += 1;
         const from = `${current.label}:${current.model}`;
-        const to = `${current.label}:${next}`;
+        const to = `${rotation.label}:${rotation.model}`;
+        tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        emit("failover", `${cause} on ${current.model} — rotating to ${next}`);
-        current = { ...current, model: next };
+        emit("failover", `${cause} on ${current.model} — rotating to ${to}`);
+        current = { label: rotation.label, model: rotation.model, port: rotation.port };
         continue;
       }
       // Cross-provider chain: hops in armed order, one target per
@@ -482,17 +510,21 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         failedOver += 1;
         const from = `${current.label}:${current.model}`;
         const to = `${target.label}:${target.model}`;
+        tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
         emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
         current = { label: target.label, model: target.model, port: target.port };
         continue;
       }
-      const triedList = [...tried].map((m) => `${args.label}:${m}`).join(", ");
+      const triedList = [...tried].join(", ");
+      const switchNote = switchedThisTurn
+        ? ` — the live /model switch to ${current.label}:${current.model} failed terminally (it was applied at this turn's boundary)`
+        : "";
       error = timedOut && failedOver === 0 && tried.size === 1
-        ? `${attempt.error} — retry with --models <a,b> to rotate, --failover to switch provider, or --timeout-ms to allow longer calls`
+        ? `${attempt.error}${switchNote} — retry with --models <a,b> to rotate, --failover to switch provider, or --timeout-ms to allow longer calls`
         : failedOver > 0 || tried.size > 1
           ? `${cause} (tried ${triedList}${failedOver > 0 ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — retry list exhausted: wait out the quota, add --retry-wait, or widen the chain with --models/--failover — partial transcript kept`
-          : attempt.error;
+          : `${attempt.error}${switchNote}`;
       break;
     }
     if (cancelled || error !== undefined || turn === null) {
@@ -527,16 +559,21 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       const record = (decision: string, ruleId: string, resultHash: string, actor: AuditActor, preview: string, shape?: string): void => {
         calls.push({ seq, tool: call.name, args_hash: hash, result_hash: resultHash, decision, ruleId, ...(shape === undefined ? {} : { shape }) });
         // Per-call flush (P0): a crash loses at most one entry, never the trail.
-        try {
-          appendEntry(args.cwd, {
-            runId,
-            actor,
-            tool: call.name,
-            args_hash: hash,
-            result_hash: resultHash,
-            policy: `${decision}:${ruleId}`,
-          });
-        } catch { /* appendEntry never throws; belt-and-braces */ }
+        // A non-null return means the entry was NOT recorded — surfaced loudly
+        // here and in the run summary instead of silently shedding history
+        // the verifier cannot know existed.
+        const auditError = appendEntry(args.cwd, {
+          runId,
+          actor,
+          tool: call.name,
+          args_hash: hash,
+          result_hash: resultHash,
+          policy: `${decision}:${ruleId}`,
+        });
+        if (auditError !== null) {
+          auditDropped += 1;
+          emit("policy", `audit: ${auditError}`);
+        }
         trace.push({ seq, tool: call.name, policy: `${decision}:${ruleId}`, actor, preview: redactSecrets(preview).slice(0, 500), subject: redactSecrets(subjectVal) });
       };
       if (def === null || parsed === null) {
@@ -696,7 +733,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                       : toolForRule === "webfetch"
                         ? `every fetch to ${shape}`
                         : `the exact path ${shape}`;
-                  emit("policy", `remembered: ${toolForRule}:${shape} — covers ${scope}, all future runs. Revoke: codewhip remember forget ${toolForRule}:${shape}`);
+                  const composeRisk = toolForRule === "bash" && shape.startsWith("npm run")
+            ? " NOTE: npm run executes package.json scripts — edits to scripts or dependencies become executable without prompting; revoke if that is not what you want."
+            : "";
+          emit("policy", `remembered: ${toolForRule}:${shape} — covers ${scope}, all future runs.${composeRisk} Revoke: codewhip remember forget ${toolForRule}:${shape}`);
                 }
                 ruleId = `${verdict.ruleId}+always`;
               }
@@ -718,12 +758,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         if (hit !== undefined) {
           hit.repeats += 1;
           repeatCalls += 1;
-          const out =
+          // The nudge is appended AFTER the stored output, never instead of
+          // it: compaction may already have truncated what the model saw,
+          // and a repeat is often the legitimate attempt to recover it.
+          const nudge =
             hit.repeats >= REPEAT_NUDGE_AT
-              ? `repeat of ${call.name} (${hit.repeats + 1}x, identical arguments): this result cannot change until the workspace does. Act on what you already have — edit/write — or answer, instead of calling ${call.name} again.`
-              : `${hit.output}\n\n[repeat of ${call.name} with identical arguments — served from this run's memo. Act on this result instead of calling again.]`;
-          messages.push({ role: "tool", toolCallId: call.id, content: capOutput(out) });
-          record("allow", "loop:repeat-call", sha256Hex(out.slice(0, 2000)), "policy", out);
+              ? `\n\n[repeated ${hit.repeats + 1}x with identical arguments: this result cannot change until the workspace does. Act on it — edit/write — or answer, instead of calling ${call.name} again.]`
+              : `\n\n[repeat of ${call.name} with identical arguments — served from this run's memo. Act on this result instead of calling again.]`;
+          const served = capOutput(hit.output) + nudge;
+          messages.push({ role: "tool", toolCallId: call.id, content: served });
+          // Hash the stored (redacted) output, not the note, so the repeat's
+          // result_hash matches the original call's byte-for-byte.
+          record("allow", "loop:repeat-call", sha256Hex(hit.output.slice(0, 2000)), "policy", served);
           emit("tool", `repeat ${call.name} ${preview} (loop:repeat-call, ${hit.repeats + 1}x)`);
           continue;
         }
@@ -767,14 +813,20 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (result.ok && beforeImage !== null && saveCheckpoint(args.cwd, runId, seq, beforeImage)) {
         checkpoints += 1;
       }
-      if (result.ok && (def.name === "edit" || def.name === "write")) {
-        // The tree moved: every memoized read/search is now potentially stale.
-        memo.clear();
-      } else if (result.ok && guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
-        memo.set(memoKey, { output: result.output, repeats: 0 });
-      }
+      // Redact BEFORE anything downstream: the memo stores the same text the
+      // model sees (a memo hit bypasses the push below), and the audit hash
+      // must cover exactly the stored/served bytes.
       const redacted = redactSecrets(result.output);
       const scrubbed = redacted !== result.output;
+      if (result.ok && (def.name === "edit" || def.name === "write" || def.name === "bash")) {
+        // The tree may have moved: every memoized read/search is now
+        // potentially stale. bash is the common mutation path (npm, git,
+        // codegen) — over-invalidation costs one re-read; a stale read
+        // corrupts the next edit.
+        memo.clear();
+      } else if (result.ok && guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
+        memo.set(memoKey, { output: redacted, repeats: 0 });
+      }
       // Redact BEFORE the cap slice so a secret straddling the boundary is
       // still masked; the note tells the model the data it saw was scrubbed.
       messages.push({
@@ -800,6 +852,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     verdict: null,
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
+    ...(auditDropped > 0 ? { audit_dropped: auditDropped } : {}),
     ...(args.parentRunId === undefined ? {} : { parent_run_id: args.parentRunId }),
     ...(args.taskClass === undefined ? {} : { task_class: args.taskClass }),
   });
@@ -817,6 +870,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     toolCalls: calls.length,
     checkpoints,
     compact: { events: compactEvents, truncated: compactTruncated, dropped: compactDropped },
+    auditDropped,
     repeatCalls,
     trace,
     cancelled,

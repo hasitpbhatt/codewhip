@@ -38,7 +38,11 @@ function manifestPath(cwd: string, runId: string): string {
 
 function selfProtectedRel(rel: string): boolean {
   const norm = rel.split(path.sep).join("/");
-  return norm === "codewhip-policy.yaml" || norm.startsWith(".codewhip/");
+  return (
+    norm === "codewhip-policy.yaml" ||
+    norm === "policy.md" ||
+    norm.startsWith(".codewhip/")
+  );
 }
 
 /** Capture the before-image for an edit/write target. Null when not capturable. */

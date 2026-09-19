@@ -9,6 +9,9 @@ import { webfetchOrigin } from "./tools/webfetch.js";
  * Shapes are curated, not generic: only a small allowlist of heads
  * may be remembered. Redirects, pipes and other statement separators
  * make a command unmemorable. The model never sees these lines.
+ * `find` is deliberately NOT memorable: `-exec` is an executor primitive
+ * that would carry arbitrary commands past the chain ban (see
+ * docs/moat/torvalds-architecture-review.md).
  */
 
 /** Heads that may be remembered (multi-word heads are exact). */
@@ -19,7 +22,7 @@ export const MEMORABLE_MULTI_HEADS: string[] = [
 /** Single-word heads that may be remembered. */
 export const MEMORABLE_SINGLE_HEADS: string[] = [
   "ls", "dir", "cat", "type", "get-content", "head", "tail",
-  "find", "where", "pwd", "tree", "echo", "wc",
+  "where", "pwd", "tree", "echo", "wc",
 ];
 
 /** Statement separators, redirects, substitutions, AND variable expansions

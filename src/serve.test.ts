@@ -416,6 +416,34 @@ describe("serve HTTP surface", () => {
       await h.close();
     }
   });
+  it("serves /playground and /auth pages whose inline scripts parse", async () => {
+    const h = await harness({ authUi: true }, () => openAiReply("x"));
+    try {
+      for (const p of ["/playground", "/auth"]) {
+        const res = await h.client(`${h.base}${p}`);
+        strictEqual(res.status, 200, p);
+        const html = await res.text();
+        // Regression guard: a `\n` inside the page template literal once
+        // reached the browser as a raw newline inside a JS string literal,
+        // killing the whole script — the badge stayed on "loading…" forever.
+        const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+        ok(scripts.length > 0, `${p} has an inline script`);
+        for (const src of scripts) {
+          let error: unknown;
+          try {
+            new Function(src);
+          } catch (e) {
+            error = e;
+          }
+          ok(error === undefined, `${p} inline script parses (${String(error)})`);
+        }
+      }
+      const page = await (await h.client(`${h.base}/playground`)).text();
+      ok(page.includes('<option value="auto" selected>'), "auto pre-selected in static markup");
+    } finally {
+      await h.close();
+    }
+  });
   it("serves aggregated stats at /stats but not per-request history", async () => {
     const h = await harness({ token: "s3cret", authUi: true }, () => openAiReply("x"));
     try {

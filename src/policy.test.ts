@@ -1,11 +1,11 @@
 
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
-import { checkPermission, permissionSubject, describePolicy, POLICY_VERSION } from "./policy.js";
+import { checkPermission, matchDenylist, matchScriptBlock, permissionSubject, describePolicy, POLICY_VERSION } from "./policy.js";
 
 describe("policy", () => {
   it("uses the live policy module", () => {
-    strictEqual(POLICY_VERSION, "v1-2026-09-15");
+    strictEqual(POLICY_VERSION, "v1-2026-09-18");
   });
   it("read/search allow by default", () => {
     strictEqual(checkPermission("read", "any").decision, "allow");
@@ -157,6 +157,33 @@ describe("policy", () => {
   it("shell asks by default for unlisted commands", () => {
     strictEqual(checkPermission("bash", "echo hi").decision, "ask");
   });
+
+  it("spelling escapes cannot dodge the denylist (verified bypasses, 2026-09-18)", () => {
+    // .exe suffix: the matcher must see the command the shell sees.
+    strictEqual(matchDenylist("git.exe push --force origin main"), "git push --force");
+    // quote splicing: PowerShell and /bin/sh both splice g"it" into git.
+    strictEqual(matchDenylist('g"it" push --force origin main'), "git push --force");
+    // cmd.exe is the canonical Windows spelling of the nested-shell head.
+    ok(matchDenylist("cmd.exe /c del file.txt") !== null);
+    // PowerShell-native code executors: the argument IS code.
+    ok(matchDenylist("iex (gc .\build.ps1)") !== null);
+    ok(matchDenylist("invoke-expression get-content ./x") !== null);
+    // Script blocks / brace payloads are opaque to string screening. The
+    // brace rule is bash-only (matchScriptBlock): tool args are JSON and
+    // full of braces. start-job is denied at the head regardless.
+    ok(matchDenylist("start-job { remove-item ./build -recurse -force }") !== null);
+    ok(matchScriptBlock("start-job { remove-item ./build -recurse -force }") !== null);
+    ok(matchScriptBlock("find . -name *.log -exec rm {} +") !== null);
+    // JSON tool args must NOT trip the brace rule (regression: the delegate
+    // call was denied for its own braces when the rule lived in matchDenylist).
+    // The rule is wired into the bash path of the ladder only.
+    strictEqual(checkPermission("delegate", '{"agent":"explore","task":"read f.txt"}').decision, "allow");
+    strictEqual(checkPermission("bash", "find . -exec rm {} +").ruleId, "denylist:script-block");
+    // Sanity: ordinary commands are untouched by the normalization.
+    strictEqual(matchDenylist("git status"), null);
+    strictEqual(matchDenylist("npm test"), null);
+  });
+
   it("describePolicy is a non-empty string", () => {
     ok(describePolicy().length > 0);
   });

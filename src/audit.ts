@@ -114,36 +114,78 @@ export function readLastAuditRaw(cwd: string, n: number): string {
 }
 
 /**
- * Append one entry to the chain. Returns false (never throws) on disk
- * failure so the agent loop keeps running. Reads the tail to derive
- * `seq` and `prev_hash`, so sequences are global across runs.
+ * Append one entry to the chain. Returns null on success, or a reason string
+ * on failure (never throws) — the loop surfaces non-null in the run summary
+ * and the outcome record instead of silently shedding history. Reads the
+ * tail to derive `seq` and `prev_hash`, so sequences are global across runs.
  *
- * Hardened (P0): mkdir-lock against concurrent-run seq forks (best-effort,
- * bounded retries), plus fsync per append so a crash loses at most one
- * entry — never the whole buffered trail (loop flushes per call).
+ * Hardened (P0): mkdir-lock against concurrent-run seq forks, plus fsync per
+ * append so a crash loses at most one entry — never the whole buffered trail
+ * (loop flushes per call). The spin budget EXCEEDS the stale-lock threshold
+ * with margin: a waiter that gives up while a live writer still holds the
+ * lock either drops its entry (silently shedding history the verifier cannot
+ * detect) or rmdirs a live lock and forks the seq — both worse than waiting.
+ * The tail read inside the lock is O(1) (last 8KB), never a full-file walk,
+ * so lock hold time does not grow with the log.
  */
-export function appendEntry(cwd: string, input: AuditInput): boolean {
+const STALE_LOCK_MS = 5000;
+const LOCK_SPIN_MS = STALE_LOCK_MS + 3000;
+
+/** Last complete, well-formed entry without reading the whole file. */
+function readTailEntry(cwd: string): AuditEntry | undefined {
+  let raw: string;
+  try {
+    const st = fs.statSync(auditPath(cwd));
+    if (st.size === 0) return undefined;
+    const len = Math.min(st.size, 8192);
+    const fd = fs.openSync(auditPath(cwd), "r");
+    try {
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, st.size - len);
+      raw = buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined; // missing file = empty chain
+  }
+  const lines = raw.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (line === undefined || line.length === 0) continue;
+    try {
+      const e = JSON.parse(line) as AuditEntry;
+      if (typeof e.seq === "number") return e;
+    } catch { /* torn tail line or foreign bytes — keep walking back */ }
+  }
+  return undefined;
+}
+
+export function appendEntry(cwd: string, input: AuditInput): string | null {
   const dir = path.join(cwd, ".codewhip");
   const lockDir = path.join(dir, "audit.lock");
-  for (let i = 0; i < 50; i++) {
+  const deadline = Date.now() + LOCK_SPIN_MS;
+  let acquired = false;
+  while (Date.now() < deadline) {
     try {
       fs.mkdirSync(dir, { recursive: true });
       fs.mkdirSync(lockDir);
+      acquired = true;
       break;
     } catch {
-      if (i === 49) return false;
-      const wait = 10 + Math.floor(Math.random() * 20);
-      const end = Date.now() + wait;
-      while (Date.now() < end) { /* bounded spin, no deps */ }
       try {
         const st = fs.statSync(lockDir);
-        if (Date.now() - st.mtimeMs > 5000) fs.rmdirSync(lockDir);
+        if (Date.now() - st.mtimeMs > STALE_LOCK_MS) fs.rmdirSync(lockDir);
       } catch { /* lock vanished, retry */ }
+      const end = Date.now() + 10 + Math.floor(Math.random() * 20);
+      while (Date.now() < end) { /* bounded spin, no deps */ }
     }
   }
+  if (!acquired) {
+    return `audit lock not acquired within ${LOCK_SPIN_MS}ms — entry NOT recorded (concurrent run or stale lock)`;
+  }
   try {
-    const { entries } = readAuditLog(cwd);
-    const last = entries[entries.length - 1];
+    const last = readTailEntry(cwd);
     const sigBase: AuditEntry = {
       v: 1,
       seq: last === undefined ? 1 : last.seq + 1,
@@ -171,9 +213,9 @@ export function appendEntry(cwd: string, input: AuditInput): boolean {
     } finally {
       fs.closeSync(fd);
     }
-    return true;
-  } catch {
-    return false;
+    return null;
+  } catch (err) {
+    return `audit append failed: ${err instanceof Error ? err.message : "error"}`;
   } finally {
     try {
       fs.rmdirSync(lockDir);
@@ -227,15 +269,55 @@ function keyBirthMs(cwd: string): number | null {
 }
 
 /**
+ * Signed genesis marker: appended by `init` immediately after the keypair is
+ * minted (and once on the repair path when a legacy chain lacks one). It
+ * bounds the forgivable pre-key unsigned prefix: without a marker, an
+ * attacker with filesystem write but no key can prepend fabricated unsigned
+ * entries with backdated timestamps and re-chain them — sha256 linking needs
+ * no secret — and verification would report INTACT on unbounded fake
+ * history. With a marker, the invariant `genesis.seq === unsignedPrefix + 1`
+ * is checkable: any prepend-forgery shifts the marker's seq and breaks it.
+ * The marker's args/result hashes commit to the public key PEM, tying the
+ * bound to this specific trust root.
+ */
+export function appendGenesis(cwd: string): boolean {
+  let keyHash: string;
+  try {
+    keyHash = sha256Hex(fs.readFileSync(path.join(cwd, ".codewhip", "key.pub"), "utf8"));
+  } catch {
+    return false;
+  }
+  return appendEntry(cwd, {
+    runId: "genesis",
+    actor: "policy",
+    tool: "genesis",
+    args_hash: keyHash,
+    result_hash: keyHash,
+    policy: "genesis:key-created",
+  }) === null;
+}
+
+/** Index of the signed genesis marker, or -1 (also -1 when it is unsigned). */
+function genesisIndex(entries: AuditEntry[]): number {
+  return entries.findIndex(
+    (e) => e.tool === "genesis" && e.sig !== null && (e.sig as string).length > 0
+  );
+}
+
+export function hasGenesis(cwd: string): boolean {
+  return genesisIndex(readAuditLog(cwd).entries) !== -1;
+}
+
+/**
  * One interpretation layer, used by `audit --verify`, `demo`, and `trust` so
  * every surface reports the SAME status.
  *
  * Fail-closed on downgrade: stripping every signature produces EXACTLY the
  * "entry unsigned while a key exists" problem set, so "all unsigned" alone
  * must never mean clean. Legit pre-key history has one narrow shape — a
- * contiguous unsigned prefix from genesis whose entries all predate the key
- * birth — and anything else is BROKEN. Residual hole (documented, not
- * fixable locally): an attacker with full filesystem write can re-forge the
+ * contiguous unsigned prefix bounded by a signed genesis marker at exactly
+ * prefix+1 (any prepend-forgery shifts the marker and fails) — and anything
+ * else is BROKEN. Residual hole (documented, not fixable locally): an attacker with full filesystem write can re-forge the
  * whole chain plus a fresh keypair; that breaks cross-references in
  * outcomes/share bundles anchored to the old pubkey and tail instead.
  */
@@ -267,9 +349,40 @@ export function interpretVerification(
         return Number.isFinite(t) && t <= birth;
       });
     if (prefix >= 1 && tailSigned && prefixPreKey) {
+      // Genesis marker (P0): bounds the forgivable pre-key prefix. The
+      // invariant `genesis.seq === prefix + 1` is checkable — any
+      // prepend-forgery (unsigned entries inserted before the signed era)
+      // shifts the marker's seq and fails here. Without a marker the prefix
+      // has no verifiable bound, and the status says so.
+      const g = genesisIndex(entries);
+      if (g === -1) {
+        return {
+          clean: true,
+          status: `INTACT (${prefix} pre-key unsigned ${prefix === 1 ? "entry" : "entries"} pre-dating the key — no genesis marker: the unsigned prefix has no verifiable bound, run init to append one)`,
+          problems: v.problems,
+        };
+      }
+      if (g < prefix) {
+        return {
+          clean: false,
+          status: "BROKEN",
+          problems: [...v.problems, "genesis marker found but unsigned inside the pre-key prefix"],
+        };
+      }
+      const genesis = entries[g] as AuditEntry;
+      if (genesis.seq !== prefix + 1) {
+        return {
+          clean: false,
+          status: "BROKEN",
+          problems: [
+            ...v.problems,
+            `genesis marker at seq ${genesis.seq} but ${prefix} unsigned entries precede it — history was prepended after the signed era began`,
+          ],
+        };
+      }
       return {
         clean: true,
-        status: `INTACT (${prefix} pre-key unsigned ${prefix === 1 ? "entry" : "entries"} pre-dating the key)`,
+        status: `INTACT (signed era starts at genesis seq ${genesis.seq}; ${prefix} pre-key unsigned ${prefix === 1 ? "entry" : "entries"} are legacy — unverifiable by construction, bounded by the marker)`,
         problems: v.problems,
       };
     }

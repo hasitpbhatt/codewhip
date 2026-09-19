@@ -25,7 +25,7 @@ function delegateSpec(): ToolSpec {
     description:
       "Spawn a read-only subagent with a fresh context to investigate, review, or plan, and get its final report. " +
       "Args: agent (subagent name), task (self-contained instructions — the subagent sees nothing else). " +
-      "Children can only read/search/webfetch and cannot delegate. 10-minute timeout.",
+      "Children can only read/search (no network, no delegation). 10-minute timeout.",
     parameters: {
       type: "object",
       properties: {

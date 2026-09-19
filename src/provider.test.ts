@@ -401,6 +401,36 @@ describe("provider", () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  it("context-overflow 400s join the rotation path; other 400s stay terminal", async () => {
+    // A flat 8k relay used to kill --free runs terminally: the overflow 400
+    // repeated identically at the ceiling, but a hop lands on a model or
+    // provider where the same transcript can fit.
+    const stub = stubFetchReturning(() =>
+      new Response(JSON.stringify({ error: { message: "This model's maximum context length is 8192 tokens, however the messages are 10234 tokens long." } }), { status: 400 }));
+    try {
+      const port = makePortForConfig(PROVIDERS.nvidia, "test-key");
+      const res = await port({ model: "m", messages: [{ role: "user", content: "hi" }], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      strictEqual(res.retryable, "server", `overflow must be rotation-class, got ${String(res.retryable)}`);
+      ok(res.error.includes("context overflow joins the rotation/hop path"), res.error);
+    } finally {
+      stub.restore();
+    }
+    const stub2 = stubFetchReturning(() =>
+      new Response(JSON.stringify({ error: { message: "Invalid model id supplied." } }), { status: 400 }));
+    try {
+      const port = makePortForConfig(PROVIDERS.nvidia, "test-key");
+      const res = await port({ model: "m", messages: [{ role: "user", content: "hi" }], tools: [] });
+      strictEqual(res.ok, false);
+      if (res.ok) return;
+      strictEqual(res.retryable, "other", "a plain 400 must stay terminal");
+    } finally {
+      stub2.restore();
+    }
+  });
+
   it("streams content deltas into one message and prefers the usage block", async () => {
     const stub = stubFetchReturning(() =>
       sseResponse([

@@ -811,7 +811,7 @@ ${uiHeader("codewhip playground", "playground", "requests run through the local 
 <section class="card">
 <label for="modelfilter">Model <span class="small" id="modelBadge">loading…</span> <button id="refresh" class="ghost" style="padding:2px 8px;margin-left:var(--s2)">refresh</button> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
 <input id="modelfilter" type="search" placeholder="Filter — type a provider or model" autocomplete="off">
-<select id="model" style="margin-top:var(--s2)"></select>
+<select id="model" style="margin-top:var(--s2)"><option value="auto" selected>auto — health-weighted pick</option></select>
 <label for="system" style="margin-top:var(--s4)">System <span class="small">optional, sent with every request</span></label>
 <textarea id="system" rows="2" placeholder="Optional system prompt"></textarea>
 <label for="prompt">Prompt</label>
@@ -871,6 +871,7 @@ function renderModels(){
   }
   const saved=localStorage.getItem('codewhip.model');
   if(saved){modelSel.value=saved; if(modelSel.value!==saved) localStorage.removeItem('codewhip.model');}
+  if(!saved||modelSel.value!==saved) modelSel.value='auto';
   badge.textContent=allModels.length+' models'+(q?' · '+n+' match':'');
 }
 async function loadModels(force){
@@ -919,7 +920,7 @@ async function send(){
       while(true){
         const {value,done}=await reader.read(); if(done) break;
         buf+=dec.decode(value,{stream:true});
-        const lines=buf.split('\n'); buf=lines.pop();
+        const lines=buf.split('\\n'); buf=lines.pop();
         for(const line of lines){
           if(!line.startsWith('data:')) continue;
           const data=line.slice(5).trim();
