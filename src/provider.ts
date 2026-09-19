@@ -10,6 +10,7 @@ import type {
 } from "./provider-port.js";
 import { configDir } from "./config-dir.js";
 import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
+import { blockModel, isBlocked } from "./provider-blocklist.js";
 import { parseRetryAfter, resolveBaseUrl, unresolvedBaseUrlVars } from "./wire-util.js";
 import { oneminPort } from "./onemin.js";
 
@@ -428,6 +429,9 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
     if (model.length === 0 || model.length > 200) {
       return { ok: false, error: "bad model id (empty or >200 chars)", retryable: "other" };
     }
+    if (isBlocked(cfg.id, model)) {
+      return { ok: false, error: `${cfg.brand} ${model} is permanently blocked (received 410 — model retired for life)`, retryable: "other" };
+    }
     const ctrl = new AbortController();
     // Classify our own timeouts by these flags, never by the rejection's
     // `name`: aborting with a custom reason makes fetch reject with that
@@ -619,14 +623,17 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
             useStream = false;
             continue;
           }
-          const outcome = outcomeForStatus(res.status);
-          // Retry a sibling host only on auth rejection; other statuses are
-          // authoritative (402 quota, 429 rate-limit, 404 model, 5xx).
-          if ((res.status === 401 || res.status === 403) && i < hosts.length - 1) {
-            lastFailure = failure;
-            break;
-          }
-          recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome, host: hosts[i], status: res.status, ms, error: respBody.slice(0, 120) });
+const outcome = outcomeForStatus(res.status, respBody);
+           // Retry a sibling host only on auth rejection; other statuses are
+           // authoritative (402 quota, 429 rate-limit, 404 model, 5xx).
+           if ((res.status === 401 || res.status === 403) && i < hosts.length - 1) {
+             lastFailure = failure;
+             break;
+           }
+           if (res.status === 410) {
+             blockModel(cfg.id, model);
+           }
+           recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome, host: hosts[i], status: res.status, ms, error: respBody.slice(0, 120) });
           return failure;
         }
       }

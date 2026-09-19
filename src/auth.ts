@@ -159,6 +159,8 @@ type StoredCreds = {
   // 2026-09-19: user-sourced gateways.
   wrouterApiKey?: unknown;
   arouterApiKey?: unknown;
+  /** id is "tokenrouter" (api.tokenrouter.io). */
+  tokenrouterApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -305,6 +307,7 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   poe: "poeApiKey",
   wrouter: "wrouterApiKey",
   arouter: "arouterApiKey",
+  tokenrouter: "tokenrouterApiKey",
 };
 
 function customFieldFor(provider: string): string {

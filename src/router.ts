@@ -2,6 +2,7 @@ import { PROVIDERS, type ProviderId } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
 import { resolveKey } from "./auth.js";
 import { readProviderCalls, summarizeCalls, type ModelHealth } from "./provider-stats.js";
+import { isBlocked } from "./provider-blocklist.js";
 import type { OutcomeRecord } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
@@ -112,6 +113,7 @@ export function pickExplorePool<T>(pass: T[], gatedOut: T[], rng: () => number):
 }
 
 function healthOk(providerId: ProviderId, model: string) {
+  if (isBlocked(providerId, model)) return false;
   const records = readProviderCalls();
   const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);
@@ -122,6 +124,7 @@ function healthOk(providerId: ProviderId, model: string) {
 
 export const TTL_MS = {
   quota: 15 * 60 * 1000,
+  balance_low: 24 * 60 * 60 * 1000,
   auth: 60 * 60 * 1000,
   timeout: 5 * 60 * 1000,
   network: 5 * 60 * 1000,
@@ -133,8 +136,10 @@ export const TTL_MS = {
  * Exported for `serve` auto-pick: the serve proxy reuses the same TTL
  * deactivation so `model: "auto"` never routes at a model the CLI just
  * watched fail. Single source for the TTL table lives here.
+ * Also returns true when the model is permanently blocked (410 received).
  */
 export function isRecentlyFailed(providerId: string, model: string): boolean {
+  if (isBlocked(providerId, model)) return true;
   const records = readProviderCalls();
   const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);

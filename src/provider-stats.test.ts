@@ -20,14 +20,20 @@ function rec(p: Partial<ProviderCallRecord>): ProviderCallRecord {
 }
 
 describe("provider-stats", () => {
-  it("outcomeForStatus buckets http statuses", () => {
-    strictEqual(outcomeForStatus(401), "auth");
-    strictEqual(outcomeForStatus(403), "auth");
-    strictEqual(outcomeForStatus(402), "quota");
-    strictEqual(outcomeForStatus(429), "quota");
-    strictEqual(outcomeForStatus(404), "bad_model");
-    strictEqual(outcomeForStatus(500), "other");
-  });
+it("outcomeForStatus buckets http statuses", () => {
+     strictEqual(outcomeForStatus(401), "auth");
+     strictEqual(outcomeForStatus(403), "auth");
+     strictEqual(outcomeForStatus(429), "quota");
+     strictEqual(outcomeForStatus(404), "bad_model");
+     strictEqual(outcomeForStatus(410), "bad_model");
+     strictEqual(outcomeForStatus(500), "other");
+   });
+   it("outcomeForStatus detects balance_low from 402 body", () => {
+     strictEqual(outcomeForStatus(402, '{"error": "balance low"}'), "balance_low");
+     strictEqual(outcomeForStatus(402, "insufficient balance"), "balance_low");
+     // 402 without balance text falls back to quota
+     strictEqual(outcomeForStatus(402), "quota");
+   });
 
   it("empty summary renders a no-data message", () => {
     const s = summarizeCalls([]);

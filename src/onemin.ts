@@ -325,7 +325,7 @@ export function oneminPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: numb
             failure.retryAfterMs = wait;
           }
         }
-        recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: outcomeForStatus(res.status), host: cfg.baseUrl, status: res.status, ms, error: respBody.slice(0, 120) });
+        recordProviderCall({ ts: new Date().toISOString(), provider: cfg.id, model, kind: "chat", outcome: outcomeForStatus(res.status, respBody), host: cfg.baseUrl, status: res.status, ms, error: respBody.slice(0, 120) });
         return failure;
       }
       let data: OneminResponse;

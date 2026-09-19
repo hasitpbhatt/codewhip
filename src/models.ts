@@ -212,7 +212,7 @@ export async function listModels(provider: string, apiKey: string, timeoutMs = M
     }
     lastError = `${provider} models listing failed (http ${res.status})`;
     if (hosts.length > 1) continue;
-    recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: outcomeForStatus(res.status), host, status: res.status, error: lastError.slice(0, 120) });
+    recordProviderCall({ ts: new Date().toISOString(), provider, model: LISTING_MODEL, kind: "models", outcome: outcomeForStatus(res.status, lastError.slice(0, 120)), host, status: res.status, error: lastError.slice(0, 120) });
     return { ok: false, error: lastError };
   }
   return { ok: false, error: lastError || `${provider} models listing failed` };
