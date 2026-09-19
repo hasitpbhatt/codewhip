@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
+import { lockFileOwnerOnly } from "./secure-file.js";
 import { isBuiltinProviderId, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, type ProviderConfig } from "./provider.js";
 
 /**
@@ -161,9 +162,53 @@ export function getProviderConfig(id: string, dir?: string): ProviderConfig | nu
 }
 
 /** Builtins in registry order, then customs alphabetically. */
+const DISABLED_FILE = "disabled-providers.json";
+
+/** Read the set of disabled provider ids. Never throws — missing/empty reads as empty set. */
+export function getDisabledProviders(dir?: string): Set<string> {
+  try {
+    const raw = fs.readFileSync(path.join(dir ?? configDir(), DISABLED_FILE), "utf8");
+    const data = JSON.parse(raw) as { disabled?: unknown };
+    if (!Array.isArray(data.disabled)) return new Set();
+    return new Set(data.disabled.map(String));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Write the disabled provider ids set. Never throws. */
+function writeDisabledProviders(disabled: Set<string>, dir?: string): void {
+  try {
+    const target = dir ?? configDir();
+    fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+    const file = path.join(target, DISABLED_FILE);
+    fs.writeFileSync(file, JSON.stringify({ disabled: [...disabled].sort() }, null, 2) + "\n", "utf8");
+    lockFileOwnerOnly(file);
+  } catch { /* best-effort */ }
+}
+
+export function setProviderDisabled(id: string, disabled: boolean, dir?: string): void {
+  const current = getDisabledProviders(dir);
+  if (disabled) current.add(id); else current.delete(id);
+  writeDisabledProviders(current, dir);
+}
+
+export function isProviderDisabled(id: string, dir?: string): boolean {
+  return getDisabledProviders(dir).has(id);
+}
+
 export function listAllProviderConfigs(dir?: string): ProviderConfig[] {
-  const customs = Object.values(loadCustomProviders(dir)).sort((a, b) => a.id.localeCompare(b.id));
-  return [...Object.values(PROVIDERS), ...customs];
+  const disabled = getDisabledProviders(dir);
+  const customs = Object.values(loadCustomProviders(dir)).filter((c) => !disabled.has(c.id)).sort((a, b) => a.id.localeCompare(b.id));
+  const builtins = Object.values(PROVIDERS).filter((c) => !disabled.has(c.id));
+  return [...builtins, ...customs];
+}
+
+/** All providers including disabled ones, for the auth UI. */
+export function listAllProviderConfigsWithDisabled(dir?: string): ProviderConfig[] {
+  const disabled = getDisabledProviders(dir);
+  const all = [...Object.values(PROVIDERS), ...Object.values(loadCustomProviders(dir))].sort((a, b) => a.id.localeCompare(b.id));
+  return all.map((c) => ({ ...c, disabled: disabled.has(c.id) }));
 }
 
 function writeCustomProviders(next: Record<string, ProviderConfig>, dir?: string): boolean {
@@ -171,7 +216,9 @@ function writeCustomProviders(next: Record<string, ProviderConfig>, dir?: string
     const target = dir ?? configDir();
     fs.mkdirSync(target, { recursive: true, mode: 0o700 });
     const list = Object.values(next).sort((a, b) => a.id.localeCompare(b.id));
-    fs.writeFileSync(path.join(target, CUSTOM_PROVIDERS_FILE), JSON.stringify({ providers: list }, null, 2) + "\n", "utf8");
+    const file = path.join(target, CUSTOM_PROVIDERS_FILE);
+    fs.writeFileSync(file, JSON.stringify({ providers: list }, null, 2) + "\n", "utf8");
+    lockFileOwnerOnly(file);
     return true;
   } catch {
     return false;

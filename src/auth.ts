@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
 import { getProviderConfig } from "./custom-providers.js";
-import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
+import { lockDirOwnerOnly, lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import type { BuiltinProviderId } from "./provider.js";
 
 export type { ProviderId } from "./provider.js";
@@ -379,6 +379,7 @@ function writeStored(next: Record<string, string>): string | null {
   try {
     fs.chmodSync(dir, 0o700);
   } catch { /* best-effort (Windows ignores mode) */ }
+  lockDirOwnerOnly(dir);
   const err = writeOwnerOnlyFile(credsPath(), JSON.stringify(next) + "\n");
   // Same-tick saves can land inside one mtime tick — invalidate explicitly.
   credsCache = null;

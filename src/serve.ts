@@ -1,6 +1,6 @@
 import * as http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
+import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider, setProviderDisabled, listAllProviderConfigsWithDisabled } from "./custom-providers.js";
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { ChatPortResponse, LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
@@ -559,7 +559,7 @@ function escapeHtml(value: unknown): string {
 }
 
 function authStatus(): Array<Record<string, unknown>> {
-  return listAllProviderConfigs().map((cfg) => {
+  return listAllProviderConfigsWithDisabled().map((cfg) => {
     const { key, source } = resolveKey(cfg.id);
     return {
       id: cfg.id,
@@ -570,6 +570,7 @@ function authStatus(): Array<Record<string, unknown>> {
       source,
       hasKey: key.length > 0,
       custom: !isBuiltinProviderId(cfg.id),
+      disabled: cfg.disabled ?? false,
     };
   });
 }
@@ -627,14 +628,19 @@ function authHtml(): string {
     const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="small">(none)</span>`;
     const keyState = r.hasKey ? `<span class="small" style="color:var(--ok)">key set (${escapeHtml(r.source)})</span>` : `<span class="small">no key</span>`;
     const search = escapeHtml(`${r.id} ${r.envVar} ${r.baseUrl ?? ""}`).toLowerCase();
-    return `<li class="card prov" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3)">
+    const isDisabled = r.disabled === true;
+    const toggleBtn = isDisabled
+      ? `<button data-act="toggle" class="ghost" style="color:var(--ok)">Enable</button>`
+      : `<button data-act="toggle" class="ghost" title="disable this provider">Disable</button>`;
+    return `<li class="card prov${isDisabled ? ' disabled' : ''}" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3);opacity:${isDisabled ? 0.5 : 1}">
 <div style="display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;align-items:flex-start">
-<div><strong>${id}</strong>${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
+<div><strong>${id}</strong>${isDisabled ? ` <span class="small" style="color:var(--danger)">disabled</span>` : ""}${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
 <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
 ${keyState}
-<button data-act="login">Set key</button>
-${r.hasKey ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
-${r.custom ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
+${isDisabled ? `<button data-act="toggle" class="ghost" style="color:var(--ok)">Enable</button>` : `<button data-act="login">Set key</button>`}
+${r.hasKey && !isDisabled ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
+${r.custom && !isDisabled ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
+${toggleBtn}
 </div>
 </div>
 <div class="keyrow" hidden>
@@ -649,9 +655,11 @@ ${r.custom ? `<button data-act="remove" class="danger">Remove provider</button>`
 </div>
 </li>`;
   };
-  const withKey = status.filter((r) => r.hasKey === true && r.custom !== true);
-  const keyless = status.filter((r) => r.hasKey !== true && r.custom !== true);
-  const custom = status.filter((r) => r.custom === true);
+  const enabled = status.filter((r) => !r.disabled);
+  const disabled = status.filter((r) => r.disabled === true);
+  const withKey = enabled.filter((r) => r.hasKey === true && r.custom !== true);
+  const keyless = enabled.filter((r) => r.hasKey !== true && r.custom !== true);
+  const custom = enabled.filter((r) => r.custom === true);
   const group = (label: string, rows: Array<Record<string, unknown>>): string =>
     rows.length === 0
       ? ""
@@ -665,7 +673,7 @@ ${r.custom ? `<button data-act="remove" class="danger">Remove provider</button>`
 </style></head><body>
 ${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your keys — it stores and removes them")}
 <main>
-<p class="small" style="margin-top:0">${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom. A provider with no key still works if its env var is set outside this page.</p>
+<p class="small" style="margin-top:0">${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom · ${disabled.length} disabled. A provider with no key still works if its env var is set outside this page.</p>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s5)">
 <section>
 <label for="provfilter" class="kicker">Filter providers</label>
@@ -673,6 +681,7 @@ ${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your 
 ${group("keys set", withKey)}
 ${group("keyless", keyless)}
 ${group("custom", custom)}
+${group("disabled", disabled)}
 </section>
 <section>
 <div class="card">
@@ -793,6 +802,18 @@ document.addEventListener('click',async e=>{
     await guarded(b,'Removing…',async()=>{
       try{
         const res=await fetch('/auth/_custom/'+encodeURIComponent(id),{method:'DELETE'});
+        if(!res.ok){say(await failBody(res),true); return false;}
+        location.reload(); return true;
+      }catch(e2){say('network error',true); return false;}
+    });
+    return;
+  }
+  if(act==='toggle'){
+    const isDisabled=card.classList.contains('disabled');
+    const newDisabled=!isDisabled;
+    await guarded(b,newDisabled?'Disabling…':'Enabling…',async()=>{
+      try{
+        const res=await fetch('/auth/'+encodeURIComponent(id),{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({disabled:newDisabled})});
         if(!res.ok){say(await failBody(res),true); return false;}
         location.reload(); return true;
       }catch(e2){say('network error',true); return false;}
@@ -1192,10 +1213,9 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
     sendJson(res, 404, { error: { message: `unknown provider "${id}"`, code: "not_found" } });
     return true;
   }
-  const cfg = builtin ?? custom!;
   if (req.method === "GET") {
-    const { key, source } = resolveKey(id);
-    sendJson(res, 200, { id, envVar: cfg.envVar, source, hasKey: key.length > 0 });
+    const { key } = resolveKey(id);
+    sendJson(res, 200, { id, hasKey: key.length > 0 });
     return true;
   }
   if (req.method === "POST") {
@@ -1223,6 +1243,16 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
     sendJson(res, 200, { id, source: "file" });
     return true;
   }
+  if (req.method === "PATCH") {
+    let p: { disabled?: unknown };
+    try { p = JSON.parse(await readCappedBody(req, MAX_KEY_BYTES, "body too large").then((b) => b.ok ? b.body : "")) as { disabled?: unknown }; }
+    catch { sendError(res, 400, "invalid JSON", "invalid_json"); return true; }
+    if (typeof p.disabled !== "boolean") { sendError(res, 400, "body {\"disabled\":true/false} required", "invalid_disabled"); return true; }
+    setProviderDisabled(id, p.disabled);
+    clearModelCatalogCache();
+    sendJson(res, 200, { id, disabled: p.disabled });
+    return true;
+  }
   if (req.method === "DELETE") {
     clearKey(id);
     // A removed key shrinks the catalog back to the default-model row.
@@ -1246,7 +1276,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   const url = req.url ?? "/";
   const path = url.split("?")[0];
   if (req.method === "GET" && (path === "/health" || path === "/healthz")) {
-    sendJson(res, 200, { status: "ok", providers: listAllProviderConfigs().length });
+    sendJson(res, 200, { status: "ok" });
     return;
   }
   // Only /health is public (load-balancer checks must work without the
@@ -1254,7 +1284,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   // behind the token when one is configured: the auth UI spends your keys.
   // There is deliberately no /stats here: per-request history stays out of
   // the proxy entirely (see `codewhip stats` for the local CLI view).
-  if (opts.token !== undefined) {
+  if (opts.token) {
     if (!bearerMatches(req.headers.authorization, opts.token)) {
       sendError(res, 401, "missing or invalid bearer token for this server", "invalid_api_key");
       return;
@@ -1454,7 +1484,7 @@ export function createShutdown(server: http.Server, exit: (code: number) => void
 }
 
 export function startServe(opts: ServeOptions): http.Server {
-  if (!isLoopback(opts.host) && opts.token === undefined) {
+  if (!isLoopback(opts.host) && !opts.token) {
     throw new Error(
       `refusing to bind ${opts.host} without --token: this server spends your provider keys on behalf of anyone who can reach it. Add --token <secret>, or bind 127.0.0.1.`
     );
@@ -1483,7 +1513,7 @@ export function startServe(opts: ServeOptions): http.Server {
       console.log(`  GET  /auth                  provider key manager UI (register a custom endpoint there too)`);
     }
     console.log(`  default route: ${opts.provider}:${opts.model}`);
-    console.log(`  auth: ${opts.token !== undefined ? "bearer token required" : "none (loopback only)"}`);
+    console.log(`  auth: ${opts.token ? "bearer token required" : "none (loopback only)"}`);
     console.log(`  note: this proxies models — it runs no tools, applies no policy, and writes no audit entries.`);
     console.log(`  stop with Ctrl-C (press again to force).`);
   });
