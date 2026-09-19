@@ -16,6 +16,31 @@ import * as fs from "node:fs";
  * must surface (never swallow: a silent failure re-introduces the exact
  * "0600 file" fiction this module exists to kill).
  */
+export function lockDirOwnerOnly(dir: string): string | null {
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(dir, 0o700);
+      return null;
+    } catch {
+      return `could not chmod 0700 ${dir} — on shared machines prefer env vars over stored keys`;
+    }
+  }
+  try {
+    const user = process.env["USERNAME"] ?? process.env["USER"] ?? "";
+    if (user.length === 0) {
+      return `cannot determine the current user — ${dir} may be readable by others; prefer env vars`;
+    }
+    execFileSync("icacls.exe", [dir, "/inheritance:r", "/grant:r", `${user}:F`], {
+      stdio: "ignore",
+      timeout: 10000,
+      windowsHide: true,
+    });
+    return null;
+  } catch {
+    return `could not restrict ${dir} to the current user (icacls failed) — prefer env vars on shared machines`;
+  }
+}
+
 export function lockFileOwnerOnly(file: string): string | null {
   if (process.platform !== "win32") {
     try {

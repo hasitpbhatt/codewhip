@@ -202,6 +202,8 @@ export type ProviderConfig = {
   timeoutMs: number;
   /** Optional 429-specific hint (provider quota nuance). */
   rateLimitedHint?: string;
+  /** If true, the provider is hidden from catalogs and not routable. */
+  disabled?: boolean;
   /**
    * Fallback key when no env/file key exists (llm7's anonymous "unused").
    * Runs still work keyless; `auth login` upgrades to higher limits.

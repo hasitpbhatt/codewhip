@@ -1,6 +1,6 @@
 const PATTERNS: RegExp[] = [
   /nvapi-[A-Za-z0-9_-]+/g,
-  /\bsk-[A-Za-z0-9_-]{8,}\b/g,
+  /\bsk-[A-Za-z0-9_-]{6,}\b/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bghp_[A-Za-z0-9]+\b/g,
   // Generic high-entropy token (bare key leak without an env name):

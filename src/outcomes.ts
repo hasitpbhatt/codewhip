@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "./hash.js";
-import { redactSecrets } from "./redact.js";
+import { redactSecrets, redactEnvValues } from "./redact.js";
 import type { ProviderId } from "./provider.js";
 import type { Verdict } from "./verdict.js";
 
@@ -78,8 +78,8 @@ export function appendOutcome(cwd: string, record: OutcomeRecord): boolean {
     fs.mkdirSync(dir, { recursive: true });
     const redacted: OutcomeRecord = {
       ...record,
-      result_preview_redacted: redactSecrets(record.result_preview_redacted).slice(0, 2000),
-      failovers: record.failovers?.map((f) => ({ ...f, reason: redactSecrets(f.reason) })),
+      result_preview_redacted: redactEnvValues(redactSecrets(record.result_preview_redacted)).slice(0, 2000),
+      failovers: record.failovers?.map((f) => ({ ...f, reason: redactEnvValues(redactSecrets(f.reason)) })),
     };
     fs.appendFileSync(path.join(dir, "outcomes.jsonl"), JSON.stringify(redacted) + "\n", "utf8");
     return true;

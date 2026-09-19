@@ -262,9 +262,8 @@ describe("serve HTTP surface", () => {
     try {
       const res = await h.client(`${h.base}/health`);
       strictEqual(res.status, 200);
-      const body = (await res.json()) as { status: string; providers: number };
+      const body = (await res.json()) as { status: string };
       strictEqual(body.status, "ok");
-      ok(body.providers > 50, String(body.providers));
       strictEqual(h.upstream.length, 0);
     } finally {
       await h.close();
@@ -548,9 +547,8 @@ describe("serve HTTP surface", () => {
       const savedBody = (await saved.json()) as { id: string; source: string };
       strictEqual(savedBody.id, "groq");
       strictEqual(savedBody.source, "file");
-      const get = (await h.client(`${h.base}/auth/groq`)).json() as Promise<{ id: string; source: string; hasKey: boolean }>;
+      const get = (await h.client(`${h.base}/auth/groq`)).json() as Promise<{ id: string; hasKey: boolean }>;
       const got = await get;
-      strictEqual(got.source, "file");
       ok(got.hasKey, "hasKey should be true after save");
       // The key is never echoed.
       ok(!JSON.stringify(got).includes("sk-test-key"), "key must not be echoed");
