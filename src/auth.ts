@@ -119,6 +119,46 @@ type StoredCreds = {
   apiyiApiKey?: unknown;
   /** id is "codiv" (api.codiv.ai) — OpenAI-compatible diffusion-LM host. */
   codivApiKey?: unknown;
+  // 2026-09-19: OmniRoute + awesome-freellm cross-harvest (deduped).
+  openaiApiKey?: unknown;
+  perplexityApiKey?: unknown;
+  writerApiKey?: unknown;
+  lambdaApiKey?: unknown;
+  featherlessApiKey?: unknown;
+  metallamaApiKey?: unknown;
+  yiApiKey?: unknown;
+  baichuanApiKey?: unknown;
+  internlmApiKey?: unknown;
+  iflytekApiKey?: unknown;
+  rekaApiKey?: unknown;
+  sarvamApiKey?: unknown;
+  typhoonApiKey?: unknown;
+  plamoApiKey?: unknown;
+  liquidApiKey?: unknown;
+  inceptionApiKey?: unknown;
+  nousApiKey?: unknown;
+  byteplusApiKey?: unknown;
+  xiaomiApiKey?: unknown;
+  arceeApiKey?: unknown;
+  herokuApiKey?: unknown;
+  modalApiKey?: unknown;
+  basetenApiKey?: unknown;
+  predibaseApiKey?: unknown;
+  monsterapiApiKey?: unknown;
+  wandbApiKey?: unknown;
+  aimlapiApiKey?: unknown;
+  bytezApiKey?: unknown;
+  syntheticApiKey?: unknown;
+  nanogptApiKey?: unknown;
+  kieApiKey?: unknown;
+  morphApiKey?: unknown;
+  galadrielApiKey?: unknown;
+  v0ApiKey?: unknown;
+  factoryApiKey?: unknown;
+  poeApiKey?: unknown;
+  // 2026-09-19: user-sourced gateways.
+  wrouterApiKey?: unknown;
+  arouterApiKey?: unknown;
   /** Custom providers: `custom_<sanitized-id>_ApiKey` (see customFieldFor). */
   [key: string]: unknown;
 };
@@ -226,6 +266,45 @@ const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
   mkeai: "mkeaiApiKey",
   apiyi: "apiyiApiKey",
   codiv: "codivApiKey",
+  // 2026-09-19: cross-harvest batch.
+  openai: "openaiApiKey",
+  perplexity: "perplexityApiKey",
+  writer: "writerApiKey",
+  lambda: "lambdaApiKey",
+  featherless: "featherlessApiKey",
+  metallama: "metallamaApiKey",
+  yi: "yiApiKey",
+  baichuan: "baichuanApiKey",
+  internlm: "internlmApiKey",
+  iflytek: "iflytekApiKey",
+  reka: "rekaApiKey",
+  sarvam: "sarvamApiKey",
+  typhoon: "typhoonApiKey",
+  plamo: "plamoApiKey",
+  liquid: "liquidApiKey",
+  inception: "inceptionApiKey",
+  nous: "nousApiKey",
+  byteplus: "byteplusApiKey",
+  xiaomi: "xiaomiApiKey",
+  arcee: "arceeApiKey",
+  heroku: "herokuApiKey",
+  modal: "modalApiKey",
+  baseten: "basetenApiKey",
+  predibase: "predibaseApiKey",
+  monsterapi: "monsterapiApiKey",
+  wandb: "wandbApiKey",
+  aimlapi: "aimlapiApiKey",
+  bytez: "bytezApiKey",
+  synthetic: "syntheticApiKey",
+  nanogpt: "nanogptApiKey",
+  kie: "kieApiKey",
+  morph: "morphApiKey",
+  galadriel: "galadrielApiKey",
+  v0: "v0ApiKey",
+  factory: "factoryApiKey",
+  poe: "poeApiKey",
+  wrouter: "wrouterApiKey",
+  arouter: "arouterApiKey",
 };
 
 function customFieldFor(provider: string): string {

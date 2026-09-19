@@ -64,6 +64,14 @@ export type LoopArgs = {
    */
   failovers?: FailoverTarget[];
   /**
+   * Quiet failover (`--auto-failover`): hop without terminal noise. The
+   * failoverTrail (from/to/reason per hop) is still recorded on the outcome
+   * and the usage receipt still splits per model — the hops stay on the
+   * audited record, they just aren't printed live. Terminal exhaustion still
+   * reports what was tried (actionable failure, not backend noise).
+   */
+  quietFailover?: boolean;
+  /**
    * Ordered same-provider model candidates, head first (head === model).
    * Empty by default (no rotation). Each candidate is tried at most once
    * per run, on rate-limited/timeout/server turns only — never on auth/other failures.
@@ -475,7 +483,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       ) {
         waitedOnce = true;
         const wait = Math.min(attempt.retryAfterMs, 60000);
-        emit("retry", `rate limited on ${current.label} — waiting ${Math.round(wait / 1000)}s (once)`);
+        if (!args.quietFailover) emit("retry", `rate limited on ${current.label} — waiting ${Math.round(wait / 1000)}s (once)`);
         const slept = await sleepMs(wait, args.signal);
         if (!slept) {
           cancelled = true;
@@ -498,7 +506,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const to = `${rotation.label}:${rotation.model}`;
         tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        emit("failover", `${cause} on ${current.model} — rotating to ${to}`);
+        if (!args.quietFailover) emit("failover", `${cause} on ${current.model} — rotating to ${to}`);
         current = { label: rotation.label, model: rotation.model, port: rotation.port };
         continue;
       }
@@ -512,7 +520,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const to = `${target.label}:${target.model}`;
         tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
+        if (!args.quietFailover) emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
         current = { label: target.label, model: target.model, port: target.port };
         continue;
       }

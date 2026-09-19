@@ -422,6 +422,12 @@ is the floor, so a run still moves when every stored key is gone. `--free`
 and `--failover` are mutually exclusive, and naming a non-free provider is
 refused: `--free runs the free chain only`.
 
+`codewhip run "..." --auto-failover` is the same $0-only chain with a quiet
+terminal: backend hops are recorded in the outcome/audit (and the receipt
+still splits per model) but not printed — total exhaustion still reports
+what was tried. Private runs stay head-only: explicit-provider consent
+covers one cloud target, so there is nothing silent to hop to.
+
 The 8 free gateways added to the builtin registry — 4 of them run with **no
 key at all**:
 
@@ -555,7 +561,12 @@ Model routing is `"<provider>:<model>"`, split at the **first** colon so model
 ids may keep their own (`kilo:cohere/north-mini-code:free`). A bare provider id
 means that provider's default model; a bare model id goes to the server's
 default provider. `GET /v1/models` lists every provider as
-`<provider>:<default-model>`, and `GET /health` needs no auth.
+`<provider>:<default-model>`, and `GET /health` needs no auth. A request
+with `"model": "auto"` (or a server started with `--provider auto`) hops
+silently to the next healthy target on rate-limit/timeout/5xx — at most 3
+upstream attempts, each failure server-logged, the winner named in
+`serviced_by`. A pinned `provider:model` never hops: its failure is
+returned as-is.
 
 `GET /auth` is a small web page (on by default; `--no-auth-ui` disables it) that
 sets and clears provider keys and registers custom endpoints from the browser —
@@ -580,6 +591,7 @@ recorded in `codewhip stats`.
 ```sh
 codewhip run "..." --retry-wait   # one Retry-After wait (<=60s) on 429 per run; avoid in CI
 codewhip run "..." --failover     # one switch to the next provider with a stored key on 429 per run
+codewhip run "..." --auto-failover # same $0-only chain as --free, but hops are recorded not printed
 codewhip run "..." --provider mistral --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest
                                   # walk models in order on 429, each once per run (order: wait, rotate, failover)
 ```

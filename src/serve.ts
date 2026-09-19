@@ -3,7 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
-import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
+import type { ChatPortResponse, LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
 import { estimateCost, healthPasses, healthRate, isAutoEligible, TTL_MS } from "./router.js";
 import { listModels } from "./models.js";
@@ -173,7 +173,7 @@ function contentToText(parts: unknown[]): string {
  * exploration: a gated model that re-enters picks at reduced probability.
  * No-data providers keep full weight — empty history is not failure.
  */
-function pickAutoTarget(): Target | { error: string } {
+function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string } {
   const summary = summarizeCalls(readProviderCalls());
   const cands: Array<{ provider: string; model: string; weight: number }> = [];
   for (const cfg of listAllProviderConfigs()) {
@@ -186,6 +186,7 @@ function pickAutoTarget(): Target | { error: string } {
       ?? [];
     const modelIds = served.length > 0 ? served.map((m) => m.model) : [cfg.defaultModel];
     for (const modelId of modelIds) {
+      if (exclude !== undefined && exclude.has(`${cfg.id}:${modelId}`)) continue;
       const mh = served.find((m) => m.model === modelId);
       // TTL deactivation against the summary computed above — one pass over the
       // records per request, not one per candidate (isRecentlyFailed re-reads).
@@ -249,8 +250,14 @@ export function resolveTarget(requested: string, fallback: { provider: string; m
   return { provider: fallback.provider, model: trimmed };
 }
 
-function statusForError(retryable: string): number {
-  if (retryable === "auth") return 401;
+/**
+ * Silent-retry bound for fully-auto chat requests: 1 initial pick + 2 quiet
+ * hops across distinct provider:model targets. Bounds fault-storm latency;
+ * explicit-model requests never retry (pinned = consent to that target).
+ */
+const AUTO_ATTEMPTS = 3;
+
+function statusForError(retryable: string): number {  if (retryable === "auth") return 401;
   if (retryable === "rate-limited") return 429;
   if (retryable === "timeout") return 504;
   // An upstream 5xx is relayed as 502 (bad gateway): the failure is the
@@ -1298,16 +1305,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return;
   }
   const requested = typeof parsed.model === "string" ? parsed.model : "";
-  const target = resolveTarget(requested, { provider: opts.provider, model: opts.model });
+  // Fully-auto requests (no pinned model) may silently hop backends on
+  // retryable failures — each hop is server-logged and the winner is named in
+  // serviced_by. A pinned model is consent to exactly that target: it never
+  // hops, the failure is returned as-is.
+  const autoRequest = requested === "" ? opts.provider === "auto" : requested === "auto";
+  let target = resolveTarget(requested, { provider: opts.provider, model: opts.model });
   if ("error" in target) {
     logErrorLazy("resolve-target", `model=${JSON.stringify(requested)} err=${target.error}`);
     sendError(res, 400, target.error, "unknown_provider");
-    return;
-  }
-  const cfg = getProviderConfig(target.provider);
-  if (cfg === null) {
-    logErrorLazy("unknown-provider", `provider=${target.provider}`);
-    sendError(res, 400, `unknown provider "${target.provider}"`, "unknown_provider");
     return;
   }
   const messages = toLoopMessages(parsed.messages);
@@ -1315,26 +1321,59 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     sendError(res, 400, "messages[] is required and must not be empty", "invalid_messages");
     return;
   }
-  const key = resolveKey(target.provider);
-  if (key.key.length === 0) {
-    logErrorLazy("missing-key", `provider=${target.provider}`);
-    sendError(res, 401, `no key for "${target.provider}" — set ${cfg.envVar} or run: codewhip auth login ${target.provider}`, "missing_provider_key");
-    return;
-  }
   const stream = parsed.stream === true;
   const includeUsage =
     typeof parsed.stream_options === "object" &&
     parsed.stream_options !== null &&
     (parsed.stream_options as { include_usage?: unknown }).include_usage === true;
-  const port = makePortForConfig(cfg, key.key);
-  const result = await port({ model: target.model, messages, tools: toToolSpecs(parsed.tools) });
-  const id = `chatcmpl-${randomUUID()}`;
-  const created = Math.floor(Date.now() / 1000);
-  if (!result.ok) {
-    logErrorLazy("turn-failed", `provider=${target.provider} model=${target.model} retryable=${result.retryable} err=${result.error}`);
-    sendError(res, statusForError(result.retryable), result.error, result.retryable);
+  // Bounded silent retry: at most AUTO_ATTEMPTS upstream calls so a fault
+  // storm costs the client latency, not an infinite hang. Upstream stats are
+  // recorded at the port layer, so every failed hop feeds health/cooling and
+  // the next pick (and next request) routes around it.
+  const tried = new Set<string>();
+  let lastError = "";
+  let lastRetryable = "server";
+  let result: Extract<ChatPortResponse, { ok: true }> | null = null;
+  for (let attempt = 0; attempt < AUTO_ATTEMPTS; attempt++) {
+    const cfg = getProviderConfig(target.provider);
+    if (cfg === null) {
+      logErrorLazy("unknown-provider", `provider=${target.provider}`);
+      sendError(res, 400, `unknown provider "${target.provider}"`, "unknown_provider");
+      return;
+    }
+    const key = resolveKey(target.provider);
+    if (key.key.length === 0) {
+      logErrorLazy("missing-key", `provider=${target.provider}`);
+      sendError(res, 401, `no key for "${target.provider}" — set ${cfg.envVar} or run: codewhip auth login ${target.provider}`, "missing_provider_key");
+      return;
+    }
+    const port = makePortForConfig(cfg, key.key);
+    const attemptResult = await port({ model: target.model, messages, tools: toToolSpecs(parsed.tools) });
+    if (attemptResult.ok) {
+      result = attemptResult;
+      break;
+    }
+    logErrorLazy("turn-failed", `provider=${target.provider} model=${target.model} retryable=${attemptResult.retryable} err=${attemptResult.error}`);
+    lastError = attemptResult.error;
+    lastRetryable = attemptResult.retryable;
+    if (!autoRequest || (attemptResult.retryable !== "rate-limited" && attemptResult.retryable !== "timeout" && attemptResult.retryable !== "server")) {
+      sendError(res, statusForError(attemptResult.retryable), attemptResult.error, attemptResult.retryable);
+      return;
+    }
+    tried.add(`${target.provider}:${target.model}`);
+    const next = pickAutoTarget(tried);
+    if ("error" in next) {
+      sendError(res, statusForError(lastRetryable), lastError, lastRetryable);
+      return;
+    }
+    target = next;
+  }
+  if (result === null) {
+    sendError(res, statusForError(lastRetryable), lastError, lastRetryable);
     return;
   }
+  const id = `chatcmpl-${randomUUID()}`;
+  const created = Math.floor(Date.now() / 1000);
   const usage = { prompt: result.promptTokens, completion: result.completionTokens };
   const servicedBy = `${target.provider}:${target.model}`;
   if (stream) {

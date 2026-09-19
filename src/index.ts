@@ -60,6 +60,13 @@ type RunOptions = {
   failover: boolean;
   /** Arm the free-provider chain (mutually exclusive with --failover). */
   free: boolean;
+  /**
+   * Silent auto-failover: same $0-only chain as --free, but backend hops are
+   * recorded (outcome/audit/receipt) rather than printed. Private runs stay
+   * head-only (consent covers one target). Mutually exclusive with
+   * --free/--failover/--models.
+   */
+  autoFailover: boolean;
   /** Run-scoped read-only: edit/write/bash denied, output is the plan. */
   plan: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
@@ -100,6 +107,7 @@ function printRunOptions(): void {
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout/5xx per run (default: off; may bill pay-go)");
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
+  console.log("  --auto-failover      like --free but silent: backend hops are recorded in the outcome/audit, not printed (private runs stay head-only; not with --free/--failover)");
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
@@ -369,6 +377,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let retryWait = false;
   let failover = false;
   let free = false;
+  let autoFailover = false;
   let plan = false;
   let share = false;
   let sharePrint = false;
@@ -444,11 +453,14 @@ function parseRunArgs(args: string[]): RunOptions | null {
     } else if (a === "--retry-wait") {
       retryWait = true;
     } else if (a === "--failover") {
-      if (free) return fail("use --free or --failover, not both");
+      if (free || autoFailover) return fail("use --failover or --free/--auto-failover, not both");
       failover = true;
     } else if (a === "--free") {
-      if (failover) return fail("use --free or --failover, not both");
+      if (failover || autoFailover) return fail("use --free or --failover/--auto-failover, not both");
       free = true;
+    } else if (a === "--auto-failover") {
+      if (failover || free) return fail("use --auto-failover or --free/--failover, not both");
+      autoFailover = true;
     } else if (a === "--plan") {
       plan = true;
     } else if (a === "--no-stream") {
@@ -486,7 +498,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, plan, share, sharePrint,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, autoFailover, plan, share, sharePrint,
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
@@ -652,12 +664,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     history = loaded.record.messages.filter((m) => m.role !== "system");
     console.log(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
   }
-  // --free arms the free chain: head = the explicit --provider (must be a
-  // free-catalog id) or the first free candidate with a usable key (env,
-  // stored file, or the row's anonymousKey — kilo/opencode/empero/llm7 are
-  // keyless). Chain = the remaining keyed candidates, catalog order.
+  // --free / --auto-failover arm the free chain: head = the explicit
+  // --provider (must be a free-catalog id) or the first free candidate with
+  // a usable key (env, stored file, or the row's anonymousKey — kilo/opencode/
+  // empero/llm7 are keyless). Chain = the remaining keyed candidates, catalog
+  // order. Both never bill pay-go; --auto-failover additionally silences the
+  // hop chatter (recorded, not printed).
   let freeChain: FailoverTarget[] = [];
-  if (opts.free) {
+  if (opts.free || opts.autoFailover) {
     const candidates = freeChainIds();
     const head = opts.providerExplicit ? opts.provider : candidates.find((id) => resolveKey(id).key.length > 0);
     if (head === undefined || !candidates.some((c) => c === head)) {
@@ -684,8 +698,8 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   const routed = resolveRoute({
     prompt: opts.prompt,
     taskClass: opts.taskClass,
-    provider: opts.providerExplicit || opts.free ? opts.provider : undefined,
-    model: opts.modelExplicit || opts.free ? opts.model : undefined,
+    provider: opts.providerExplicit || opts.free || opts.autoFailover ? opts.provider : undefined,
+    model: opts.modelExplicit || opts.free || opts.autoFailover ? opts.model : undefined,
     defaultProvider: "nvidia",
     defaultModel: PROVIDERS.nvidia.defaultModel,
   });
@@ -698,7 +712,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   }
   const route = opts.free && !opts.providerExplicit
     ? { ...routed, note: "--free chain head (first free candidate with a usable key)" }
-    : routed;
+    : opts.autoFailover && !opts.providerExplicit
+      ? { ...routed, note: "--auto-failover chain head (first free candidate with a usable key)" }
+      : routed;
   opts = { ...opts, provider: route.provider, model: route.model };
   console.log(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
   if (opts.plan) {
@@ -754,12 +770,22 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     }
   }
   let failoverTargets: FailoverTarget[] = [];
-  if (opts.free) {
+  if (opts.free || opts.autoFailover) {
     failoverTargets = freeChain;
-    if (failoverTargets.length > 0) {
-      console.log(`!! --free armed: on rate-limit/timeout/5xx walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
+    if (route.taskClass === "private") {
+      // Explicit-provider consent covers ONE cloud target: silent hops to
+      // other providers would exceed it, so private runs stay head-only.
+      // (Private without an explicit provider was already refused above.)
+      failoverTargets = [];
+      console.log("!! private run: head provider only — no silent hops (consent covers one target)");
+    } else if (failoverTargets.length > 0) {
+      console.log(opts.autoFailover
+        ? `!! --auto-failover armed: ${failoverTargets.length} silent $0 fallback(s) — hops recorded in the outcome/audit, not printed (exhaustion still reports what was tried)`
+        : `!! --free armed: on rate-limit/timeout/5xx walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
     } else {
-      console.log("!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
+      console.log(opts.autoFailover
+        ? "!! --auto-failover armed: head only — no other free provider has a key yet (see: codewhip free)"
+        : "!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
     }
   } else if (opts.failover) {
     const defaultModel = runCfg.defaultModel;
@@ -884,6 +910,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       planMode: opts.plan,
       retryWait: opts.retryWait,
       failovers: failoverTargets,
+      quietFailover: opts.autoFailover,
       models: opts.models,
       takePendingSwitch,
       tokenBudget: opts.tokenBudget,
