@@ -9,7 +9,7 @@
  */
 
 /** Builtins shipped with the install (llm7/tokenharbor/bai/fabryka: gateway tiers; the rest: free aggregators). */
-export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" |   "mkeai" | "apiyi" | "codiv" | "openai" | "perplexity" | "writer" | "lambda" | "featherless" | "metallama" | "yi" | "baichuan" | "internlm" | "iflytek" | "reka" | "sarvam" | "typhoon" | "plamo" | "liquid" | "inception" | "nous" | "byteplus" | "xiaomi" | "arcee" | "heroku" | "modal" | "baseten" | "predibase" | "monsterapi" | "wandb" | "aimlapi" | "bytez" | "synthetic" | "nanogpt" | "kie" | "morph" | "galadriel" | "v0" | "factory" | "poe" | "wrouter" | "arouter";
+export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" |   "mkeai" | "apiyi" | "codiv" | "openai" | "perplexity" | "writer" | "lambda" | "featherless" | "metallama" | "yi" | "baichuan" | "internlm" | "iflytek" | "reka" | "sarvam" | "typhoon" | "plamo" | "liquid" | "inception" | "nous" | "byteplus" | "xiaomi" | "arcee" | "heroku" | "modal" | "baseten" | "predibase" | "monsterapi" | "wandb" | "aimlapi" | "bytez" | "synthetic" | "nanogpt" | "kie" | "morph" | "galadriel" | "v0" | "factory" | "poe" | "wrouter" | "arouter" | "tokenrouter";
 
 /** Any provider id: a builtin or a user-registered custom id. */
 export type ProviderId = string;
@@ -168,6 +168,9 @@ export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   // 2026-09-19: user-sourced gateways (docs-verified endpoints).
   "wrouter", // AccelsRouter trial credit — NOT free, builtin only.
   "arouter", // ARouter keyed gateway — NOT free, builtin only.
+  // 2026-09-20: tokenrouter — OpenAI-compatible gateway routing 13 providers,
+  // flat subscription, zero token markup. API key format tr_....
+  "tokenrouter",
 ];
 
 export function isBuiltinProviderId(value: string): value is BuiltinProviderId {
@@ -2001,5 +2004,17 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     keyUrl: "https://api.arouter.ai",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
     rateLimitedHint: "keyed gateway — see arouter.ai pricing",
+  },
+  tokenrouter: {
+    id: "tokenrouter",
+    brand: "tokenrouter",
+    baseUrl: "https://api.tokenrouter.io",
+    chatPath: "/v1/chat/completions",
+    modelsPath: "/v1/models",
+    defaultModel: "auto",
+    envVar: "TOKENROUTER_API_KEY",
+    keyUrl: "https://docs.tokenrouter.io",
+    timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
+    rateLimitedHint: "14-day free trial, then flat subscription — no card on free plan; 403 auto_routing_unavailable on free tier with auto model",
   },
 };

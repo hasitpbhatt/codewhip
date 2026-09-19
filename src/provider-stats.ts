@@ -17,7 +17,8 @@ export type ProviderCallKind = "chat" | "models";
 export type ProviderCallOutcome =
   | "ok"
   | "auth" // 401/403 — key rejected by this host
-  | "quota" // 402/429 — no plan / rate limited
+  | "quota" // 429 — rate limited
+  | "balance_low" // 402 — insufficient balance/credits
   | "timeout"
   | "network"
   | "bad_model" // 404/410 — retired/unknown model
@@ -134,10 +135,12 @@ export function readProviderCalls(): ProviderCallRecord[] {
   }
 }
 
-/** Map an HTTP status to a coarse outcome bucket. */
-export function outcomeForStatus(status: number): ProviderCallOutcome {
+/** Map an HTTP status to a coarse outcome bucket. Pass body to detect "balance low" from 402 responses. */
+export function outcomeForStatus(status: number, body?: string): ProviderCallOutcome {
   if (status === 401 || status === 403) return "auth";
-  if (status === 402 || status === 429) return "quota";
+  if (status === 429) return "quota";
+  if (status === 402 && body !== undefined && /balance/i.test(body)) return "balance_low";
+  if (status === 402) return "quota";
   if (status === 404 || status === 410) return "bad_model";
   if (status >= 500) return "other";
   return "other";
