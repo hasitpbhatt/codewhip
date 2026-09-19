@@ -20,6 +20,41 @@ Tests never touch the network: model calls go through the `$0` fake ChatPort
 in `src/testkit/`. If your change needs a provider key to verify, say so in
 the PR — reviewers run what they can without one.
 
+## Repo map
+
+`src/` is the only source root. Orientation (kept here, not in the README,
+so user docs never rot on contributor churn):
+
+```
+src/index.ts            CLI entry (help, run/auth/models/audit)
+src/loop.ts             agentLoop(): stream → permission → exec → append, budget
+src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
+src/policy-store.ts     policy.md promoted denies (declines → candidates → approve)
+src/pack.ts             team policy packs shipped locally (list/pull)
+src/router.ts           3-class task router (implement/polish/private) + polish gate
+src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
+src/remember.ts         curated memorable shapes (no redirects/chains)
+src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
+src/tools/              read/search/write/edit/bash/webfetch + jail
+src/testkit/            $0 fake ChatPort for the test suite
+src/auth.ts             provider keys (login/logout/status; env wins, file 0600)
+src/config-dir.ts       global key/config dir (%APPDATA% | ~/.config)
+src/custom-providers.ts user-registered OpenAI-compatible providers
+src/models.ts           served-model listing with agency tags
+src/provider-registry.ts builtin registry (+ free-chain.ts; provider.ts re-exports)
+src/onemin.ts           1min.ai port: prompt flattening + emulated tool calls (not OpenAI-shaped)
+src/serve.ts            `codewhip serve`: OpenAI-compatible HTTP front end over the registry
+src/wire-util.ts        shared wire helpers ({ENV} base-URL placeholders, Retry-After)
+src/audit.ts            hash-chained signed audit log
+src/outcomes.ts         outcomes.jsonl per-run records
+src/redact.ts           key/secret scrubber (share + audit previews)
+src/share.ts            redacted chain-anchored share bundles
+src/verdict.ts          human verdicts sidecar (accepted/edited/reverted/rejected)
+src/system.ts           system prompt (harness rules stay out of it)
+src/demo.ts             offline wedge demo ($0 fake port)
+src/hash.ts             sha256 helpers
+```
+
 ## Conventions
 
 - `src/` is the only source root (`rootDir: src`, `outDir: dist`).

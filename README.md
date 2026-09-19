@@ -12,20 +12,33 @@ leave open: **Governance + Trust**. OpenCode optimizes for freedom;
 Claude Code optimizes for capability inside a closed box. Neither optimizes
 for *delegatability*. CodeWhip does.
 
-**Status: MVP loop live.** `codewhip run` runs a real agent loop
+**Status: H1 DONE (2026-09-17).** `codewhip run` runs a real agent loop
 (`read/search/edit/write/bash/webfetch`, policy-checked, metered, replayable);
-`init`/`auth`/`models`/`audit` ship; a $0-quota test suite pins the
+`init`/`auth`/`models`/`audit` ship; the launch gate passed on a real priced
+run (polish auto-route fixed 12 typos to verdict `accepted` at $0.0000).
+A $0-quota test suite pins the
 policy, jail, memory, audit chain, share redaction, router, metrics, promotion, packs, and loop. The five Naval agents have debated and
 converged on the full strategy (`docs/moat/`), and the build order is fixed
 (`docs/roadmap.md`).
 
+## Contents
+
+- [Why CodeWhip](#why-codewhip)
+- [Quickstart](#quickstart)
+- [How it works (design)](#how-it-works-design)
+- [Roadmap (abridged)](#roadmap-abridged)
+- [Development](#development)
+- [Provider keys](#provider-keys-persistent-per-provider) · [Custom providers](#custom-providers-any-openai-compatible-endpoint) · [Undo](#undo-anything-automatic-checkpoints--codewhip-rollback) · [`--plan`](#plan-before-act---plan) · [Subagents](#subagents-explore-review-and-converge-in-parallel) · [Sessions](#keep-the-conversation-going---continue) · [Free models](#free-models-at-one-place) · [Serve](#serve-every-provider-as-an-openai-endpoint) · [Rate limits](#surviving-rate-limits-opt-in-off-by-default) · [TUI slash](#tui-slash-commands) · [Approvals](#approvals-that-stick-always-allow) · [Promotion](#promotion-declines-that-become-policy) · [Packs + CI](#team-packs--ci) · [Measure](#measure-it-eval-metrics-verdict)
+- [Strategy notes](#strategy-notes)
+- [Contributing & Security](#contributing--security)
+
 ## Why CodeWhip
 
-| Incumbent | Strength | Gap CodeWhip attacks |
-|---|---|---|
-| OpenCode | Open, 75+ providers, fast shipping | Permissions are a safeguard, not a sandbox; state doesn't compound; no audit/SOC2 story |
-| Claude Code | Enterprise trust, workflow revenue | Closed, provider-locked, expensive (~$5/M vs ~$0.12/M routable), harness leaked |
-| Cursor-style | Distribution + data flywheel | IDE-bound, telemetry-based, not yours |
+OpenCode optimizes for freedom, Claude Code for capability inside a closed
+box. Neither optimizes for *delegatability* — the moment a team lead trusts
+the tool in a junior's hands unsupervised, on prod-adjacent code at 2am.
+CodeWhip does: policy-checked, memory-scoped, replayable from a redacted
+audit link, metered to <$0.05 on polish work.
 
 The moat ranking we build by: **memory > governance > execution >>
 connectors**. Anything that doesn't get more valuable the longer a customer
@@ -104,8 +117,8 @@ receipt anyway.
   tokens/PEMs/emails plus env-assignment values, names kept), anchored to the
   audit chain (`audit_tail`) and signed when a key exists. Local-file v1: no
   upload, no server; the "link" is the bundle path plus its content hash.
-- **Router:** 3 task classes (implement → nvidia free tier, polish →
-  sensenova cheapest inference, private → a local runtime you registered).
+- **Router:** 3 task classes (implement → nvidia free tier, polish → kilo
+  priced $0, private → a local runtime you registered).
   Auto-classified from the
   prompt (private signals win, then polish, else implement) with the reason
   printed; `--class`/`--provider`/`--model` always override. Private prompts
@@ -114,57 +127,15 @@ receipt anyway.
   consent). Polish runs print a gate line (`PASS` only on a priced route
   <$0.05; `OPEN` while costs are untracked). `--token-budget` enforced mid-run
   (default 250000), same-provider `--models a,b,c` rotation and one-shot
-  `--failover`/`--retry-wait` on 429 only (timeouts rotate/fail over; retry-wait
-  stays 429-only).
+  `--failover`/`--retry-wait`/`--free`/`--auto-failover` on rate-limit,
+  timeout, or 5xx (waits via `--retry-wait` stay 429-only).
 - **Sandbox:** v1 = Node path jail (realpath, symlink-aware) + non-overridable
   denylist; v2 swaps the executor (E2B/Firecracker) behind the frozen
   policy/audit schema.
 
-## Repo map
-
-```
-src/index.ts            CLI entry (help, run/auth/models/audit)
-src/loop.ts             agentLoop(): stream → permission → exec → append, budget
-src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
-src/policy-store.ts     policy.md promoted denies (declines → candidates → approve)
-src/pack.ts             team policy packs shipped locally (list/pull)
-src/router.ts           3-class task router (implement/polish/private) + polish gate
-src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
-src/remember.ts         curated memorable shapes (no redirects/chains)
-src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
-src/tools/              read/search/write/edit/bash/webfetch + jail
-src/testkit/            $0 fake ChatPort for the test suite
-src/auth.ts             provider keys (login/logout/status; env wins, file 0600)
-src/config-dir.ts       global key/config dir (%APPDATA% | ~/.config)
-src/custom-providers.ts user-registered OpenAI-compatible providers
-src/models.ts           served-model listing with agency tags
-src/provider.ts         builtin registry + ChatPort adapter
-src/onemin.ts           1min.ai port: prompt flattening + emulated tool calls (not OpenAI-shaped)
-src/serve.ts            `codewhip serve`: OpenAI-compatible HTTP front end over the registry
-src/wire-util.ts        shared wire helpers ({ENV} base-URL placeholders, Retry-After)
-src/audit.ts            hash-chained signed audit log
-src/outcomes.ts         outcomes.jsonl per-run records
-src/redact.ts           key/secret scrubber (share + audit previews)
-src/share.ts            redacted chain-anchored share bundles
-src/verdict.ts          human verdicts sidecar (accepted/edited/reverted/rejected)
-src/system.ts           system prompt (harness rules stay out of it)
-src/demo.ts             offline wedge demo ($0 fake port)
-src/hash.ts             sha256 helpers
-SOUL.md                 product conscience (read this first)
-docs/roadmap.md         the consolidated build order (H1/H2, kill list, metrics)
-docs/moat/00-convergence.md   the 7 debate rulings (no ties)
-docs/moat/01-leverage.md      minimal loop + router economics
-docs/moat/02-memory.md        compounding memory + flywheel
-docs/moat/03-governor.md      policy schema + audit + sandbox
-docs/moat/04-scout.md         wedge defense + terminal-first GTM
-docs/moat/05-h1-audit.md      four-lens H1 gap audit
-docs/moat/06-post-h1-verdict.md   five-lens post-H1 verdict (code, not claims)
-AGENTS.md               working agreement for coding agents
-```
-
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → five tools → 8 providers + custom registration + meter →
+- **H1 (parity + trust):** `agentLoop()` → five tools → 134 providers + custom registration + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
   (provenanced) → hash-chained audit → `init`/`run`/`--share` (local redacted
   bundles; hosted links need a server) →
@@ -258,7 +229,7 @@ codewhip run "Say OK" --provider bai               # bai gateway default (needs 
 codewhip run "Say OK" --provider fabryka           # fabryka router default (needs a key: free key, reasoning model)
 ```
 
-Keys: nvidia free at `https://build.nvidia.com/settings/api-keys` (~40 req/min, $0); mistral at `https://console.mistral.ai` (free mode is evaluation-grade: RPS + tokens/min + tokens/month caps — check Limits); sensenova at `https://token.sensenova.ai`; alibaba at `https://dashscope-intl.aliyun.com`; llm7 tokens at `https://dash.llm7.io` (anonymous `unused` works keyless, heavily rate-limited); tokenharbor keys at `https://tokenharbor.ai/dashboard/api-keys` (free account works, `thk_…`); bai keys at `https://chat.b.ai/chat` (log in, top up credits — paid, metered per model); fabryka keys at `https://router.fabryka.ai` (free key, then $0.20/$0.60 per 1M in/out — single `qwen3.6-35b-a3b` reasoning model, keep concurrency at 1). The bare default (`run` with no flags) routes to nvidia and needs its key — for a $0 start with no keys use `run "…" --free` (free chain, never bills) or `--provider llm7` (anonymous, rate-limited). Env (`NVIDIA_API_KEY`/`MISTRAL_API_KEY`/`SENSENOVA_API_KEY`/`ALIBABA_API_KEY`/`LLM7_API_KEY`/`TOKENHARBOR_API_KEY`/`BAI_API_KEY`/`FABRYKA_API_KEY`) wins when set (CI-friendly). Receipts show `tokens / provider:model / cost`; only nvidia is known-$0 — other providers print "cost untracked" pointing at their console. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — owner-only permissions (0600 POSIX, user-only ACL on Windows, repaired on every write), not encryption; on shared machines prefer the env var.
+The bare default (`run` with no flags) routes to nvidia and needs its key — for a $0 start with no keys use `run "…" --free` (free chain, never bills) or `--provider llm7` (anonymous, rate-limited). Env wins when set (CI-friendly; every env var is in the table below). Receipts show `tokens / provider:model / cost`; known-$0 routes (nvidia, kilo, the verified free-chain defaults) price exactly, everything else prints `cost untracked` pointing at its console — never fiction. The key file lives in `%APPDATA%\codewhip` (Windows) or `~/.config/codewhip` (posix) — owner-only permissions (0600 POSIX, user-only ACL on Windows, repaired on every write), not encryption; on shared machines prefer the env var.
 
 ### Custom providers (any OpenAI-compatible endpoint)
 
@@ -347,16 +318,13 @@ Why this doesn't dilute the trust model:
   `outcomes.jsonl` record — nothing is a black box;
 - child tokens fold into the parent's **receipt** (same buckets, honest
   `est.` marks) — delegation never spends off-book. Budgets are enforced,
-  not just metered: each child inherits the parent's remaining
-  `--token-budget` live, and folded child spend can trip the parent's
-  check mid-run. (Parallel fan-out hands each child the same remaining-
-  budget snapshot, so aggregate exposure is bounded at N × remaining —
-  the parent's folded check is the hard stop.)
+  not just metered: the parent's remaining `--token-budget` is **split
+  across entries** (85% children, 15% coordination reserve), each child
+  enforcing its share live, and folded child spend can still trip the
+  parent's check mid-run;
 - children inherit the run's 429 defenses (`--models` rotation,
   `--retry-wait`) so a parallel fan-out on a rate-limited provider rotates
-  instead of dying; the fan-out's aggregate budget is honest — the parent's
-  remaining `--token-budget` is **split across entries**, each child
-  enforcing its share live;
+  instead of dying;
 - child progress streams into your terminal prefixed `[<agent>]`, and the
   parent sees only the child's final report — its context stays clean.
 
@@ -441,6 +409,13 @@ key at all**:
 | openrouter | free key required | `OPENROUTER_API_KEY` | https://openrouter.ai/keys |
 | gemini | free key required | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | zai | free key required | `ZAI_API_KEY` | https://z.ai |
+| nvidia | free key required (~40 req/min, $0) | `NVIDIA_API_KEY` | https://build.nvidia.com/settings/api-keys |
+| mistral | free key required (evaluation-grade free mode: RPS + tokens caps — check Limits) | `MISTRAL_API_KEY` | https://console.mistral.ai |
+| sensenova | key required | `SENSENOVA_API_KEY` | https://token.sensenova.ai |
+| alibaba | key required | `ALIBABA_API_KEY` | https://dashscope-intl.aliyun.com |
+| tokenharbor | key required (free account works, `thk_…`) | `TOKENHARBOR_API_KEY` | https://tokenharbor.ai/dashboard/api-keys |
+| bai | key required (paid, metered per model) | `BAI_API_KEY` | https://chat.b.ai/chat |
+| fabryka | free key, then $0.20/$0.60 per 1M in/out (single reasoning model, concurrency 1) | `FABRYKA_API_KEY` | https://router.fabryka.ai |
 
 A further **18 free-key tiers** joined the registry on 2026-09-13 (harvested
 from freellm.net and peer directories, each cross-checked against a second
@@ -474,50 +449,30 @@ parses back out. This is best-effort — it depends on the model cooperating. A
 model that ignores the instruction degrades to plain text rather than failing.
 Responses are non-streaming, because a `<tool_call>` block can be split across
 SSE deltas and whole bodies keep the parse reliable. It is also credit-metered
-from the first call, so it is deliberately **absent from the free chain**;
-reach it with `--provider 1min`, key at `ONEMIN_API_KEY`.
+from the first call (see the out-of-chain table below).
 
-`hcnsec` (2026-09-14) is a **New API relay** at `https://api.hcnsec.cn` — a
-public-benefit gateway run by 新疆幻城网安科技有限责任公司 that fronts GLM,
-DeepSeek, Qwen, Kimi, MiniMax and Step models behind plain OpenAI paths. It
-needs a key (`HCNSEC_API_KEY`; email registration at
-`https://api.hcnsec.cn/console`), and its free allowance is a quota published
-in that console rather than a fixed grant — so, like `1min`, it stays **out of
-the free chain**; reach it with `--provider hcnsec`. Its default model is
-`auto`, the gateway's own smart-routing id, because a relay's served set shifts
-and a pinned id would 404 on the first call. Two honest notes: it is an
-**aggregator, not a model vendor**, so its operator sees every prompt in
-plaintext — never send secrets through it; and per-model availability is not
-guaranteed, with the platform's own docs reporting individual models down.
+Beyond the chain, the registry holds **134 builtins** (`codewhip provider
+list`; keys via `codewhip auth login <id>`): first-party labs and clouds
+plus keyed aggregators, all reachable via `--provider`. The ones below stay
+**out of the free chain** — each for a stated money reason, since `--free`
+promises never to bill pay-go (that promise is structural: chain membership
+requires a non-billing tier, which is why the one-time grants were removed
+2026-09-18):
 
-`hashneuron` (2026-09-14) is **RouteOpen**, an OpenAI-compatible gateway at
-`https://hashneuron.space` — standard Bearer auth and a standard error envelope,
-so it needs no adapter. It needs a key (`HASHNEURON_API_KEY`; sign in with GitHub
-or Google and mint one at `https://hashneuron.space/#keys`). Its default model is
-the literal id `default`, which the console's own model picker renders as
-"Auto" — the gateway's server-side routing entry, and the one id that survives a
-catalog change. It stays **out of the free chain**: every account gets 500,000
-tokens per day reset at UTC midnight, but the same console sells prepaid token
-packages and keeps a balance ledger, so a call past the daily grant draws on a
-paid balance rather than cleanly rate-limiting — and `--free` promises never to
-bill pay-go. Reach it with `--provider hashneuron`. It is an **aggregator, not a
-model vendor**: its operator sees every prompt in plaintext, so never send
-secrets through it.
+| Provider | Why out of the chain | Reach it |
+|---|---|---|
+| `1min` | credit-metered from the first call; also the only non-OpenAI builtin (`port: "onemin"` — flattened prompt, `API-KEY` header, emulated `<tool_call>` blocks, always-estimated tokens) | `--provider 1min`, key `ONEMIN_API_KEY` |
+| `hcnsec` | New API relay; free allowance is a console quota, not a fixed grant | `--provider hcnsec`, key `HCNSEC_API_KEY` at `https://api.hcnsec.cn/console` |
+| `hashneuron` | RouteOpen gateway; calls past the daily 500k grant draw on a paid balance instead of rate-limiting | `--provider hashneuron`, key `HASHNEURON_API_KEY` at `https://hashneuron.space/#keys` |
+| `codiv` | diffusion-LM host; 10M-token grant "while the experiment runs" (renewability unconfirmed) | `--provider codiv`, key `CODIV_API_KEY` at `https://codiv.ai/signup` |
+| trial-credit aggregators (`together`, `deepinfra`, `fireworks`, `cometapi`, `mkeai`, `apiyi`, `xai`, `novita`, …) | one-time signup grants are not free tiers | `--provider <id>` |
+| `wrouter` (AccelsRouter) | trial credit for new accounts | `--provider wrouter`, key `WROUTER_API_KEY` at `https://router.accels.tech/register` |
+| `arouter` (ARouter) | keyed gateway, no verified free tier | `--provider arouter`, key `AROUTER_API_KEY` at `https://api.arouter.ai` |
 
-`codiv` (2026-09-18) is a first-party **OpenAI-compatible inference host** at
-`https://api.codiv.ai` — no adapter needed, just a registry row. It serves open
-"System One" models; the chat default is `diffusiongemma-26b` (DiffusionGemma
-26B, a diffusion LM — output is denoised in 64-token blocks, so completions
-take seconds rather than milliseconds, and the server ignores sampling params
-codewhip never sends). Streaming, function tool calls, and OpenAI-shaped errors
-all match the shared adapter's expectations. It needs a key (`CODIV_API_KEY`;
-free signup, no card, at `https://codiv.ai/signup`): every account gets 10M
-text-generation tokens "while the experiment runs" (600 req/min), and an
-exhausted grant answers 429 `insufficient_quota` rather than a bill — the
-receipt prices it $0, but the allotment is finite. Like the one-time grants it
-stays **out of the free chain** (renewability unconfirmed); reach it with
-`--provider codiv`. Through `codewhip serve` it is exposed to any OpenAI
-client as `codiv:diffusiongemma-26b`.
+Relays and aggregators (`hcnsec`, `hashneuron`, community gateways) see every
+prompt in plaintext — never send secrets through them. A relay's served set
+shifts, so relay rows default to the gateway's own routing id (`auto`,
+`default`) rather than a pinned model that would 404.
 
 Every free-tier default is priced `$0` on the receipt — never fiction-priced,
 and non-free models on the same gateway print `cost untracked`. A loopback local
@@ -596,7 +551,21 @@ codewhip run "..." --provider mistral --models mistral-small-latest,mistral-medi
                                   # walk models in order on 429, each once per run (order: wait, rotate, failover)
 ```
 
-Both wait and switch are 429-only: auth, 5xx, and other transport errors never trigger them. Timeouts and stalls do rotate/fail over (a slow model is better served by another model than by waiting) — but `--retry-wait` stays 429-only. `--failover` needs the other provider's key up front (aborts otherwise — it never runs keyless), starts from the provider default (drop `--model`, or lead `--models` with it), and banners because it may bill pay-go. Keep completion-refusers like `codestral-latest` out of agent chains: it answers but won't call tools for file work. Receipts show the per-model mix whenever a run crosses models or providers.
+Waits (`--retry-wait`) are 429-only; moves (same-provider `--models`
+rotation, `--failover`/`--free`/`--auto-failover` hops) trigger on
+rate-limit, timeout, and upstream 5xx — a slow or struggling model is
+better served by another target than by waiting. Auth and other transport
+errors never trigger either: retrying them only repeats the failure. `--failover` needs the other provider's key up front (aborts otherwise — it never runs keyless), starts from the provider default (drop `--model`, or lead `--models` with it), and banners because it may bill pay-go. Keep completion-refusers like `codestral-latest` out of agent chains: it answers but won't call tools for file work. Receipts show the per-model mix whenever a run crosses models or providers.
+
+### TUI slash commands
+
+Inside `--tui`, three commands steer the live run without restarting it:
+
+- `/model <provider>[:<model>]` — switch provider/model at the next turn
+  boundary (receipts split per model, so the switch stays metered);
+- `/free` — show the free chain and which hops are currently usable;
+- `/plan` — plan mode is run-scoped, so this only reports that: re-run
+  with `--plan` for a read-only run.
 
 ### Approvals that stick ("always allow")
 
@@ -652,6 +621,21 @@ talk its way around rules it has never seen.
 Remove a rule by deleting its line from `.codewhip/remembered.jsonl`
 (one JSON object per line; the file is gitignored with the rest of
 `.codewhip/`).
+
+### Measure it: eval, metrics, verdict
+
+```sh
+codewhip eval --free            # 12 fixture tasks, machine-graded, recorded to .codewhip/eval.jsonl
+codewhip metrics                # per-class bars: >=70% polish / >=50% implement (MET/NOT MET)
+codewhip verdict --auto e029e31f  # propose accepted/edited/reverted from checkpoints vs the tree; records on one keypress
+```
+
+`eval` runs the agent against tiny fixture repos in disposable temp dirs
+(the checker must fail on the raw fixture and pass on the solved one, or
+the task doesn't ship) and merges each run's outcome row into the host
+`outcomes.jsonl`. `metrics` reads outcomes + verdicts, so the bars are
+measured, not claimed. `verdict --auto` never proposes `rejected` and
+refuses non-interactive sessions — the judgment stays human-attached.
 
 ## Strategy notes
 
