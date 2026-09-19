@@ -3,7 +3,8 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, isAutoEligible, isPolishRun, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
+import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, pickExplorePool, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
+import type { ModelHealth } from "./provider-stats.js";
 import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
 import { PROVIDERS } from "./provider.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
@@ -302,5 +303,42 @@ describe("router", () => {
       if (prevOpt === undefined) delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
       else process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = prevOpt;
     }
+  });
+});
+
+describe("auto recovery (explore/exploit)", () => {
+  const FRESH = new Date().toISOString();
+  const STALE = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  function mh(p: Partial<ModelHealth>): ModelHealth {
+    return {
+      provider: "x", model: "m", total: 20, ok: 6, failed: 14, successRate: 0.3,
+      recentOk: 6, recentTotal: 20, recentSuccessRate: 0.3, lastCallTs: FRESH,
+      errorKinds: {}, promptTokens: 0, completionTokens: 0, tokensPerSec: 0, avgMs: 0,
+      ...p,
+    };
+  }
+  it("recency dominates: a model recovered in the recent window re-enters auto", () => {
+    ok(healthPasses(mh({ recentOk: 18, recentSuccessRate: 0.9 }), 0.5));
+    ok(!healthPasses(mh({ recentOk: 2, recentSuccessRate: 0.1 }), 0.5));
+    // Thin recent window defers to the (bad) lifetime rate.
+    ok(!healthPasses(mh({ recentTotal: 3, recentOk: 0, recentSuccessRate: 0 }), 0.5));
+  });
+  it("staleness reset: 24h of silence makes a bad record unproven again, not condemned", () => {
+    ok(healthPasses(mh({ lastCallTs: STALE }), 0.5));
+    ok(healthPasses(undefined, 0.5));
+  });
+  it("healthRate uses the recent window only once it holds >= 5 calls", () => {
+    strictEqual(healthRate(mh({ recentTotal: 3, recentSuccessRate: 1 })), 0.3);
+    strictEqual(healthRate(mh({ recentTotal: 6, recentSuccessRate: 1 })), 1);
+  });
+  it("pickExplorePool spends ~10% of picks (and all when nothing passes) on gated-out candidates", () => {
+    const pass = ["a"];
+    const gated = ["b"];
+    const exploit = pickExplorePool(pass, gated, () => 0.99);
+    ok(exploit.pool.includes("a") && !exploit.exploring);
+    const explore = pickExplorePool(pass, gated, () => 0.01);
+    ok(explore.exploring && explore.pool.includes("b"));
+    const forced = pickExplorePool([], gated, () => 0.99);
+    ok(forced.exploring && forced.pool.includes("b"));
   });
 });

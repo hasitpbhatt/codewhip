@@ -94,6 +94,16 @@ shape; eval adds a machine-graded measurement layer.
 - **Dead code** — unused `budget.ts` exports and the vestigial TUI budget
   cards (`setBudget`/`updateBudgetChild` were never called; budget info
   flows as text events) removed.
+- **Auto-recovery for failed models (explore/exploit)** — the success-rate
+  gates that steer auto away from unhealthy routes aggregated **lifetime**
+  records, so a bad hour could lock a model out of auto indefinitely:
+  excluded from auto, it never earned the calls that would rehabilitate it.
+  serve's `model: "auto"` and `CODEWHIP_AUTO_RANDOM=1` now judge on a rolling
+  last-20-call window (recency dominates — recovery is immediate), treat a
+  record older than 24h as unproven rather than condemned (staleness reset),
+  and CLI random mode spends ~10% of picks (all of them when nothing passes)
+  on gated-out-but-eligible models as exploration probes, noted on the
+  receipt. Lifetime aggregates on the health page and in metrics unchanged.
 
 ### Security & integrity (Linus-review pass, same release)
 

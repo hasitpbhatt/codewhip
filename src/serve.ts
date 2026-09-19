@@ -5,7 +5,7 @@ import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } fr
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
-import { estimateCost, isAutoEligible, TTL_MS } from "./router.js";
+import { estimateCost, healthPasses, healthRate, isAutoEligible, TTL_MS } from "./router.js";
 import { listModels } from "./models.js";
 
 /**
@@ -164,11 +164,14 @@ function contentToText(parts: unknown[]): string {
  * Health-weighted auto pick for `model: "auto"` (and `--provider auto`).
  * Eligibility (loopback / key / paid-key gates) is `isAutoEligible` in the
  * router — one rule for CLI and serve, so a paid key is never auto-touched.
- * On top: TTL deactivation plus a success-rate floor, then weight drains the
- * known-$0 pool first: free ×3, priced ×1, untracked ×0.5 (opt-in only),
- * times (0.5 + successRate) so a proven model beats an unproven one without
- * starving new providers. No-data providers keep full weight — empty history
- * is not failure.
+ * On top: TTL deactivation plus the shared health gate (`healthPasses` —
+ * recency-windowed rate, staleness reset after 24h of silence so a failed
+ * model is re-probed instead of ratcheted out forever), then weight drains
+ * the known-$0 pool first: free ×3, priced ×1, untracked ×0.5 (opt-in only),
+ * times (0.5 + recency-aware successRate) so a proven model beats an
+ * unproven one without starving new providers. The weighting is serve's
+ * exploration: a gated model that re-enters picks at reduced probability.
+ * No-data providers keep full weight — empty history is not failure.
  */
 function pickAutoTarget(): Target | { error: string } {
   const summary = summarizeCalls(readProviderCalls());
@@ -193,10 +196,10 @@ function pickAutoTarget(): Target | { error: string } {
         const ttl = TTL_MS[mh.lastFailureOutcome] ?? 5 * 60_000;
         if (Date.now() - new Date(mh.lastFailureTs).getTime() < ttl) continue;
       }
-      if (mh !== undefined && mh.total >= 5 && mh.successRate < 0.5) continue;
+      if (mh !== undefined && !healthPasses(mh, 0.5)) continue;
       const per1k = estimateCost(cfg.id as ProviderId, modelId, 1000, 1000);
       const costFactor = per1k === null ? 0.5 : per1k === 0 ? 3 : 1;
-      const healthFactor = mh === undefined ? 1.5 : 0.5 + mh.successRate;
+      const healthFactor = mh === undefined ? 1.5 : 0.5 + healthRate(mh);
       cands.push({ provider: cfg.id, model: modelId, weight: costFactor * healthFactor });
     }
   }
