@@ -18,11 +18,12 @@ import { listSessions, loadSession, saveSession } from "./sessions.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
-import { appendEntry, auditPath, buildBundle, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
+import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { getTaskStatuses } from "./tools/background.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
 import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
+import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
@@ -544,11 +545,28 @@ function cmdInit(): void {
     fs.writeFileSync(pubKey, publicKey.export({ type: "spki", format: "pem" }), "utf8");
     console.log("generated .codewhip/key (ed25519, local only)");
     if (lockWarning !== null) console.warn(`init: warning: ${lockWarning}`);
+    // Signed genesis marker: bounds the pre-key unsigned prefix so
+    // verification can detect prepend-forgery instead of forgiving it
+    // unboundedly (docs/moat/torvalds-architecture-review.md, finding 6).
+    if (appendGenesis(cwd)) {
+      console.log("signed genesis marker appended (bounds pre-key history)");
+    } else {
+      console.warn("init: warning: genesis marker could not be appended — the audit chain has no verifiable pre-key bound");
+    }
   } else {
     // Repair pass: keys written by older versions predate owner-only files.
     const lockWarning = lockFileOwnerOnly(privKey);
     if (lockWarning !== null) console.warn(`init: warning: ${lockWarning}`);
     console.log("kept .codewhip/key (exists)");
+    // Legacy chains predate the genesis marker; appending one on repair
+    // upgrades them so future prepend-forgery is detectable.
+    if (!hasGenesis(cwd)) {
+      if (appendGenesis(cwd)) {
+        console.log("signed genesis marker appended — pre-key history is now bounded");
+      } else {
+        console.warn("init: warning: genesis marker could not be appended — the audit chain has no verifiable pre-key bound");
+      }
+    }
   }
   console.log('done. next: codewhip demo --deny (offline, $0) — then: codewhip auth login nvidia');
 }
@@ -691,7 +709,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     console.log("!! --no-stream armed: whole-body responses (SSE off for this process).");
   }
   if (opts.yolo) {
-    console.log("!! --yolo is explicit, logged, bannered. Denylist still applies — never bypassed.");
+    console.log("!! --yolo is explicit, logged, bannered. The denylist still applies (spelling-normalized) — and the ask ladder, worktree wall, and signed audit remain the enforcement boundary; no string screen is absolute.");
   }
   if (opts.retryWait) {
     console.log("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
@@ -710,6 +728,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   if (opts.timeoutMs !== undefined) {
     console.log(`!! --timeout-ms armed: provider calls abort after ${opts.timeoutMs}ms (provider default ${runCfg.timeoutMs}ms overridden)`);
   }
+  // Compaction ceiling: model-aware when the provider row carries a VERIFIED
+  // context window (0.7×), else the default. Fixed per run from the head
+  // provider — a live /model switch does not re-derive it (windowless
+  // context-overflow 400s join the rotation path regardless).
+  const compactCeiling =
+    runCfg.contextWindow !== undefined
+      ? Math.min(DEFAULT_COMPACT_TOKENS, Math.floor(runCfg.contextWindow * 0.7))
+      : DEFAULT_COMPACT_TOKENS;
   const { key: apiKey, source: keySource } = resolveKey(opts.provider);
   if (apiKey.length === 0) {
     missingKeyHelp(opts.provider);
@@ -861,6 +887,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       models: opts.models,
       takePendingSwitch,
       tokenBudget: opts.tokenBudget,
+      compactTokens: compactCeiling,
       history,
       onEvent: onEventFn,
     });
@@ -895,6 +922,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     }
     if (result.repeatCalls > 0) {
       console.log(`repeats: ${result.repeatCalls} identical idempotent tool call(s) served from the run memo instead of re-executing — a weak model wasting steps, not a harness fault`);
+    }
+    if ((result.auditDropped ?? 0) > 0) {
+      console.log(`!! audit: ${result.auditDropped} entr(y|ies) NOT recorded this run (lock contention or disk failure) — the signed trail has holes for ${result.runId.slice(0, 8)}; investigate before trusting this run's history`);
     }
     console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
     // Inline provider-health hint — only when this provider has recorded failures,

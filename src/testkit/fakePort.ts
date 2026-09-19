@@ -5,7 +5,10 @@ import type { ChatPort, ChatPortResponse, LoopMsg } from "../provider-port.js";
  * response in `responses` (clamped to the last). `record` accumulates
  * every call's model and tool count so tests can assert routing.
  */
-export function makeFakePort(responses: ChatPortResponse[]): {
+export function makeFakePort(
+  responses: ChatPortResponse[],
+  opts?: { strict?: boolean }
+): {
   port: ChatPort;
   record: Array<{ model: string; toolCount: number }>;
   messagesSeen: LoopMsg[][];
@@ -16,7 +19,16 @@ export function makeFakePort(responses: ChatPortResponse[]): {
   const port: ChatPort = async (args) => {
     record.push({ model: args.model, toolCount: args.tools.length });
     messagesSeen.push(args.messages);
-    return responses[Math.min(i++, responses.length - 1)];
+    // Default replays the last response (lenient); strict mode throws on
+    // over-consume so a regression that doubles provider calls fails the
+    // test instead of silently passing on the final scripted turn.
+    if (i >= responses.length) {
+      if (opts?.strict === true) {
+        throw new Error(`fakePort: over-consumed (${record.length} calls > ${responses.length} responses)`);
+      }
+      return responses[responses.length - 1] as ChatPortResponse;
+    }
+    return responses[i++] as ChatPortResponse;
   };
   return { port, record, messagesSeen };
 }

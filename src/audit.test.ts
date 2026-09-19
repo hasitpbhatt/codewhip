@@ -9,6 +9,8 @@ import {
   auditPath,
   buildBundle,
   entryHash,
+  appendGenesis,
+  hasGenesis,
   interpretVerification,
   readAuditLog,
   verifyChain,
@@ -49,8 +51,8 @@ describe("audit chain", () => {
   it("appends chained entries with seq + prev_hash, unsigned without a key", () => {
     const a1 = appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "deny:denylist:rm-rf" });
     const a2 = appendEntry(cwd, { runId: "r1", actor: "human", tool: "edit", args_hash: "p", result_hash: "q", policy: "allow:default:edit:ask" });
-    strictEqual(a1, true);
-    strictEqual(a2, true);
+    strictEqual(a1, null);  // null = recorded
+    strictEqual(a2, null);
     const { entries, parseErrors } = readAuditLog(cwd);
     strictEqual(parseErrors.length, 0);
     strictEqual(entries.length, 2);
@@ -123,10 +125,37 @@ describe("audit chain", () => {
     ok(v.problems.some((p) => p.includes("not valid JSON")), v.problems.join(" | "));
   });
 
+
+  it("genesis marker: init upgrade bounds the pre-key prefix (P0)", () => {
+    // Legacy chain: unsigned entries recorded before any key existed.
+    appendEntry(cwd, { runId: "r0", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    strictEqual(hasGenesis(cwd), false);
+    // init repair path: key exists, chain has no marker → append one.
+    writeKey(cwd);
+    ok(appendGenesis(cwd));
+    ok(hasGenesis(cwd));
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "read", args_hash: "m", result_hash: "n", policy: "a" });
+    const interp = interpretVerification(verifyChain(cwd), cwd);
+    ok(interp.clean, interp.status);
+    ok(interp.status.includes("genesis"), `status should name the marker: ${interp.status}`);
+    ok(interp.status.includes("legacy"), `status should mark the pre-key prefix legacy: ${interp.status}`);
+  });
+
+  it("fresh init: genesis at seq 1 verifies plain INTACT with no legacy prefix", () => {
+    writeKey(cwd);
+    ok(appendGenesis(cwd));
+    const interp = interpretVerification(verifyChain(cwd), cwd);
+    ok(interp.clean, interp.status);
+    strictEqual(interp.status, "INTACT");
+    const { entries } = readAuditLog(cwd);
+    strictEqual(entries[0]?.tool, "genesis");
+    strictEqual(entries[0]?.seq, 1);
+  });
+
   it("signs entries when a key exists and verifies them", () => {
     writeKey(cwd);
     const s1 = appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "deny:denylist:rm-rf" });
-    strictEqual(s1, true);
+    strictEqual(s1, null);
     const { entries } = readAuditLog(cwd);
     const sig = (entries[0] as AuditEntry).sig;
     ok(typeof sig === "string" && sig.length > 0, "signature present");

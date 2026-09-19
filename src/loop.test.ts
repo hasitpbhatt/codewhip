@@ -346,6 +346,56 @@ describe("loop", () => {
     ok(r.usageByModel.some((b) => b.label === "other" && b.model === "z"), JSON.stringify(r.usageByModel));
     ok(r.usageByModel.some((b) => b.label === "nvidia" && b.model === "a"), JSON.stringify(r.usageByModel));
   });
+
+  it("after a live /model switch, head-provider rotation does NOT fire on the new port", async () => {
+    // The bug: rotation candidates were bare model ids resolved against
+    // whatever port `current` held — after /model groq, a 429 sent the head
+    // provider's next model id to groq and the run died terminally.
+    const { port, record } = makeFakePort([
+      toolTurn("read", JSON.stringify({ path: "f.txt" })),
+      rateLimited(),
+      rateLimited(),
+      textTurn("done"),
+    ]);
+    let armed = false;
+    const r = await agentLoop({
+      prompt: "hi", model: "a", models: ["a", "b"], label: "kilo", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      remembered: listRules(cwd),
+      takePendingSwitch: () => {
+        if (record.length === 0 || armed) return null;
+        armed = true;
+        return { label: "groq", model: "z", port };
+      },
+    });
+    // The switch applied, the 429 on the new provider found NO rotation
+    // candidates (rotation is head-provider-gated) and no failover chain —
+    // so the run ends naming the failed switch, never sending model "b" (a
+    // kilo id) to the groq port. The record proves the foreign id never dialed.
+    ok(r.error !== undefined, "expected terminal error");
+    ok(r.error.includes("live /model switch to groq:z failed terminally"), r.error);
+    ok(!record.some((c) => c.model === "b" && record.indexOf(c) > 0), `foreign model id dialed: ${JSON.stringify(record.map((c) => c.model))}`);
+  });
+
+  it("a terminally failed turn that had a switch applied says so", async () => {
+    const { port, record } = makeFakePort([toolTurn("read", JSON.stringify({ path: "f.txt" })), authFailure()]);
+    let armed = false;
+    const r = await agentLoop({
+      prompt: "hi", model: "a", label: "kilo", cwd, maxSteps: 10, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk,
+      remembered: listRules(cwd),
+      takePendingSwitch: () => {
+        // Arms at the second turn boundary: the auth-failing call is the
+        // first call dialed on the switched target.
+        if (record.length === 0 || armed) return null;
+        armed = true;
+        return { label: "groq", model: "z", port };
+      },
+    });
+    ok(r.error !== undefined);
+    ok(r.error.includes("live /model switch to groq:z failed terminally"), r.error);
+  });
+
   it("a null takePendingSwitch never disturbs the run", async () => {
     const { port, record } = makeFakePort([textTurn("done")]);
     const r = await agentLoop({

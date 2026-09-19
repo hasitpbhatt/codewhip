@@ -33,6 +33,27 @@ function normalize(s: string): string {
 }
 
 /**
+ * Spelling normalization for the DENY MATCHER only (never for execution):
+ * quotes are stripped — both shells splice `g"it"` into `git`, and the
+ * matcher must see the command the shell will see — and `.exe`/`.com`
+ * suffixes are dropped from tokens so `git.exe`/`cmd.exe` match the same
+ * rules as their bare spellings. Substring patterns run on the stripped
+ * text too, so a denylisted sequence hidden inside quotes still denies.
+ * Safe direction: this can only over-match (e.g. `echo "rm -rf /"` denies),
+ * never under-match.
+ */
+function normalizeForMatching(s: string): string {
+  const stripped = normalize(s).replace(/["']/g, "");
+  return stripped;
+}
+
+function matchTokens(command: string): string[] {
+  return normalizeForMatching(command)
+    .split(/\s+/)
+    .map((t) => t.replace(/\.(exe|com)$/, ""));
+}
+
+/**
  * Non-overridable denylist probe, shared by the loop and bash itself.
  * Substring patterns first, then token checks so flag-reordered variants
  * can't dodge ("git push origin --force", "rm -rfv /", "rm --recursive
@@ -40,13 +61,13 @@ function normalize(s: string): string {
  * destructors are covered too because bash runs PowerShell on win32.
  */
 export function matchDenylist(commandPreview: string): string | null {
-  const norm = normalize(commandPreview);
+  const norm = normalizeForMatching(commandPreview);
   for (const p of DENY_PATTERNS) {
     if (norm.includes(p)) {
       return p;
     }
   }
-  const tokens = norm.split(/\s+/);
+  const tokens = matchTokens(commandPreview);
   if (
     tokens.includes("git") &&
     tokens.includes("push") &&
@@ -62,6 +83,21 @@ export function matchDenylist(commandPreview: string): string | null {
   if (interpDeny !== null) return interpDeny;
   if (tokens.includes("dd") && tokens.some((t) => t.startsWith("of=/dev/"))) {
     return "dd of=/dev/";
+  }
+  return null;
+}
+
+/**
+ * PowerShell script blocks (and, on /bin/sh, brace payloads) are opaque to
+ * every string screen — with pipes banned, braces in a SHELL command exist
+ * to carry code past it (`start-job { remove-item … }`, find -exec {} …).
+ * Bash-only on purpose: tool args are JSON and full of braces. The house
+ * method for combining steps is a script file run under an ask-gated
+ * interpreter, not inline blocks.
+ */
+export function matchScriptBlock(command: string): string | null {
+  if (/[{}]/.test(command)) {
+    return "script block / brace payload is opaque to string screening — write a script file and run it instead";
   }
   return null;
 }
@@ -151,7 +187,20 @@ const INLINE_CODE_FLAGS: Record<string, string[]> = {
   dash: ["c"], zsh: ["c"], fish: ["c", "command"],
 };
 
-const NESTED_SHELLS = new Set(["powershell", "pwsh", "cmd"]);
+const NESTED_SHELLS = new Set([
+  "powershell",
+  "pwsh",
+  "cmd",
+  // PowerShell-native code executors: the argument IS code, so these are the
+  // nested-shell class, not commands — `iex (gc .\b.ps1)` has no chaining
+  // chars, no denylisted token, and executes whatever the string contains.
+  "iex",
+  "invoke-expression",
+  "start-job",
+  "start-threadjob",
+  "invoke-command",
+  "add-type",
+]);
 
 function matchInterpreterDeny(tokens: string[]): string | null {
   // Encoded payloads defeat every string screen — deny wherever they appear,
@@ -232,7 +281,7 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
   return preview;
 }
 
-export const POLICY_VERSION = "v1-2026-09-15";
+export const POLICY_VERSION = "v1-2026-09-18";
 export function checkPermission(
   tool: ToolName,
   commandPreview: string,
@@ -272,6 +321,14 @@ export function checkPermission(
         decision: "deny",
         ruleId: "denylist:worktree-escape",
         reason: `${escape} — use worktree-relative paths and PATH-resolved commands`,
+      };
+    }
+    const block = matchScriptBlock(commandPreview);
+    if (block !== null) {
+      return {
+        decision: "deny",
+        ruleId: "denylist:script-block",
+        reason: `${block} (bash-only rule: tool args are JSON and full of braces)`,
       };
     }
     // Self-protected paths are harness state and compiled policy: the shell

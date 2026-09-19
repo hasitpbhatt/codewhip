@@ -27,7 +27,7 @@ function delegateManySpec(): ToolSpec {
     description:
       `Fan a task out to ${MAX_FANOUT} read-only subagents at most, concurrently, and get their reports in order. ` +
       "Args: entries (array of {agent, task}) — use different agents for independent perspectives, then converge on the results. " +
-      "Children can only read/search/webfetch and cannot delegate.",
+      "Children can only read/search (no network, no delegation).",
     parameters: {
       type: "object",
       properties: {

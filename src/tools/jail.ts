@@ -33,7 +33,10 @@ export function jailPath(cwd: string, target: string): string | null {
  * Secret-material filenames, refused by read/edit and skipped by search.
  * One list, three tools — push-time redaction is only the second net.
  */
-const SECRET_FILE_RX = [/^\.env(\.|$)/i, /\.pem$/i, /\.key$/i, /credentials\.json$/i];
+const SECRET_FILE_RX = [
+  /^\.env(\.|$)/i, /^\.envrc$/i, /\.pem$/i, /\.key$/i, /credentials\.json$/i,
+  /^id_(rsa|ed25519|ecdsa)(\.|$)/i, /^\.npmrc$/i, /secrets\.ya?ml$/i,
+];
 
 export function isSecretFileName(base: string): boolean {
   return SECRET_FILE_RX.some((rx) => {

@@ -57,6 +57,10 @@ export type OutcomeRecord = {
   /** Optional since subagents: set on child runs — spend is already folded
    * into the parent's record, so aggregators must not double-count. */
   parent_run_id?: string;
+  /** Optional since 2026-09-18: audit entries this run failed to append
+   * (lock contention / disk failure) — nonzero means the signed trail has
+   * holes for this runId. Additive; old readers ignore unknown keys. */
+  audit_dropped?: number;
 };
 
 export function newRunId(): string {

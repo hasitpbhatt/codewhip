@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ToolContext, ToolResult } from "./types.js";
-import { CHAIN_RX, matchDenylist, matchWorktreeEscape } from "../policy.js";
+import { CHAIN_RX, matchDenylist, matchScriptBlock, matchWorktreeEscape } from "../policy.js";
 
 export const BASH_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -45,6 +45,10 @@ export async function bashTool(
   const escape = matchWorktreeEscape(command);
   if (escape !== null) {
     return { ok: false, output: `bash: denied — ${escape} (non-overridable)` };
+  }
+  const block = matchScriptBlock(command);
+  if (block !== null) {
+    return { ok: false, output: `bash: denied — ${block} (non-overridable)` };
   }
   const timeout = args.timeoutMs ?? BASH_TIMEOUT_MS;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 120000) {

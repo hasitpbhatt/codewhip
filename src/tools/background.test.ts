@@ -66,7 +66,9 @@ describe("run_in_background", () => {
     const id = start.output.match(/task_\d+/)?.[0] ?? start.output.slice(start.output.indexOf("task_")).split(" ")[0];
     const stop = await taskStop(ctx, { id });
     strictEqual(stop.ok, true);
-    ok(stop.output.includes("SIGTERM"), stop.output);
+    // The old message claimed "sent SIGTERM" — a POSIX lie on win32, where a
+    // bare kill orphaned the whole descendant tree. The stop is a tree kill now.
+    ok(stop.output.includes("process tree killed"), stop.output);
     // After a beat, the task should report killed.
     await new Promise((r) => setTimeout(() => r(undefined), 200));
     const out = await taskOutput(ctx, { id });
