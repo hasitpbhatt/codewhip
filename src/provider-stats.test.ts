@@ -5,8 +5,15 @@ import {
   renderProviderHealth,
   outcomeForStatus,
   LISTING_MODEL,
+  recordProviderCall,
+  readProviderCalls,
+  resetProviderStatsForTest,
   type ProviderCallRecord,
 } from "./provider-stats.js";
+import { configDir } from "./config-dir.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 
 function rec(p: Partial<ProviderCallRecord>): ProviderCallRecord {
   return {
@@ -20,20 +27,20 @@ function rec(p: Partial<ProviderCallRecord>): ProviderCallRecord {
 }
 
 describe("provider-stats", () => {
-it("outcomeForStatus buckets http statuses", () => {
-     strictEqual(outcomeForStatus(401), "auth");
-     strictEqual(outcomeForStatus(403), "auth");
-     strictEqual(outcomeForStatus(429), "quota");
-     strictEqual(outcomeForStatus(404), "bad_model");
-     strictEqual(outcomeForStatus(410), "bad_model");
-     strictEqual(outcomeForStatus(500), "other");
-   });
-   it("outcomeForStatus detects balance_low from 402 body", () => {
-     strictEqual(outcomeForStatus(402, '{"error": "balance low"}'), "balance_low");
-     strictEqual(outcomeForStatus(402, "insufficient balance"), "balance_low");
-     // 402 without balance text falls back to quota
-     strictEqual(outcomeForStatus(402), "quota");
-   });
+  it("outcomeForStatus buckets http statuses", () => {
+    strictEqual(outcomeForStatus(401), "auth");
+    strictEqual(outcomeForStatus(403), "auth");
+    strictEqual(outcomeForStatus(429), "quota");
+    strictEqual(outcomeForStatus(404), "bad_model");
+    strictEqual(outcomeForStatus(410), "bad_model");
+    strictEqual(outcomeForStatus(500), "other");
+  });
+  it("outcomeForStatus detects balance_low from 402 body", () => {
+    strictEqual(outcomeForStatus(402, '{"error": "balance low"}'), "balance_low");
+    strictEqual(outcomeForStatus(402, "insufficient balance"), "balance_low");
+    // 402 without balance text falls back to quota
+    strictEqual(outcomeForStatus(402), "quota");
+  });
 
   it("empty summary renders a no-data message", () => {
     const s = summarizeCalls([]);
@@ -130,5 +137,35 @@ it("outcomeForStatus buckets http statuses", () => {
     strictEqual(mh.recentOk, 19);
     strictEqual(mh.recentSuccessRate, 0.95);
     strictEqual(mh.lastCallTs, "2026-09-11T01:00:00.000Z");
+  });
+
+  it("recordProviderCall followed by readProviderCalls returns the record", () => {
+    const tmpDir = path.join(os.tmpdir(), `cw-stats-test-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    process.env["CODEWHIP_CONFIG_DIR"] = tmpDir;
+    resetProviderStatsForTest();
+    try {
+      recordProviderCall({
+        ts: new Date().toISOString(),
+        provider: "kilo",
+        model: "cohere/north-mini-code:free",
+        kind: "chat",
+        outcome: "ok",
+        host: "https://api.kilo.ai",
+        status: 200,
+        ms: 100,
+        promptTokens: 10,
+        completionTokens: 5,
+      });
+      const calls = readProviderCalls();
+      strictEqual(calls.length, 1);
+      strictEqual(calls[0].provider, "kilo");
+      strictEqual(calls[0].model, "cohere/north-mini-code:free");
+      strictEqual(calls[0].outcome, "ok");
+    } finally {
+      delete process.env["CODEWHIP_CONFIG_DIR"];
+      resetProviderStatsForTest();
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
   });
 });
