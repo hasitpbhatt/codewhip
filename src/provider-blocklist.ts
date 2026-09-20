@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
+import { lockFileOwnerOnly } from "./secure-file.js";
 
 type BlockEntry = {
   provider: string;
@@ -32,8 +33,9 @@ function loadEntries(): BlockEntry[] {
 function saveEntries(entries: BlockEntry[]): void {
   try {
     const dir = configDir();
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(filePath(), JSON.stringify(entries, null, 2) + "\n", { mode: 0o600 });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath(), JSON.stringify(entries, null, 2) + "\n");
+    lockFileOwnerOnly(filePath());
   } catch {
     // best-effort
   }

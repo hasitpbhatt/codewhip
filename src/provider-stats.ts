@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
+import { lockFileOwnerOnly } from "./secure-file.js";
 
 /**
  * Per-(provider, model) request health. Codewhip records every chat/models call
@@ -72,18 +73,28 @@ let dirty = false;
 let cached: ProviderCallRecord[] | null = null;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let dirEnsured = false;
+let flushFailureLogged = false;
+let locked = false;
 
 function flushSync(): void {
   if (writeBuffer.length === 0) return;
   try {
     if (!dirEnsured) {
-      fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
+      fs.mkdirSync(configDir(), { recursive: true });
       dirEnsured = true;
     }
-    fs.appendFileSync(filePath(), writeBuffer.join(""), { mode: 0o600 });
+    fs.appendFileSync(filePath(), writeBuffer.join(""));
     writeBuffer = [];
-  } catch {
-    // analytics is best-effort
+    if (!locked) {
+      const warn = lockFileOwnerOnly(filePath());
+      locked = true;
+      if (warn) console.warn(`provider-stats: ${warn}`);
+    }
+  } catch (err) {
+    if (!flushFailureLogged) {
+      flushFailureLogged = true;
+      console.warn(`provider-stats: flush failed (${err instanceof Error ? err.message : err}) — stats will stay stale until the file is accessible`);
+    }
   }
 }
 
@@ -129,9 +140,8 @@ export function readProviderCalls(): ProviderCallRecord[] {
     dirty = false;
     return cached;
   } catch {
-    cached = [];
-    dirty = false;
-    return cached;
+    cached = null; // invalidate so the next call retries the read
+    return [];
   }
 }
 
@@ -329,4 +339,13 @@ export function renderProviderHealth(s: ProviderHealthSummary, warnBelow = 0.8):
   }
   lines.push("legend: ⚠ = success rate below 80%. outcomes: ok/auth/quota/timeout/network/bad_model/other.");
   return lines.join("\n");
+}
+
+/** Reset module singletons for testing. */
+export function resetProviderStatsForTest(): void {
+  writeBuffer = [];
+  dirty = false;
+  cached = null;
+  flushFailureLogged = false;
+  locked = false;
 }
