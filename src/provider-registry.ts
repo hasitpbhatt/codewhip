@@ -12,7 +12,8 @@
 export type BuiltinProviderId = "nvidia" | "mistral" | "sensenova" | "alibaba" | "llm7" | "tokenharbor" | "bai" | "fabryka" | "opencode" | "kilo" | "groq" | "cerebras" | "openrouter" | "gemini" | "zai" | "empero" | "pollinations" | "sambanova" | "chutes" | "hyperbolic" | "xai" | "huggingface" | "upstage" | "novita" | "parasail" | "volcengine" | "qianfan" | "hunyuan" | "moonshot" | "deepseek" | "minimax" | "stepfun" | "ppio" | "cloudflare" | "modelscope" | "ovhcloud" | "ollama" | "cohere" | "siliconflow" | "aionlabs" | "agnes" | "requesty" | "inference" | "hetzner" | "venice" | "scaleway" | "friendli" | "nscale" | "nebius" | "ai21" | "coze" | "1min" | "hcnsec" | "hashneuron" | "anyrouter" | "apinex" | "zukijourney" | "nagaai" | "zanityai" | "kimetsu" | "navyapi" | "mnn" | "hcap" | "voltai" | "electronhub" | "xkiro" | "gonkarouter" | "bazaarlink" | "seldon" | "cavoti" | "getunikey" | "freetheai" | "gmicloud" | "inferx" | "kkiai" | "seekai" |   "bynara" | "atria" | "onerouter" | "xpiki" | "githubmodels" | "aihubmix" | "fastrouter" | "vercel" | "zenmux" | "llmgateway" | "together" | "deepinfra" | "fireworks" | "cometapi" | "suyu" | "voapi" | "nio" |   "mkeai" | "apiyi" | "codiv" | "openai" | "perplexity" | "writer" | "lambda" | "featherless" | "metallama" | "yi" | "baichuan" | "internlm" | "iflytek" | "reka" | "sarvam" | "typhoon" | "plamo" | "liquid" | "inception" | "nous" | "byteplus" | "xiaomi" | "arcee" | "heroku" | "modal" | "baseten" | "predibase" | "monsterapi" | "wandb" | "aimlapi" | "bytez" | "synthetic" | "nanogpt" | "kie" | "morph" | "galadriel" | "v0" | "factory" | "poe" | "wrouter" | "arouter" | "tokenrouter" | "darkbloom";
 
 /** Any provider id: a builtin or a user-registered custom id. */
-export type ProviderId = string;
+import type { ProviderId as ProviderIdFromPort } from "./provider-port.js";
+export type ProviderId = ProviderIdFromPort;
 
 export const PROVIDER_IDS: readonly BuiltinProviderId[] = [
   "nvidia",

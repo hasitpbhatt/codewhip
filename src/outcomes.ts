@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "./hash.js";
 import { redactSecrets, redactEnvValues } from "./redact.js";
-import type { ProviderId } from "./provider.js";
+import type { ProviderId } from "./provider-port.js";
 import type { Verdict } from "./verdict.js";
 
 export type OutcomeToolCall = {
@@ -13,7 +13,9 @@ export type OutcomeToolCall = {
   result_hash: string;
   decision: string;
   ruleId: string;
-  /** Optional since promotion: curated/memory shape (e.g. "echo *"), set on declines. */
+  /** Optional since promotion: curated/memory shape (e.g. "echo *"), set on
+   * declines and (since 2026-09-20, immunity telemetry) on human-approved
+   * asks — declines are negatives, approvals are positives. */
   shape?: string;
 };
 
