@@ -134,6 +134,35 @@ filter.
 - No provider should be added without an honest `rateLimitedHint`
 - `defaultModel` must never be fiction — if untested, say so
 
+## AnonymousKey providers (keyless tier)
+
+Providers with an `anonymousKey` in `PROVIDERS` (e.g. `kilo`, `opencode`, `llm7`)
+run without a real API key. They are the keyless safety net: users with zero
+configuration still get responses.
+
+**CRITICAL RULE — the auth-header guard:**
+
+When `resolveKey()` returns `{ source: "anonymous" }` for a provider, the
+`openAiPort` function in `src/provider.ts` MUST NOT emit an
+`Authorization: Bearer <anonymousKey>` header. The reason:
+
+- **kilo**: free `:free` models work with *no* Authorization header at all.
+  Sending `Bearer anonymous` triggers a 400 that would never occur with
+  a real key (verified 2026-09-11).
+- **opencode**: needs `x-opencode-session` identity headers (merged via
+  `cfg.headers`), NOT a Bearer token. The `Bearer public` string causes
+  rejection.
+- **llm7**: anonymous "unused" key rejected by the API.
+
+**This guard lives in `src/provider.ts:openAiPort`** — the `keySource`
+parameter must be passed from `serve.ts` → `makePortForConfig` →
+`openAiPort`, and the `Authorization` header must be conditionally
+included only when `keySource !== "anonymous"`.
+
+Adding a new `anonymousKey` provider? You MUST verify the actual
+API authentication behavior and document it in the `PROVIDERS` row
+comment.
+
 ## Audit trail
 
 Every provider addition and removal is recorded in git history

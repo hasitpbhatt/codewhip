@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { lockFileOwnerOnly } from "./secure-file.js";
 import type {
   ChatPort,
   ChatPortResponse,
@@ -105,7 +106,8 @@ function writeHostOverride(id: string, host: string): void {
   }
   if (map[id] === host) return;
   map[id] = host;
-  fs.writeFileSync(file, JSON.stringify(map) + "\n", { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify(map) + "\n");
+  lockFileOwnerOnly(file);
 }
 
 /** Pin `host` as the working base URL for `id` (no-op if it's already primary). */
@@ -419,6 +421,17 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
     if (apiKey.length === 0) {
       return { ok: false, error: "missing api key", retryable: "other" };
     }
+    // --- AUTH HEADER RULE ---
+    // keySource === "anonymous" means the provider is configured with
+    // an `anonymousKey` placeholder (kilo/opencode/llm7 etc.). These
+    // providers either (a) need NO Authorization header at all (kilo's
+    // ':free' models — verified 2026-09-11: "chat works with no
+    // Authorization header at all") or (b) need special identity headers
+    // instead of a Bearer token (opencode's x-opencode-session).
+    // Sending `Authorization: Bearer <anonymousKey>` to these endpoints
+    // causes a 400/401 that would never happen with a real key.
+    // ALWAYS check keySource before emitting the Authorization header.
+    // See: docs/moat/17-provider-curation-policy.md#anonymouskey-providers
     // Fail loudly on an account-scoped base URL whose id env var is unset:
     // otherwise the empty path segment turns into a confusing 404 that reads
     // as "unknown model".
@@ -470,9 +483,15 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
         signal.addEventListener("abort", onAbort, { once: true });
       }
       const wireHeaders: Record<string, string> = {
-        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       };
+      // Anonymous providers (keySource === "anonymous") must NOT
+      // get a Bearer token — they need no auth header (kilo) or
+      // custom identity headers (opencode). The cfg.headers merge
+      // below handles those cases.
+      if (keySource !== "anonymous") {
+        wireHeaders["Authorization"] = `Bearer ${apiKey}`;
+      }
       if (cfg.headers !== undefined) {
         Object.assign(wireHeaders, cfg.headers);
       }

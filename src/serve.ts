@@ -1377,7 +1377,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       sendError(res, 401, `no key for "${target.provider}" — set ${cfg.envVar} or run: codewhip auth login ${target.provider}`, "missing_provider_key");
       return;
     }
-    const port = makePortForConfig(cfg, key.key);
+    const port = makePortForConfig(cfg, key.key, undefined, key.source);
+    // ^^^ keySource must be passed: anonymous providers (kilo,
+    // opencode, llm7) must NOT get a Bearer token in the
+    // Authorization header — see openAiPort's auth header rule above.
     const attemptResult = await port({ model: target.model, messages, tools: toToolSpecs(parsed.tools) });
     if (attemptResult.ok) {
       result = attemptResult;

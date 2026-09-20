@@ -211,6 +211,13 @@ export type ProviderConfig = {
   /**
    * Fallback key when no env/file key exists (llm7's anonymous "unused").
    * Runs still work keyless; `auth login` upgrades to higher limits.
+   *
+   * CRITICAL: providers with an `anonymousKey` must NOT receive a
+   * Bearer token in the Authorization header. See the auth-header
+   * rule in src/provider.ts (openAiPort): when keySource is
+   * "anonymous", the Authorization header is omitted entirely.
+   * Adding an anonymousKey without that guard breaks all keyless
+   * providers (kilo, opencode, etc.) with spurious 400/401 errors.
    */
   anonymousKey?: string;
   /**
@@ -367,10 +374,7 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     baseUrl: "https://opencode.ai",
     chatPath: "/zen/v1/chat/completions",
     modelsPath: "/zen/v1/models",
-    // defaultModel: deepseek-v4-flash-free was the catalog pick but its
-    // upstream 400'd "Model is unavailable" on both 2026-09-11 probes;
-    // mimo-v2.5-free answered keyless end-to-end via codewhip the same day.
-    defaultModel: "mimo-v2.5-free",
+    defaultModel: "auto",
     envVar: "OPENCODE_API_KEY",
     keyUrl: "https://opencode.ai/zen",
     timeoutMs: DEFAULT_CHAT_TIMEOUT_MS,
