@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import { summarizeSuite } from "./adversarial.js";
 import { readLabeledEvents, splitEvents } from "./samples.js";
 import { DEFAULT_MINER, evaluateRules, mineRules, sampleComplexity, type CurvePoint, type MinerOptions } from "./miner.js";
@@ -18,6 +20,11 @@ import { simulateCorpus } from "./simuser.js";
  * `--seeds N` replaces the curves with the robustness table over seeds
  * 1..N: both arms, the no-verdict-weights ablation, and train→held-out
  * generalization per seed (pass = claim holds for every seed).
+ *
+ * `npm run immunity -- --export <out.jsonl> [cwd...]` writes the D&B corpus
+ * artifact: labeled events only (no raw args, no commands), repos
+ * pseudonymized under a fresh per-invocation salt. Re-run per consented
+ * repo set; the salt keeps cross-export linkage impossible.
  * Core-only by design (no provider, no CLI deps): the experiment must run
  * identically on a laptop and CI.
  */
@@ -25,6 +32,7 @@ const argv = process.argv.slice(2);
 const json = argv.includes("--json");
 const mineMode = argv.includes("--mine");
 const simMode = argv.includes("--sim");
+const exportIdx = argv.indexOf("--export");
 
 const MARKS = [0, 0.25, 0.5, 0.75, 1];
 function printCurve(curve: CurvePoint[]): void {
@@ -126,6 +134,45 @@ if (simMode) {
     );
     process.exitCode = pass ? 0 : 1;
   }
+  }
+} else if (exportIdx >= 0) {
+  const outPath = argv[exportIdx + 1];
+  if (outPath === undefined || outPath.startsWith("--")) {
+    console.error("usage: immunity --export <out.jsonl> [cwd...]");
+    process.exitCode = 1;
+  } else {
+    const salt = randomUUID();
+    const cwds = argv.slice(exportIdx + 2).filter((a) => !a.startsWith("--"));
+    const lines: string[] = [];
+    const repos: { id: string; events: number }[] = [];
+    let declines = 0;
+    let approvals = 0;
+    const verdicts = new Map<string, number>();
+    for (const repoCwd of cwds.length > 0 ? cwds : [process.cwd()]) {
+      const id = createHash("sha256").update(`${salt}\u0000${repoCwd}`).digest("hex").slice(0, 16);
+      const evs = readLabeledEvents(repoCwd);
+      for (const e of evs) {
+        if (e.label === "decline") declines += 1;
+        else approvals += 1;
+        const vk = e.verdict ?? "null";
+        verdicts.set(vk, (verdicts.get(vk) ?? 0) + 1);
+        lines.push(JSON.stringify({
+          v: 1, kind: "event", repo: id, ts: e.ts, run_id: e.runId, tool: e.tool,
+          shape: e.shape, label: e.label, rule_id: e.ruleId, verdict: e.verdict,
+          ...(e.taskClass === undefined ? {} : { task_class: e.taskClass }),
+        }));
+      }
+      repos.push({ id, events: evs.length });
+    }
+    lines.unshift(JSON.stringify({
+      v: 1, kind: "meta", exported: new Date().toISOString(), repos,
+      events: declines + approvals,
+      label_counts: { declines, approvals },
+      verdict_counts: Object.fromEntries(verdicts),
+      note: "labeled permission events only — no commands, args, or file contents. Repo pseudonyms are comparable within this file only (fresh random salt per export). Shapes may reveal repo-relative paths: publish only with per-repo consent.",
+    }));
+    fs.writeFileSync(outPath, lines.join("\n") + "\n", "utf8");
+    console.log(`exported ${declines + approvals} labeled events (${declines} declines / ${approvals} approvals) from ${repos.length} repo(s) -> ${outPath}`);
   }
 } else if (!mineMode) {
   const report = summarizeSuite();

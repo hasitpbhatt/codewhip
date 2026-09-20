@@ -43,6 +43,8 @@ if (provider === null) {
 
   const two = evaluateRules(mineRules(events, DEFAULT_MINER), events);
   const count = evaluateRules(mineRules(events, { ...DEFAULT_MINER, approvalVeto: false }), events);
+  line("static: never-deny", { rules: 0, coverageRate: 0, overblockRate: 0 });
+  line("static: deny-all", { rules: 0, coverageRate: 1, overblockRate: 1 });
   line("miner: two-signal", two);
   line("miner: count-only", count);
 

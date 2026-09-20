@@ -12,7 +12,7 @@ import { shapeToPredicate, type InducedRule } from "./rules.js";
 export type BaselineUsage = { calls: number; promptTokens: number; completionTokens: number };
 
 const TOOLS = new Set(["bash", "edit", "write", "webfetch"]);
-const DENY_LINE_RX = /^\s*deny\s+([a-z]+):(\S.*?)\s*$/;
+const DENY_LINE_RX = /^\s*deny\s+([a-z]+):\s*(\S.*?)\s*$/;
 /** Markdown wrappers models sprinkle on rule lines: quotes, bullets, fences. */
 const WRAP_RX = /^[>*`'"\s-]+/;
 
@@ -39,12 +39,27 @@ function digest(events: LabeledEvent[]): string {
 }
 
 async function callOnce(port: ChatPort, model: string, system: string, user: string): Promise<{ raw: string; usage: BaselineUsage }> {
-  const res = await port({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], tools: [] });
-  if (!res.ok) throw new Error(`baseline port failure: ${res.error} (${res.retryable})`);
-  return {
-    raw: res.text ?? "",
-    usage: { calls: 1, promptTokens: res.promptTokens, completionTokens: res.completionTokens },
-  };
+  // Free-tier gateways throttle; wait out retryable failures (capped) the
+  // same philosophy the loop's rotation uses, but far simpler.
+  const retries = 3;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (let attempt = 0; ; attempt++) {
+    const res = await port({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], tools: [] });
+    if (res.ok) {
+      promptTokens += res.promptTokens;
+      completionTokens += res.completionTokens;
+      return {
+        raw: res.text ?? "",
+        usage: { calls: attempt + 1, promptTokens, completionTokens },
+      };
+    }
+    const waitable = res.retryable === "rate-limited" || res.retryable === "server" || res.retryable === "timeout";
+    if (attempt >= retries || !waitable) throw new Error(`baseline port failure: ${res.error} (${res.retryable})`);
+    const waitMs = Math.min(res.retryAfterMs ?? 15_000, 60_000);
+    console.error(`(retrying in ${waitMs}ms: ${res.error})`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
 }
 
 /** Arm: one LLM call turns the labeled digest into a deny-rule set. */
