@@ -10,7 +10,6 @@ import {
   resetProviderStatsForTest,
   type ProviderCallRecord,
 } from "./provider-stats.js";
-import { configDir } from "./config-dir.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
