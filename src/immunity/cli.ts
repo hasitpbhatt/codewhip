@@ -1,6 +1,6 @@
 import { summarizeSuite } from "./adversarial.js";
-import { readLabeledEvents } from "./samples.js";
-import { DEFAULT_MINER, evaluateRules, mineRules, sampleComplexity, type CurvePoint } from "./miner.js";
+import { readLabeledEvents, splitEvents } from "./samples.js";
+import { DEFAULT_MINER, evaluateRules, mineRules, sampleComplexity, type CurvePoint, type MinerOptions } from "./miner.js";
 import { simulateCorpus } from "./simuser.js";
 
 /**
@@ -14,7 +14,10 @@ import { simulateCorpus } from "./simuser.js";
  *
  * `npm run immunity -- --sim [runs] [--seed N]` runs both arms on a seeded
  * synthetic corpus (Figure 1 skeleton) and checks the falsifiable claim:
- * two-signal buys coverage at zero autoimmune cost; count-only cannot.
+ * two-signal buys coverage at a near-zero autoimmune residual; count-only cannot.
+ * `--seeds N` replaces the curves with the robustness table over seeds
+ * 1..N: both arms, the no-verdict-weights ablation, and train→held-out
+ * generalization per seed (pass = claim holds for every seed).
  * Core-only by design (no provider, no CLI deps): the experiment must run
  * identically on a laptop and CI.
  */
@@ -37,6 +40,60 @@ if (simMode) {
   const seed = seedIdx >= 0 ? Number(argv[seedIdx + 1]) || 7 : 7;
   const afterSim = Number(argv[argv.indexOf("--sim") + 1] ?? "");
   const runs = Number.isFinite(afterSim) && afterSim > 0 ? afterSim : 300;
+  const seedsIdx = argv.indexOf("--seeds");
+  if (seedsIdx >= 0) {
+    // Robustness table: the claim must hold on every seed. The
+    // no-verdict ablation (flat weights + verdict-blind veto) is reported
+    // per-seed: its coverage column is the variance, the two-signal
+    // column is the floor — verdict-awareness buys stability against
+    // regret-approval poisoning, at the price of slower early learning.
+    const n = Number(argv[seedsIdx + 1]) || 5;
+    const COUNT_ONLY: MinerOptions = { ...DEFAULT_MINER, approvalVeto: false };
+    const NO_VERDICT: MinerOptions = {
+      ...DEFAULT_MINER,
+      verdictAwareVeto: false,
+      verdictWeights: { reverted: 1, rejected: 1, accepted: 1, edited: 1 },
+    };
+    const pct = (x: number) => (100 * x).toFixed(1).padStart(5);
+    /** First declinesSeen at which the arm's full-stream coverage hits 80%. */
+    const declinesTo80 = (curve: CurvePoint[]) => {
+      const p = curve.find((c) => c.coverageRate >= 0.8);
+      return p === undefined ? Number.POSITIVE_INFINITY : p.declinesSeen;
+    };
+    console.log("seed | two-sig cov/ob  | no-verdict cov/ob | count-only cov/ob | heldout cov/ob | declines→80%: two vs no-verdict");
+    let allPass = true;
+    const rows: unknown[] = [];
+    for (let s = 1; s <= n; s++) {
+      const ev = simulateCorpus({ seed: s, runs });
+      const two = evaluateRules(mineRules(ev, DEFAULT_MINER), ev);
+      const nvCurve = sampleComplexity(ev, NO_VERDICT);
+      const nv = evaluateRules(mineRules(ev, NO_VERDICT), ev);
+      const co = evaluateRules(mineRules(ev, COUNT_ONLY), ev);
+      const { train, heldOut } = splitEvents(ev, 0.7);
+      const held = evaluateRules(mineRules(train, DEFAULT_MINER), heldOut);
+      const d2 = declinesTo80(sampleComplexity(ev, DEFAULT_MINER));
+      const dNv = declinesTo80(nvCurve);
+      // Honest claim set from the sweep: verdict-awareness (a) can never
+      // cost end coverage (a verdict-blind veto is poisoned whenever the
+      // regret approvals it ignores cross the habit bar — the no-verdict
+      // column is the one that varies) and (b) trades early speed for that
+      // robustness: discounted accepted-run declines slow induction, so
+      // declines→80% is reported, not required.
+      const pass =
+        two.coverageRate >= 0.8 && two.overblockRate <= 0.05 &&
+        co.overblockRate >= 10 * Math.max(two.overblockRate, 0.001) &&
+        held.coverageRate >= 0.75 && held.overblockRate <= 0.05 &&
+        two.coverageRate >= nv.coverageRate - 1e-9;
+      allPass &&= pass;
+      rows.push({ seed: s, two, nv, co, held, declinesTo80Two: d2, declinesTo80NoVerdict: dNv, pass });
+      console.log(
+        `${String(s).padStart(4)} | ${pct(two.coverageRate)}/${pct(two.overblockRate)}  | ${pct(nv.coverageRate)}/${pct(nv.overblockRate)}  | ${pct(co.coverageRate)}/${pct(co.overblockRate)}  | ${pct(held.coverageRate)}/${pct(held.overblockRate)} | ${String(d2).padStart(3)} vs ${String(dNv).padStart(3)} ${pass ? "ok" : "FAIL"}`
+      );
+    }
+    console.log(allPass ? `robustness: claim holds on all ${n} seeds -> PASS` : `robustness: a seed breaks the claim -> FAIL (investigate)`);
+    if (json) console.log(JSON.stringify({ mode: "seeds", runs, rows }));
+    process.exitCode = allPass ? 0 : 1;
+  } else {
   const events = simulateCorpus({ seed, runs });
   const arms: { name: string; curve: CurvePoint[] }[] = [];
   for (const [name, opts] of [
@@ -68,6 +125,7 @@ if (simMode) {
         ` -> ${pass ? "PASS" : "FAIL"}`
     );
     process.exitCode = pass ? 0 : 1;
+  }
   }
 } else if (!mineMode) {
   const report = summarizeSuite();

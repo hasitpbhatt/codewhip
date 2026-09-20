@@ -45,8 +45,8 @@ export const ARCHETYPES: Archetype[] = [
       { tool: "bash", shape: "git push origin *", declineRate: 0.05 },
       { tool: "bash", shape: "pnpm test *", declineRate: 0.0 },
       { tool: "bash", shape: "docker *", declineRate: 0.15 },
-      { tool: "bash", shape: "npm publish *", declineRate: 0.95, alwaysDecline: true },
-      { tool: "bash", shape: "curl *", declineRate: 0.95, alwaysDecline: true },
+      { tool: "bash", shape: "npm publish *", declineRate: 0.98, alwaysDecline: true },
+      { tool: "bash", shape: "curl *", declineRate: 0.98, alwaysDecline: true },
       { tool: "edit", shape: "src/routes.ts", declineRate: 0.0 },
     ],
   },
@@ -55,8 +55,8 @@ export const ARCHETYPES: Archetype[] = [
     habits: [
       { tool: "bash", shape: "pip install *", declineRate: 0.12 },
       { tool: "bash", shape: "git push origin *", declineRate: 0.05 },
-      { tool: "bash", shape: "wget *", declineRate: 0.95, alwaysDecline: true },
-      { tool: "bash", shape: "hf upload *", declineRate: 0.95, alwaysDecline: true },
+      { tool: "bash", shape: "wget *", declineRate: 0.98, alwaysDecline: true },
+      { tool: "bash", shape: "hf upload *", declineRate: 0.98, alwaysDecline: true },
       { tool: "edit", shape: "notebooks/exp.ipynb", declineRate: 0.02 },
       { tool: "edit", shape: "scripts/train.py", declineRate: 0.0 },
     ],
@@ -68,8 +68,8 @@ export const ARCHETYPES: Archetype[] = [
       { tool: "bash", shape: "kubectl get *", declineRate: 0.0 },
       { tool: "bash", shape: "ssh *", declineRate: 0.12 },
       { tool: "bash", shape: "aws s3 cp *", declineRate: 0.15 },
-      { tool: "bash", shape: "terraform apply *", declineRate: 0.95, alwaysDecline: true },
-      { tool: "bash", shape: "kubectl delete *", declineRate: 0.95, alwaysDecline: true },
+      { tool: "bash", shape: "terraform apply *", declineRate: 0.98, alwaysDecline: true },
+      { tool: "bash", shape: "kubectl delete *", declineRate: 0.98, alwaysDecline: true },
     ],
   },
 ];
@@ -78,7 +78,7 @@ const VERDICT_CALM: [Verdict | null, number][] = [
   [null, 0.15], ["accepted", 0.55], ["edited", 0.15], ["reverted", 0.1], ["rejected", 0.05],
 ];
 const VERDICT_BURNED: [Verdict | null, number][] = [
-  [null, 0.1], ["accepted", 0.1], ["edited", 0.1], ["reverted", 0.45], ["rejected", 0.35],
+  [null, 0.05], ["accepted", 0.05], ["edited", 0.05], ["reverted", 0.45], ["rejected", 0.35],
 ];
 
 function pick<T>(rnd: () => number, table: [T, number][]): T {

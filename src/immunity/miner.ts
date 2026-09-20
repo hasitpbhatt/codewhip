@@ -16,7 +16,7 @@ import { ruleWouldOverBlock, ruleSetMatcher, shapeToPredicate, type InducedRule 
  *
  * The veto is verdict-aware: an approval from a run later REVERTED or
  * REJECTED is regret (a misclick the outcome punished), not evidence the
- * rule over-blocks, so it cannot veto. Without this, one 1-in-20 misclick
+ * rule over-blocks, so it cannot veto. Without this, a lone misclick
  * permanently poisons a true-danger rule (pinned by simuser).
  */
 export type MinerOptions = {
@@ -26,6 +26,9 @@ export type MinerOptions = {
   minRuns: number;
   /** Two-signal mode refuses rules covering an observed approval. */
   approvalVeto: boolean;
+  /** Ignore run verdicts when collecting veto evidence (ablation arm:
+   * regret approvals from reverted runs then disarm true-danger rules). */
+  verdictAwareVeto: boolean;
   /** Distinct calm-approval runs needed to veto (1 = any single yes kills
    * the rule; the default demands a habit, not a misclick). */
   vetoMinRuns: number;
@@ -46,6 +49,7 @@ export const DEFAULT_MINER: MinerOptions = {
   threshold: 3,
   minRuns: 2,
   approvalVeto: true,
+  verdictAwareVeto: true,
   vetoMinRuns: 2,
   verdictWeights: { reverted: 2, rejected: 2, accepted: 0.5, edited: 1 },
 };
@@ -77,8 +81,10 @@ export function mineRules(events: LabeledEvent[], opts: MinerOptions = DEFAULT_M
   const runs = declineRunWeights(fresh, opts.verdictWeights);
   const approvals = fresh.filter((e) => e.label === "approval");
   // Regret-polarized veto: only approvals from runs the human did NOT
-  // revert/reject count as over-block evidence.
-  const vetoApprovals = approvals.filter((e) => e.verdict !== "reverted" && e.verdict !== "rejected");
+  // revert/reject count as over-block evidence (ablatable).
+  const vetoApprovals = opts.verdictAwareVeto
+    ? approvals.filter((e) => e.verdict !== "reverted" && e.verdict !== "rejected")
+    : approvals;
   const out: InducedRule[] = [];
   for (const s of shapeStats(fresh)) {
     const runW = runs.get(`${s.tool}:${s.shape}`);
