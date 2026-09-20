@@ -189,3 +189,35 @@ P1 — trust that spreads:
   fallback. Kill: queue (zero), markdown/diff-rich, pickers, themes, mouse,
   streaming, share-hosted, history file, new persisted files. Zero new
   writers — persistence/redaction/perms via existing contracts only.
+
+- 2026-09-20 — **Verdict-driven privilege track OPENED (C3; ML venue frame).**
+  Plan approved: single bet = induce per-repo least-privilege tool permissions
+  from one-bit human verdicts + near-miss co-signals, measured escape vs
+  autoimmune. Core/surface separated WITHOUT deletion: `ProviderId` moved to
+  the `provider-port` leaf, router/models/free-providers/metrics reclassified
+  surface, `src/boundary.test.ts` pins the rule "core never imports surface".
+  Instrumentation (all additive, freeze-compatible): human-approved asks now
+  record their generalizable shape on the outcome call (positives; declines
+  were already labeled), `src/immunity/` ships samples (labeled event stream),
+  rules (AST compiled to matcher-identical deny shapes), and the 67-case
+  adversarial escape suite (`npm run immunity`). First run of the suite
+  caught a REAL escape: `remove-item -recurse -force src` asked instead of
+  denying because `flagSet` expands single-dash long flags to letters while
+  the force check demanded the literal word — the pre-existing test used an
+  absolute path and denied via worktree containment, masking the hole
+  (vacuous assertion, since fixed with relative-target tests). Post-fix:
+  0/55 escape, 0/12 autoimmune. Registry/serve/TUI frozen as product surface,
+  zero research dependency.
+- 2026-09-20 (same track) — Audit closure + first experiment. Verdicts wired
+  into the miner (decline weight by run verdict: reverted/rejected 2, edited
+  1, accepted 0.5, unjudged 1); approvals pinned by ruleId (only bare-ask /
+  +session / +always grants are positives); chronological train/held-out
+  split (`splitEvents`). `simuser.ts` + `npm run immunity -- --sim`: seeded
+  synthetic corpora (3 archetypes × habit shapes × misclick noise), Figure 1
+  skeleton — two-signal holds 89.1% coverage at 2.0% over-block while
+  count-only needs 10.2% over-block just to reach that coverage (final
+  47.9%). The sim falsified the naive veto on its first run: one 1-in-20
+  misclick approval permanently disarmed a true-danger rule. Refinement now
+  pinned by tests: the veto is verdict-aware (regret approvals from
+  reverted/rejected runs are not evidence) and demands a habit
+  (`vetoMinRuns: 2` distinct calm runs), not a single bit.
