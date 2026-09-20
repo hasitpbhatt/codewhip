@@ -29,12 +29,17 @@ describe("policy", () => {
     strictEqual(checkPermission("bash", "rm -rf ./build").decision, "ask");
   });
   it("Windows destructors are denied (bash runs PowerShell on win32)", () => {
-    strictEqual(checkPermission("bash", "Remove-Item -Recurse -Force C:\\temp").decision, "deny");
+    // Relative targets: an absolute path would deny via worktree containment
+    // and mask the flag matcher (escape-suite finding, 2026-09-20).
+    strictEqual(checkPermission("bash", "Remove-Item -Recurse -Force src").decision, "deny");
+    strictEqual(checkPermission("bash", "ri -rf build").decision, "deny");
+    strictEqual(checkPermission("bash", "rmdir -Force -Recurse out").decision, "deny");
     strictEqual(checkPermission("bash", "rd /s /q build").decision, "deny");
     strictEqual(checkPermission("bash", "del /s /f .").decision, "deny");
     strictEqual(checkPermission("bash", "format c:").decision, "deny");
     strictEqual(checkPermission("bash", "dd if=x of=/dev/sda").decision, "deny");
     strictEqual(checkPermission("bash", "del file.txt").decision, "ask");
+    strictEqual(checkPermission("bash", "remove-item single.txt").decision, "ask");
   });
   it("worktree escapes are denied, relatives and URLs are not", () => {
     strictEqual(checkPermission("bash", "cat ../secret").decision, "deny");
