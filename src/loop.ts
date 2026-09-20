@@ -14,7 +14,7 @@ import { persistRule, type RememberedRule } from "./remember-store.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { listAgentsWithErrors } from "./subagents.js";
-import type { ProviderId } from "./provider.js";
+import type { ProviderId } from "./provider-port.js";
 
 export type ApprovalAnswer = "yes" | "session" | "always" | "no";
 export type AskUser = (question: string) => Promise<ApprovalAnswer>;
@@ -842,7 +842,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         toolCallId: call.id,
         content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
       });
-      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted);
+      // Immunity telemetry: a human-approved ask is a POSITIVE sample — any
+      // candidate deny rule covering this shape would have over-blocked. The
+      // shape rides the outcome record (additive, same vocabulary declines
+      // use). yolo/remembered/policy grants carry no fresh human bit, so
+      // only grantActor "human" records one.
+      record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted,
+        grantActor === "human" ? declineShape(def.name, subject) ?? undefined : undefined);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
     }
   }

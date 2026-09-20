@@ -209,6 +209,42 @@ describe("loop", () => {
     ok((last.tool_calls[0]?.ruleId ?? "").endsWith("+declined"));
     strictEqual(last.tool_calls[0]?.shape, "echo hi *");
   });
+  it("a human-approved ask records its shape (immunity positive sample)", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-approve-"));
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "echo hi" }), { prompt: 10, completion: 0 }),
+      textTurn("done"),
+    ]);
+    await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: async () => "yes", remembered: listRules(runCwd),
+    });
+    const raw = fs.readFileSync(path.join(runCwd, ".codewhip", "outcomes.jsonl"), "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+    const last = JSON.parse(lines[lines.length - 1] as string) as {
+      tool_calls: { decision: string; ruleId: string; shape?: string }[];
+    };
+    strictEqual(last.tool_calls[0]?.decision, "allow");
+    strictEqual(last.tool_calls[0]?.shape, "echo hi *");
+  });
+  it("a yolo grant records no shape (no fresh human bit)", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-yolo-"));
+    const { port } = makeFakePort([
+      toolTurn("bash", JSON.stringify({ command: "echo hi" }), { prompt: 10, completion: 0 }),
+      textTurn("done"),
+    ]);
+    await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port, askUser: async () => "yes", remembered: listRules(runCwd),
+    });
+    const raw = fs.readFileSync(path.join(runCwd, ".codewhip", "outcomes.jsonl"), "utf8");
+    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+    const last = JSON.parse(lines[lines.length - 1] as string) as {
+      tool_calls: { decision: string; shape?: string }[];
+    };
+    strictEqual(last.tool_calls[0]?.decision, "allow");
+    strictEqual(last.tool_calls[0]?.shape, undefined);
+  });
   it("remembered shape auto-allows without asking", async () => {
     const ev: string[] = [];
     const { port } = makeFakePort([

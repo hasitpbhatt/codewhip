@@ -1,5 +1,12 @@
 import type { ToolName } from "./tools/types.js";
 
+/**
+ * Any provider id: a builtin or a user-registered custom id. Lives on this
+ * leaf so core modules (loop, metrics, outcomes) can type provider ids
+ * without importing the surface-side registry/wire stack.
+ */
+export type ProviderId = string;
+
 export type LoopRole = "system" | "user" | "assistant" | "tool";
 
 export type LoopToolCall = {
