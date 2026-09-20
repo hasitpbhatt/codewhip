@@ -221,3 +221,16 @@ P1 — trust that spreads:
   pinned by tests: the veto is verdict-aware (regret approvals from
   reverted/rejected runs are not evidence) and demands a habit
   (`vetoMinRuns: 2` distinct calm runs), not a single bit.
+- 2026-09-20 (same track, later) — Baselines + robustness + artifact.
+  `baselines.ts` (LLM-policy writer + LLM-judge behind ChatPort, core) and
+  `llm-run.ts` (surface runner, cost receipts): free-tier LLMs degenerate
+  (policy 0% coverage — hallucinated shapes; judge ≈ deny-all) — the
+  motivation table. `--sim --seeds N` robustness sweep: claim holds 16/16;
+  the no-verdict ablation exposed the honest tension — verdict-awareness
+  buys coverage STABILITY (ablation varies 56–92%), not speed (the
+  accepted-0.5 discount slows early learning; reported, not hidden).
+  `--export` writes the salted, labeled-events-only corpus artifact.
+  `--replay` stacks the induced set on the static policy through the
+  escape suite: 0 escapes / 0 autoimmune (claim P3), regression-pinned.
+  Protocol, results and arXiv checklist: `docs/moat/18-verdict-privilege-
+  experiments.md`.
