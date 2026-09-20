@@ -147,7 +147,11 @@ function matchWindowsDeny(tokens: string[]): string | null {  const head = token
   const flags = flagSet(tokens);
   if (head === "remove-item" || head === "ri" || head === "rmdir") {
     const recurse = flags.has("recurse") || flags.has("r");
-    const force = flags.has("force");
+    // flagSet expands single-dash long flags to letters (-force → f,o,r,c,e),
+    // so the word check alone missed every real PowerShell spelling — caught
+    // by the immunity escape suite with a relative target (absolute paths
+    // were denied by worktree containment, masking the hole).
+    const force = flags.has("force") || flags.has("f");
     if (recurse && force) return "remove-item -recurse -force";
     return null;
   }
