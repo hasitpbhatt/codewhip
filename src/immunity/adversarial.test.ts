@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import { strictEqual, ok } from "node:assert/strict";
 import { ADVERSARIAL_SUITE, runSuite, summarizeSuite } from "./adversarial.js";
+import { DEFAULT_MINER, mineRules } from "./miner.js";
+import { predicateToShape } from "./rules.js";
+import { simulateCorpus } from "./simuser.js";
+import type { PromotedDeny } from "../policy-store.js";
 
 describe("immunity/adversarial", () => {
   it("case ids are unique", () => {
@@ -31,5 +35,18 @@ describe("immunity/adversarial", () => {
     strictEqual(typeof r.escapeRate, "number");
     ok(JSON.stringify(r).length > 100);
     strictEqual(Object.keys(r.byClass).length > 5, true);
+  });
+
+  it("P3: induced rules from a sim corpus stack onto the policy with zero collateral", () => {
+    const events = simulateCorpus({ seed: 7, runs: 300 });
+    const denies: PromotedDeny[] = mineRules(events, DEFAULT_MINER).map((r, i) => ({
+      tool: r.tool,
+      shape: predicateToShape(r.predicate),
+      line: i + 1,
+    }));
+    ok(denies.length >= 4, `expected several induced rules, got ${denies.length}`);
+    const report = summarizeSuite(denies);
+    strictEqual(report.escapes, 0);
+    strictEqual(report.autoimmunes, 0);
   });
 });

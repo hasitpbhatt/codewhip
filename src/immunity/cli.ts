@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { summarizeSuite } from "./adversarial.js";
 import { readLabeledEvents, splitEvents } from "./samples.js";
+import type { PromotedDeny } from "../policy-store.js";
+import { predicateToShape } from "./rules.js";
 import { DEFAULT_MINER, evaluateRules, mineRules, sampleComplexity, type CurvePoint, type MinerOptions } from "./miner.js";
 import { simulateCorpus } from "./simuser.js";
 
@@ -21,6 +23,11 @@ import { simulateCorpus } from "./simuser.js";
  * 1..N: both arms, the no-verdict-weights ablation, and train→held-out
  * generalization per seed (pass = claim holds for every seed).
  *
+ * `npm run immunity -- --replay [runs] [--seed N]` stacks the miner's
+ * induced rule set (from a sim corpus of the same shape language) on top
+ * of the static policy and re-runs the 67-case suite: escapes and
+ * autoimmune must both stay 0 (claim P3 in docs/moat/18).
+ *
  * `npm run immunity -- --export <out.jsonl> [cwd...]` writes the D&B corpus
  * artifact: labeled events only (no raw args, no commands), repos
  * pseudonymized under a fresh per-invocation salt. Re-run per consented
@@ -32,6 +39,7 @@ const argv = process.argv.slice(2);
 const json = argv.includes("--json");
 const mineMode = argv.includes("--mine");
 const simMode = argv.includes("--sim");
+const replayMode = argv.includes("--replay");
 const exportIdx = argv.indexOf("--export");
 
 const MARKS = [0, 0.25, 0.5, 0.75, 1];
@@ -135,6 +143,26 @@ if (simMode) {
     process.exitCode = pass ? 0 : 1;
   }
   }
+} else if (replayMode) {
+  const afterReplay = Number(argv[argv.indexOf("--replay") + 1] ?? "");
+  const runs = Number.isFinite(afterReplay) && afterReplay > 0 ? afterReplay : 300;
+  const seedIdx = argv.indexOf("--seed");
+  const seed = seedIdx >= 0 ? Number(argv[seedIdx + 1]) || 7 : 7;
+  const events = simulateCorpus({ seed, runs });
+  const rules = mineRules(events, DEFAULT_MINER);
+  const denies: PromotedDeny[] = rules.map((r, i) => ({
+    tool: r.tool,
+    shape: predicateToShape(r.predicate),
+    line: i + 1,
+  }));
+  const report = summarizeSuite(denies);
+  console.log(`induced replay | seed ${seed} | ${rules.length} stacked rules | escapes ${report.escapes} | autoimmune ${report.autoimmunes}`);
+  for (const o of report.outcomes.filter((x) => x.escape || x.autoimmune)) {
+    console.log(`  MISS ${o.id}: ${JSON.stringify(o.subject)} -> ${o.decision} (${o.ruleId})`);
+  }
+  const pass = report.escapes === 0 && report.autoimmunes === 0;
+  console.log(`P3: induced set is safe to stack on the static policy -> ${pass ? "PASS" : "FAIL"}`);
+  process.exitCode = pass ? 0 : 1;
 } else if (exportIdx >= 0) {
   const outPath = argv[exportIdx + 1];
   if (outPath === undefined || outPath.startsWith("--")) {
