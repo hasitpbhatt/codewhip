@@ -14,13 +14,14 @@ import { persistRule, type RememberedRule } from "./remember-store.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { listAgentsWithErrors } from "./subagents.js";
+import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
 import type { ProviderId } from "./provider-port.js";
 
 export type ApprovalAnswer = "yes" | "session" | "always" | "no";
 export type AskUser = (question: string) => Promise<ApprovalAnswer>;
 
 export type LoopEvent = {
-  kind: "tool" | "retry" | "failover" | "policy" | "compact";
+  kind: "tool" | "retry" | "failover" | "policy" | "compact" | "hook";
   text: string;
 };
 
@@ -129,6 +130,13 @@ export type LoopArgs = {
   /** Bench-only ablation: false disables the run's idempotent-call memo and
    * repeat nudge (RQ5 overthinking arm). Default true. */
   repeatGuard?: boolean;
+  /**
+   * Hooks loaded ONCE at run start (index.ts). Undefined = no hooks this
+   * run; child runs never receive them (v1 — children are effect-free).
+   */
+  hooks?: LoadedHooks;
+  /** Spawner override for hooks (tests/bench only — production spawns shells). */
+  hookDeps?: HookDeps;
 };
 
 export type LoopTraceCall = {
@@ -322,6 +330,19 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   for (const e of agentFileErrors) {
     emit("policy", `subagent file skipped: ${e}`);
   }
+  // Hooks load once at run start (the caller owns the LoadedHooks), so a
+  // mid-run injection can neither register nor edit one; a broken config is
+  // surfaced here, never swallowed.
+  const hookDefs = args.hooks?.defs ?? [];
+  for (const e of args.hooks?.errors ?? []) {
+    emit("hook", `hooks config: ${e}`);
+  }
+  if (hookDefs.length > 0) {
+    emit("hook", `hooks armed: ${hookDefs.length}`);
+  }
+  let hooksFired = 0;
+  let hooksDenied = 0;
+  let hooksWarned = 0;
 
   let current = { label: args.label, model: args.model, port: args.port };
   const buckets = new Map<string, UsageBucket>();
@@ -792,6 +813,35 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           continue;
         }
       }
+      // PreToolUse hooks: AFTER the memo repeat guard (a memo-served repeat
+      // must not re-trigger side effects) and before checkpoint+exec. An
+      // explicit deny short-circuits the call; a warn verdict proceeds.
+      let hookArgs: unknown = parsed;
+      if (hookDefs.length > 0) {
+        // Hooks sit downstream of the redaction invariant: args ride the
+        // stdin payload masked, exactly as the model produced them minus secrets.
+        try {
+          hookArgs = JSON.parse(redactSecrets(JSON.stringify(parsed))) as unknown;
+        } catch {
+          hookArgs = redactSecrets(call.argsJson);
+        }
+        const hr = await runHooksFor(hookDefs, "PreToolUse", def.name, {
+          event: "PreToolUse", tool: def.name, seq, runId, cwd: args.cwd, args: hookArgs,
+        }, args.hookDeps);
+        hooksFired += hr.fired;
+        if (hr.status === "deny") {
+          hooksDenied += 1;
+          const out = `held by PreToolUse hook: ${hr.reason}`;
+          messages.push({ role: "tool", toolCallId: call.id, content: out });
+          record("deny", "hook:pretool", sha256Hex(out), "policy", out);
+          emit("hook", `deny ${call.name} ${preview} (hook:pretool: ${hr.reason})`);
+          continue;
+        }
+        if (hr.status === "warn") {
+          hooksWarned += 1;
+          emit("hook", `PreToolUse ${call.name}: ${hr.reason}`);
+        }
+      }
       // Checkpoint before-image FIRST: undo needs the pre-edit bytes even
       // when the exec itself crashes. Saved only on a successful exec, so
       // failed calls leave no checkpoint trail. Self-protected paths return
@@ -860,6 +910,36 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted,
         grantActor === "human" ? declineShape(def.name, subject) ?? undefined : undefined);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
+      // PostToolUse hooks: observe-only, and they see the REDACTED output —
+      // hooks are downstream of the redaction invariant, never upstream of it.
+      if (hookDefs.length > 0) {
+        const hr = await runHooksFor(hookDefs, "PostToolUse", def.name, {
+          event: "PostToolUse", tool: def.name, seq, runId, cwd: args.cwd,
+          args: hookArgs, result: redacted.slice(0, 16_000),
+        }, args.hookDeps);
+        hooksFired += hr.fired;
+        if (hr.status !== "pass") {
+          // A deny after exec has nothing left to stop — recorded honestly
+          // as a warning, never as a phantom veto.
+          hooksWarned += 1;
+          emit("hook", `PostToolUse ${call.name}: ${hr.reason}`);
+        }
+      }
+    }
+  }
+
+  // Stop hooks: observe-only by ruling (block-and-continue is a spend
+  // amplifier; maxSteps and the token budget already govern the exit).
+  if (hookDefs.length > 0) {
+    const hr = await runHooksFor(hookDefs, "Stop", "", {
+      event: "Stop", tool: "", seq: 0, runId, cwd: args.cwd,
+      text: redactSecrets(text).slice(0, 2000),
+      ...(error === undefined ? {} : { error: redactSecrets(error) }),
+    }, args.hookDeps);
+    hooksFired += hr.fired;
+    if (hr.status !== "pass") {
+      hooksWarned += 1;
+      emit("hook", `Stop: ${hr.reason}`);
     }
   }
 
@@ -877,6 +957,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     usageByModel: [...buckets.values()],
     failovers: failoverTrail,
     ...(auditDropped > 0 ? { audit_dropped: auditDropped } : {}),
+    ...(hooksFired > 0 ? { hooks: { fired: hooksFired, denied: hooksDenied, warned: hooksWarned } } : {}),
     ...(args.parentRunId === undefined ? {} : { parent_run_id: args.parentRunId }),
     ...(args.taskClass === undefined ? {} : { task_class: args.taskClass }),
   });

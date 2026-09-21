@@ -30,6 +30,7 @@ import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
+import { loadHooks } from "./hooks.js";
 import { removeRule } from "./remember-store.js";
 import { isVerdict, proposeVerdict, resolveRunPrefix, setVerdict, type Verdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
@@ -963,6 +964,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       compactTokens: compactCeiling,
       history,
       onEvent: onEventFn,
+      // Loaded ONCE here, before the run exists: the model can never
+      // register or edit a hook mid-run (docs/moat/19-qol-parity.md).
+      hooks: loadHooks(process.cwd()),
     });
     // Set runId on the TUI model for the rollback footer.
     tuiModel?.setRunId(result.runId);

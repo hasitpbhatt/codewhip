@@ -82,6 +82,7 @@ const CORE_EXPECTED = new Set([
   "src/eval.ts",
   "src/frontmatter.ts",
   "src/hash.ts",
+  "src/hooks.ts",
   "src/immunity/adversarial.ts",
   "src/immunity/baselines.ts",
   "src/immunity/cli.ts",
