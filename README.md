@@ -371,6 +371,35 @@ Broken files error in both (silence about a file you wrote would be
 fiction); the TUI can't submit commands mid-run (v1 limitation,
 `docs/moat/19-qol-parity.md`).
 
+### Hooks: your shell at the harness seams
+
+`.codewhip/hooks.json` (and the user-level `$CODEWHIP_CONFIG_DIR/hooks.json`)
+registers shell commands on three seams — **PreToolUse** (can veto one
+call), **PostToolUse** (observe the redacted result), **Stop** (observe the
+run's end):
+
+```json
+{ "hooks": [
+  { "event": "PreToolUse", "match": "bash", "command": "grep -q 'rm -rf' || exit 2" }
+] }
+```
+
+Each hook gets the event payload (tool, redacted args, redacted output,
+runId, cwd) as JSON on **stdin** plus `CODEWHIP_*` env vars, and has 10 s
+and 64 KB of stdout to speak. Only an **assertion** denies: exit 2, or exit
+0 printing `{"decision":"deny","reason":"…"}` — a deny lands on the audit
+chain as `deny:hook:pretool` and the tool never executes. Anything else —
+exit 1, a crash, a timeout — **warns and proceeds**: an approval you meant
+to give can stay human, but the absence of a signal is not a veto. Post and
+Stop are observe-only by ruling (a veto after exec has nothing to stop;
+block-and-continue is a spend amplifier).
+
+The commands run outside the bash jail **by design** — this is your config,
+like a shell profile, not a model request. Containment is structural: hook
+files live only in `configDir()`/`.codewhip/` (paths `write` refuses to
+touch), and hooks load **once at run start**, so a mid-run injection can
+never register or edit one. Children run without hooks in v1.
+
 ### Sessions that survive their own context window (compaction)
 
 Long runs die a quiet death: old tool outputs (file dumps, command logs)

@@ -63,6 +63,10 @@ export type OutcomeRecord = {
    * (lock contention / disk failure) — nonzero means the signed trail has
    * holes for this runId. Additive; old readers ignore unknown keys. */
   audit_dropped?: number;
+  /** Optional since 2026-09-21 (hooks): hook seam tally. fired = hook
+   * processes spawned, denied = PreToolUse denials applied, warned =
+   * infra failures + ignored post/stop denials. Additive. */
+  hooks?: { fired: number; denied: number; warned: number };
 };
 
 export function newRunId(): string {
