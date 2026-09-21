@@ -341,6 +341,36 @@ Why this doesn't dilute the trust model:
 child's `delegate` call is refused as `deny:loop:max-depth` even if a
 rogue model asks for it.
 
+### Custom slash commands
+
+Your repeated prompts can become one-liners: `.codewhip/commands/<name>.md`
+is a prompt template the harness expands **before** the model sees it (zero
+tokens for the definition itself). The body becomes the run's prompt with
+every `$ARGUMENTS` occurrence replaced by what you typed after the name (no
+placeholder → an `ARGUMENTS:` block is appended); flat frontmatter shares
+the agent-file grammar (`description` optional, shown in `.help`).
+`.codewhip/commands/fix.md`:
+
+```md
+---
+description: fix a bug with a regression test
+---
+Investigate and fix: $ARGUMENTS. Add a failing test first.
+```
+
+```sh
+codewhip run "/fix src/loop.ts repeats denied calls"   # one-shot
+codewhip> /fix src/loop.ts repeats denied calls        # REPL; .help lists commands
+```
+
+The two surfaces differ on purpose: one-shot `run` expands only on an exact
+command-file match — a prompt like `"/api returns 500"` starts with `/` and
+must still run verbatim — while in the REPL a leading `/` is unambiguous
+intent, so an unknown `/name` prints an error and never reaches the model.
+Broken files error in both (silence about a file you wrote would be
+fiction); the TUI can't submit commands mid-run (v1 limitation,
+`docs/moat/19-qol-parity.md`).
+
 ### Sessions that survive their own context window (compaction)
 
 Long runs die a quiet death: old tool outputs (file dumps, command logs)
