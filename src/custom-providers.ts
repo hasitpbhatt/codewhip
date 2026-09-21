@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config-dir.js";
 import { lockFileOwnerOnly } from "./secure-file.js";
+import { allowedModelsFor, disableEntries, enableEntries } from "./model-allowlist.js";
 import { isBuiltinProviderId, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, type ProviderConfig } from "./provider.js";
 
 /**
@@ -187,6 +188,11 @@ function writeDisabledProviders(disabled: Set<string>, dir?: string): void {
   } catch { /* best-effort */ }
 }
 
+/**
+ * @deprecated Provider-level disable is superseded by the per-model consent
+ * allowlist (model-allowlist.ts). Reads stay supported for old config files;
+ * nothing enforces this flag anymore.
+ */
 export function setProviderDisabled(id: string, disabled: boolean, dir?: string): void {
   const current = getDisabledProviders(dir);
   if (disabled) current.add(id); else current.delete(id);
@@ -232,6 +238,10 @@ export function addCustomProvider(input: CustomProviderInput, dir?: string): { o
   if (next[cfg.id] !== undefined) return { ok: false, error: `"${cfg.id}" is already registered (remove first to replace)` };
   next[cfg.id] = cfg;
   if (!writeCustomProviders(next, dir)) return { ok: false, error: "failed to write custom-providers.json (disk write)" };
+  // Registration IS consent: the exact default model you just named is
+  // enabled. Everything else on this gateway stays off until explicitly
+  // enabled — no wildcard entries exist.
+  enableEntries([`${cfg.id}:${cfg.defaultModel}`], dir);
   return { ok: true, id: cfg.id };
 }
 
@@ -242,5 +252,7 @@ export function removeCustomProvider(id: string, dir?: string): { ok: true } | {
   if (next[key] === undefined) return { ok: false, error: `unknown provider "${id}" (see: codewhip provider list)` };
   delete next[key];
   if (!writeCustomProviders(next, dir)) return { ok: false, error: "failed to write custom-providers.json (disk write)" };
+  // A removed provider must leave no live allowlist entries behind.
+  disableEntries(allowedModelsFor(key, dir).map((m) => `${key}:${m}`), dir);
   return { ok: true };
 }

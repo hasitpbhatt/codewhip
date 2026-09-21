@@ -1,12 +1,13 @@
 import * as http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider, setProviderDisabled, listAllProviderConfigsWithDisabled } from "./custom-providers.js";
+import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider, listAllProviderConfigsWithDisabled } from "./custom-providers.js";
 import { isBuiltinProviderId, makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
 import { resolveKey, saveKey, clearKey } from "./auth.js";
 import type { ChatPortResponse, LoopMsg, LoopToolCall, ToolSpec } from "./provider-port.js";
 import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
 import { estimateCost, healthPasses, healthRate, isAutoEligible, TTL_MS } from "./router.js";
 import { listModels } from "./models.js";
+import { allowedModelsFor, isModelAllowed, loadAllowedEntries, parseEntry, providerIsEnabled, setProviderAllowlist } from "./model-allowlist.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -177,15 +178,20 @@ function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string
   const summary = summarizeCalls(readProviderCalls());
   const cands: Array<{ provider: string; model: string; weight: number }> = [];
   for (const cfg of listAllProviderConfigs()) {
+    // Consent gate first: auto may only pick explicitly enabled models.
+    if (!providerIsEnabled(cfg.id)) continue;
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
     // Cooling is per-MODEL, not per-provider: a failing model is skipped, but
     // other models from the same provider stay eligible — auto can still try a
     // different model there unless every model is cooling. Only when a provider
     // reports NO served models at all do we fall back to its default model.
-    const served = summary.providers.find((p) => p.provider === cfg.id)?.models
-      ?? [];
+    // Listing probes ((listing) records from the /v1/models sweep) are checks,
+    // not models — they must not crowd the default out of the pool.
+    const served = (summary.providers.find((p) => p.provider === cfg.id)?.models ?? [])
+      .filter((m) => m.model !== LISTING_MODEL);
     const modelIds = served.length > 0 ? served.map((m) => m.model) : [cfg.defaultModel];
     for (const modelId of modelIds) {
+      if (!isModelAllowed(cfg.id, modelId)) continue;
       if (exclude !== undefined && exclude.has(`${cfg.id}:${modelId}`)) continue;
       const mh = served.find((m) => m.model === modelId);
       // TTL deactivation against the summary computed above — one pass over the
@@ -205,7 +211,7 @@ function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string
     }
   }
   if (cands.length === 0) {
-    return { error: "auto: no healthy free provider/model combos available — pass an explicit model, add a key for a $0 route, or set CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 to let auto use untracked-cost providers" };
+    return { error: "auto: no enabled healthy provider/model combos available — enable models at /auth or run: codewhip provider enable <provider>:<model>, or pass an explicit model (a $0 route also needs health: set CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 to let auto use untracked-cost providers)" };
   }
   const total = cands.reduce((a, c) => a + c.weight, 0);
   let r = Math.random() * total;
@@ -495,13 +501,18 @@ const SERVE_MODELS_TIMEOUT_MS = 2_000;
 
 async function modelList(opts: ServeOptions, force = false): Promise<Record<string, unknown>> {
   const created = Math.floor(Date.now() / 1000);
-  let rows: CatalogRow[];
+  // /v1/models is the usable set — with the deny-by-default allowlist that
+  // means exactly the enabled rows. Providers with no enabled model are not
+  // even swept (skips ~134 catalog probes when the allowlist is empty).
+  const configs = listAllProviderConfigs().filter((cfg) => providerIsEnabled(cfg.id));
+  if (configs.length === 0) return { object: "list", data: [] };
   const fresh = catalogCache !== null && !force && Date.now() - catalogCache.at < CATALOG_TTL_MS;
+  let rows: CatalogRow[];
   if (fresh && catalogCache !== null) {
     rows = catalogCache.rows;
   } else {
     rows = await Promise.all(
-      listAllProviderConfigs().map(async (cfg) => {
+      configs.map(async (cfg) => {
         const { key } = resolveKey(cfg.id);
         const res = await listModels(cfg.id, key, SERVE_MODELS_TIMEOUT_MS);
         return res.ok && res.models.length > 0
@@ -511,16 +522,25 @@ async function modelList(opts: ServeOptions, force = false): Promise<Record<stri
     );
     catalogCache = { at: Date.now(), rows };
   }
-  const data = rows
-    .filter((r) => !opts.pingModels || r.live)
-    .flatMap((r) =>
-      (r.ids.length > 0 ? r.ids : [r.cfg.defaultModel]).map((id) => ({
-        id: `${r.cfg.id}:${id}`,
+  const probed = new Map(rows.map((r) => [r.cfg.id, r]));
+  // Enabled exact ids are listed unconditionally (an explicitly enabled model
+  // is usable even if the 60s probe missed it); --ping-models narrows to ids
+  // the live probe confirmed. Fresh file read per request, so CLI-side
+  // enables show up here without waiting for the sweep cache.
+  const data = configs.flatMap((cfg) =>
+    allowedModelsFor(cfg.id)
+      .filter((id) => {
+        if (!opts.pingModels) return true;
+        const r = probed.get(cfg.id);
+        return r !== undefined && r.live && r.ids.includes(id);
+      })
+      .map((id) => ({
+        id: `${cfg.id}:${id}`,
         object: "model" as const,
         created,
-        owned_by: r.cfg.id,
+        owned_by: cfg.id,
       }))
-    );
+  );
   return { object: "list", data };
 }
 
@@ -539,6 +559,15 @@ const AUTH_UI = `/auth`;
  */
 const CUSTOM_PATH = "/_custom";
 const CUSTOM_UI = `${AUTH_UI}${CUSTOM_PATH}`;
+
+/**
+ * Sub-path for lazy per-provider model details — `GET /auth/_models/<id>`.
+ * Same underscore-shield reasoning as `/_custom`: no provider id can shadow it.
+ */
+const MODELS_PATH = "/_models";
+
+/** Listing budget for a single accordion expand — one provider, not the sweep. */
+const UI_MODELS_TIMEOUT_MS = 5000;
 
 const MAX_KEY_BYTES = 1024;
 const MAX_CUSTOM_BODY_BYTES = 8 * 1024;
@@ -559,6 +588,11 @@ function escapeHtml(value: unknown): string {
 }
 
 function authStatus(): Array<Record<string, unknown>> {
+  const enabledCounts = new Map<string, number>();
+  for (const entry of loadAllowedEntries()) {
+    const k = parseEntry(entry);
+    if (k !== null) enabledCounts.set(k.provider, (enabledCounts.get(k.provider) ?? 0) + 1);
+  }
   return listAllProviderConfigsWithDisabled().map((cfg) => {
     const { key, source } = resolveKey(cfg.id);
     return {
@@ -571,6 +605,7 @@ function authStatus(): Array<Record<string, unknown>> {
       hasKey: key.length > 0,
       custom: !isBuiltinProviderId(cfg.id),
       disabled: cfg.disabled ?? false,
+      enabledCount: enabledCounts.get(cfg.id) ?? 0,
     };
   });
 }
@@ -622,25 +657,26 @@ function uiHeader(title: string, active: "playground" | "stats" | "auth", note: 
 
 function authHtml(): string {
   const status = authStatus();
+  const totalEnabled = status.reduce((a, r) => a + (typeof r.enabledCount === "number" ? r.enabledCount : 0), 0);
   const rowHtml = (r: Record<string, unknown>): string => {
     const id = escapeHtml(r.id);
     const endpoint = r.custom === true ? `<div class="small">${escapeHtml(r.baseUrl)}</div>` : "";
     const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="small">(none)</span>`;
     const keyState = r.hasKey ? `<span class="small" style="color:var(--ok)">key set (${escapeHtml(r.source)})</span>` : `<span class="small">no key</span>`;
     const search = escapeHtml(`${r.id} ${r.envVar} ${r.baseUrl ?? ""}`).toLowerCase();
-    const isDisabled = r.disabled === true;
-    const toggleBtn = isDisabled
-      ? `<button data-act="toggle" class="ghost" style="color:var(--ok)">Enable</button>`
-      : `<button data-act="toggle" class="ghost" title="disable this provider">Disable</button>`;
-    return `<li class="card prov${isDisabled ? ' disabled' : ''}" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3);opacity:${isDisabled ? 0.5 : 1}">
+    const n = typeof r.enabledCount === "number" ? r.enabledCount : 0;
+    const badge = n > 0
+      ? `<span class="badge ok" data-badge>${n} model${n === 1 ? "" : "s"} enabled</span>`
+      : `<span class="badge" data-badge>none enabled</span>`;
+    return `<li class="card prov" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3)">
 <div style="display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;align-items:flex-start">
-<div><strong>${id}</strong>${isDisabled ? ` <span class="small" style="color:var(--danger)">disabled</span>` : ""}${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
+<div><strong>${id}</strong> ${badge}${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
 <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
 ${keyState}
-${isDisabled ? `<button data-act="toggle" class="ghost" style="color:var(--ok)">Enable</button>` : `<button data-act="login">Set key</button>`}
-${r.hasKey && !isDisabled ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
-${r.custom && !isDisabled ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
-${toggleBtn}
+<button data-act="models" class="ghost">Manage models</button>
+<button data-act="login">Set key</button>
+${r.hasKey === true ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
+${r.custom === true ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
 </div>
 </div>
 <div class="keyrow" hidden>
@@ -649,17 +685,16 @@ ${toggleBtn}
 <button data-act="save">Save key</button>
 <span class="msg small"></span>
 </div>
+<div class="modelrow" hidden></div>
 <div class="small" style="display:flex;gap:var(--s5);margin-top:var(--s2);flex-wrap:wrap">
 <span>env <code>${escapeHtml(r.envVar)}</code></span>
 <span>console ${keyUrl}</span>
 </div>
 </li>`;
   };
-  const enabled = status.filter((r) => !r.disabled);
-  const disabled = status.filter((r) => r.disabled === true);
-  const withKey = enabled.filter((r) => r.hasKey === true && r.custom !== true);
-  const keyless = enabled.filter((r) => r.hasKey !== true && r.custom !== true);
-  const custom = enabled.filter((r) => r.custom === true);
+  const withKey = status.filter((r) => r.hasKey === true && r.custom !== true);
+  const keyless = status.filter((r) => r.hasKey !== true && r.custom !== true);
+  const custom = status.filter((r) => r.custom === true);
   const group = (label: string, rows: Array<Record<string, unknown>>): string =>
     rows.length === 0
       ? ""
@@ -670,10 +705,19 @@ ${toggleBtn}
 .keyrow input{flex:1;min-width:200px}
 .msg.ok{color:var(--ok)}
 .msg.bad{color:var(--danger)}
+.badge{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--muted)}
+.badge.ok{color:var(--ok)}
+.modelrow{margin-top:var(--s3);border-top:1px solid var(--line);padding-top:var(--s3)}
+.mlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px var(--s4);max-height:300px;overflow:auto;margin-top:var(--s2)}
+.mrow{font-size:13px;display:flex;gap:var(--s2);align-items:baseline}
+.mrow input{width:auto;margin:0}
+.mtools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.msmall{color:var(--muted)}
+.mfilter{margin:var(--s2) 0}
 </style></head><body>
 ${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your keys — it stores and removes them")}
 <main>
-<p class="small" style="margin-top:0">${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom · ${disabled.length} disabled. A provider with no key still works if its env var is set outside this page.</p>
+<p class="small" style="margin-top:0"><strong>Everything is disabled until you enable it — model by model.</strong> ${status.length} providers · ${totalEnabled} model${totalEnabled === 1 ? "" : "s"} enabled · ${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom. Open <em>Manage models</em> on a provider to tick models, or run <code>codewhip provider enable &lt;provider&gt;:&lt;model&gt;</code>.</p>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s5)">
 <section>
 <label for="provfilter" class="kicker">Filter providers</label>
@@ -681,7 +725,6 @@ ${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your 
 ${group("keys set", withKey)}
 ${group("keyless", keyless)}
 ${group("custom", custom)}
-${group("disabled", disabled)}
 </section>
 <section>
 <div class="card">
@@ -748,6 +791,29 @@ document.getElementById('add').addEventListener('submit',async e=>{
   });
 });
 document.addEventListener('click',async e=>{
+  const mb=e.target.closest('button[data-mact]');
+  if(mb){
+    const mcard=mb.closest('li.prov'); if(!mcard) return;
+    const mid=mcard.dataset.id;
+    if(mb.dataset.mact==='all'){
+      for(const i of mcard.querySelectorAll('.mlist input[type=checkbox]')) i.checked=true;
+      saveModels(mcard);
+    }
+    if(mb.dataset.mact==='none'){
+      await guarded(mb,'Disabling…',async()=>{
+        try{
+          const res=await fetch('/auth/'+encodeURIComponent(mid)+'/allowlist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({all:false})});
+          if(!res.ok){ showSaved(mcard,await failBody(res),true); return false; }
+          const data=await res.json();
+          for(const i of mcard.querySelectorAll('.mlist input[type=checkbox]')) i.checked=false;
+          setBadge(mcard,(data.allowed||[]).length);
+          showSaved(mcard,'saved',false);
+          return true;
+        }catch(e2){showSaved(mcard,'network error',true); return false;}
+      });
+    }
+    return;
+  }
   const b=e.target.closest('button[data-act]'); if(!b) return;
   const card=b.closest('li.prov'); if(!card) return;
   const id=card.dataset.id;
@@ -808,18 +874,70 @@ document.addEventListener('click',async e=>{
     });
     return;
   }
-  if(act==='toggle'){
-    const isDisabled=card.classList.contains('disabled');
-    const newDisabled=!isDisabled;
-    await guarded(b,newDisabled?'Disabling…':'Enabling…',async()=>{
-      try{
-        const res=await fetch('/auth/'+encodeURIComponent(id),{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({disabled:newDisabled})});
-        if(!res.ok){say(await failBody(res),true); return false;}
-        location.reload(); return true;
-      }catch(e2){say('network error',true); return false;}
-    });
+  if(act==='models'){
+    const panel=card.querySelector('.modelrow');
+    panel.hidden=!panel.hidden;
+    if(!panel.hidden && !panel.dataset.loaded) loadModels(card);
     return;
   }
+});
+function setBadge(card,n){
+  const el=card.querySelector('[data-badge]'); if(!el) return;
+  el.textContent=n>0?(n+' model'+(n===1?'':'s')+' enabled'):'none enabled';
+  el.classList.toggle('ok',n>0);
+}
+function showSaved(card,text,bad){
+  const el=card.querySelector('.msmall'); if(!el) return;
+  el.textContent=text;
+  el.style.color=bad?'var(--danger)':'';
+  if(!bad) setTimeout(()=>{el.textContent='';},1500);
+}
+async function saveModels(card){
+  clearTimeout(card._t);
+  const checked=[...card.querySelectorAll('.mlist input[type=checkbox]')].map(i=>i.value);
+  showSaved(card,'saving…',false);
+  try{
+    const res=await fetch('/auth/'+encodeURIComponent(card.dataset.id)+'/allowlist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({models:checked})});
+    if(!res.ok){showSaved(card,await failBody(res),true); return;}
+    const data=await res.json();
+    setBadge(card,(data.allowed||[]).length);
+    showSaved(card,'saved',false);
+  }catch(e){showSaved(card,'network error',true);}
+}
+async function loadModels(card){
+  const panel=card.querySelector('.modelrow');
+  panel.dataset.loaded='1';
+  panel.innerHTML='<span class="small">loading models…</span>';
+  try{
+    const res=await fetch('/auth/_models/'+encodeURIComponent(card.dataset.id));
+    if(!res.ok){panel.innerHTML='<span class="small">failed to load models</span>'; panel.dataset.loaded=''; return;}
+    renderModels(card,await res.json());
+  }catch(e){panel.innerHTML='<span class="small">network error</span>'; panel.dataset.loaded='';}
+}
+function renderModels(card,data){
+  const panel=card.querySelector('.modelrow');
+  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  let html='';
+  if(data.listingError) html+='<div class="small">'+esc(data.listingError)+'</div>';
+  html+='<div class="mtools"><button data-mact="all">Enable all listed</button><button data-mact="none" class="ghost">Disable all</button><span class="msmall small"></span></div>';
+  if(data.models.length>50) html+='<input class="mfilter" type="search" placeholder="Filter models…" autocomplete="off">';
+  html+='<div class="mlist">'+data.models.map(m=>'<label class="mrow"><input type="checkbox" value="'+esc(m.id)+'"'+(m.enabled?' checked':'')+'><code>'+esc(m.id)+'</code>'+(m.isDefault?' <span class="small">(default)</span>':'')+(m.live?'':' <span class="small">not in live catalog</span>')+'</label>').join('')+'</div>';
+  panel.innerHTML=html;
+}
+document.addEventListener('change',e=>{
+  const el=e.target;
+  if(el.matches && el.matches('.mlist input[type=checkbox]')){
+    const card=el.closest('li.prov');
+    clearTimeout(card._t);
+    card._t=setTimeout(()=>saveModels(card),300);
+  }
+});
+document.addEventListener('input',e=>{
+  const el=e.target;
+  if(!el.classList || !el.classList.contains('mfilter')) return;
+  const panel=el.closest('.modelrow');
+  const q=el.value.trim().toLowerCase();
+  for(const lb of panel.querySelectorAll('.mrow')) lb.style.display=!q||lb.textContent.toLowerCase().includes(q)?'':'none';
 });
 </script></body></html>`;
 }
@@ -1189,11 +1307,105 @@ async function handleCustomRoutes(req: http.IncomingMessage, res: http.ServerRes
   );
 }
 
+/**
+ * `GET /auth/_models/<id>` — the per-provider accordion detail:
+ * live catalog ∪ enabled exact ids ∪ the default model, one row each.
+ * Lazy on purpose: a page load costs O(providers); only the provider you
+ * open pays for its (possibly 380-row) catalog. Never sweeps the registry.
+ */
+async function handleProviderModels(res: http.ServerResponse, id: string): Promise<void> {
+  const cfg = getProviderConfig(id);
+  if (cfg === null) {
+    sendJson(res, 404, { error: { message: `unknown provider "${id}"`, code: "unknown_provider" } });
+    return;
+  }
+  const enabled = new Set(allowedModelsFor(cfg.id));
+  const { key } = resolveKey(cfg.id);
+  const listed = key.length > 0
+    ? await listModels(cfg.id, key, UI_MODELS_TIMEOUT_MS)
+    : { ok: false as const, error: "no key — live catalog listing unavailable" };
+  const live = listed.ok ? new Set(listed.models.map((m) => m.id)) : new Set<string>();
+  const ids = new Set<string>([cfg.defaultModel, ...enabled, ...live]);
+  const models = [...ids]
+    .sort((a, b) => (a === cfg.defaultModel ? -1 : b === cfg.defaultModel ? 1 : a.localeCompare(b)))
+    .map((mid) => ({ id: mid, isDefault: mid === cfg.defaultModel, live: live.has(mid), enabled: enabled.has(mid) }));
+  sendJson(res, 200, { id: cfg.id, models, ...(listed.ok ? {} : { listingError: listed.error }) });
+}
+
+/**
+ * `PUT /auth/<id>/allowlist` — the consent write.
+ * `{"models":[…]}` replaces this provider's enabled set (exact ids);
+ * `{"all":true}` enables the ids the live catalog lists RIGHT NOW (never a
+ * wildcard — a catalog change can't silently re-open access);
+ * `{"all":false}` disables the provider.
+ */
+async function handleAllowlistPut(req: http.IncomingMessage, res: http.ServerResponse, id: string): Promise<void> {
+  const cfg = getProviderConfig(id);
+  if (cfg === null) {
+    sendJson(res, 404, { error: { message: `unknown provider "${id}"`, code: "unknown_provider" } });
+    return;
+  }
+  const body = await readCappedBody(req, MAX_CUSTOM_BODY_BYTES, "request body too large");
+  if (!body.ok) {
+    sendJson(res, 413, { error: { message: body.error, code: "too_large" } });
+    return;
+  }
+  let p: { models?: unknown; all?: unknown };
+  try {
+    p = JSON.parse(body.body) as { models?: unknown; all?: unknown };
+  } catch {
+    sendJson(res, 400, { error: { message: "invalid JSON", code: "invalid_json" } });
+    return;
+  }
+  const respond = (r: { ok: true; allowed: string[] } | { ok: false; error: string }): void => {
+    if (!r.ok) {
+      sendJson(res, 400, { error: { message: r.error, code: "invalid_allowlist" } });
+      return;
+    }
+    // Consent changed — the playground's /v1/models dropdown must not wait
+    // out the sweep cache.
+    clearModelCatalogCache();
+    sendJson(res, 200, { id: cfg.id, allowed: r.allowed });
+  };
+  if (typeof p.all === "boolean") {
+    if (!p.all) {
+      respond(setProviderAllowlist(cfg.id, []));
+      return;
+    }
+    const { key } = resolveKey(cfg.id);
+    const listed = key.length > 0 ? await listModels(cfg.id, key, UI_MODELS_TIMEOUT_MS) : { ok: false as const, error: "no key" };
+    if (!listed.ok) {
+      sendJson(res, 400, { error: { message: `cannot list ${cfg.id} models (${listed.error}) — enable models individually`, code: "listing_unavailable" } });
+      return;
+    }
+    respond(setProviderAllowlist(cfg.id, listed.models.map((m) => m.id)));
+    return;
+  }
+  if (!Array.isArray(p.models) || !p.models.every((m) => typeof m === "string")) {
+    sendJson(res, 400, { error: { message: 'body {"models":["id",…]} or {"all":true|false} required', code: "invalid_allowlist" } });
+    return;
+  }
+  respond(setProviderAllowlist(cfg.id, p.models as string[]));
+}
+
 async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<boolean> {
   if (!path.startsWith(AUTH_UI)) return false;
-  const rest = path.slice(AUTH_UI.length); // "" | "/<id>" | "/_custom" | "/_custom/<id>"
+  const rest = path.slice(AUTH_UI.length); // "" | "/<id>" | "/_custom" | "/_custom/<id>" | "/_models/<id>" | "/<id>/allowlist"
   if (rest === CUSTOM_PATH || rest.startsWith(`${CUSTOM_PATH}/`)) {
     await handleCustomRoutes(req, res, rest.slice(CUSTOM_PATH.length));
+    return true;
+  }
+  if (req.method === "GET" && (rest === MODELS_PATH || rest.startsWith(`${MODELS_PATH}/`))) {
+    await handleProviderModels(res, rest.slice(MODELS_PATH.length).replace(/^\//, "").replace(/\/$/, ""));
+    return true;
+  }
+  const allowMatch = /^\/([^/]+)\/allowlist\/?$/.exec(rest);
+  if (allowMatch !== null) {
+    if (req.method !== "PUT") {
+      sendError(res, 405, `method ${req.method ?? ""} not allowed on allowlist (PUT only)`, "method_not_allowed");
+      return true;
+    }
+    await handleAllowlistPut(req, res, allowMatch[1] as string);
     return true;
   }
   // GET /auth → HTML page
@@ -1241,16 +1453,6 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
     // /v1/models sweep so the next load re-probes and expands the rows.
     clearModelCatalogCache();
     sendJson(res, 200, { id, source: "file" });
-    return true;
-  }
-  if (req.method === "PATCH") {
-    let p: { disabled?: unknown };
-    try { p = JSON.parse(await readCappedBody(req, MAX_KEY_BYTES, "body too large").then((b) => b.ok ? b.body : "")) as { disabled?: unknown }; }
-    catch { sendError(res, 400, "invalid JSON", "invalid_json"); return true; }
-    if (typeof p.disabled !== "boolean") { sendError(res, 400, "body {\"disabled\":true/false} required", "invalid_disabled"); return true; }
-    setProviderDisabled(id, p.disabled);
-    clearModelCatalogCache();
-    sendJson(res, 200, { id, disabled: p.disabled });
     return true;
   }
   if (req.method === "DELETE") {
@@ -1369,6 +1571,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (cfg === null) {
       logErrorLazy("unknown-provider", `provider=${target.provider}`);
       sendError(res, 400, `unknown provider "${target.provider}"`, "unknown_provider");
+      return;
+    }
+    // Deny-by-default consent gate: every target — explicit, server-default,
+    // or auto-hop — must name an enabled model before a key is resolved.
+    if (!isModelAllowed(target.provider, target.model)) {
+      const id = `${target.provider}:${target.model}`;
+      logErrorLazy("model-not-enabled", `model=${id}`);
+      sendError(
+        res,
+        403,
+        `model "${id}" is not enabled — ${opts.authUi === true ? "enable it at /auth or run:" : "start serve with --auth-ui to manage the allowlist, or run:"} codewhip provider enable ${id}`,
+        "model_not_enabled",
+      );
       return;
     }
     const key = resolveKey(target.provider);
@@ -1516,6 +1731,12 @@ export function startServe(opts: ServeOptions): http.Server {
       console.log(`  GET  /auth                  provider key manager UI (register a custom endpoint there too)`);
     }
     console.log(`  default route: ${opts.provider}:${opts.model}`);
+    const enabled = loadAllowedEntries();
+    if (enabled.length === 0) {
+      console.log(`  !! allowlist EMPTY — NOTHING is enabled. ${opts.authUi === true ? "Visit /auth to enable models one by one," : "Start with --auth-ui for the model manager,"} or: codewhip provider enable <provider>:<model>`);
+    } else {
+      console.log(`  allowlist: ${enabled.length} model(s) enabled (deny by default — manage at ${opts.authUi === true ? "/auth" : "codewhip provider enable/disable"})`);
+    }
     console.log(`  auth: ${opts.token ? "bearer token required" : "none (loopback only)"}`);
     console.log(`  note: this proxies models — it runs no tools, applies no policy, and writes no audit entries.`);
     console.log(`  stop with Ctrl-C (press again to force).`);

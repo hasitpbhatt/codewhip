@@ -34,6 +34,7 @@ const SURFACE = new Set([
   "src/onemin.ts",
   "src/router.ts",
   "src/metrics.ts",
+  "src/model-allowlist.ts",
 ]);
 
 const SURFACE_DIRS = new Set(["src/tui", "src/bench"]);

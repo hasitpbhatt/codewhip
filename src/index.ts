@@ -7,6 +7,7 @@ import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
+import { allowedModelsFor, disableEntries, enableEntries, isModelAllowed, loadAllowedEntries, providerIsEnabled } from "./model-allowlist.js";
 import { freeChainCandidates, freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
@@ -155,10 +156,13 @@ function printCommandHelp(topic: string): boolean {
       console.log("  Needs the provider key (see: codewhip help auth) — except llm7, which is anonymous.");
       return true;
     case "provider":
-      console.log("codewhip provider list            — known providers (builtin + custom)");
+      console.log("codewhip provider list            — known providers (builtin + custom) with enabled-model counts");
       console.log(`codewhip ${PROVIDER_ADD_USAGE}`);
       console.log("codewhip provider remove <id>     — forget a custom provider (builtins stay)");
       console.log("codewhip provider show <id>       — base URLs, default model, env var, key console");
+      console.log("codewhip provider enable <p:m>    — allow one exact model (deny by default; no wildcards)");
+      console.log("codewhip provider disable <p:m>   — take one exact model away");
+      console.log("codewhip provider allowed         — the enabled models");
       return true;
     case "free":
       console.log("codewhip free — list the free-provider chain (read-only: no key, no network).");
@@ -672,13 +676,26 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   // hop chatter (recorded, not printed).
   let freeChain: FailoverTarget[] = [];
   if (opts.free || opts.autoFailover) {
-    const candidates = freeChainIds();
-    const head = opts.providerExplicit ? opts.provider : candidates.find((id) => resolveKey(id).key.length > 0);
+    const allFree = freeChainIds();
+    // Consent gate: the chain only walks providers with ≥1 enabled model.
+    const candidates = allFree.filter((id) => providerIsEnabled(id));
+    if (candidates.length === 0 && allFree.length > 0) {
+      console.error("codewhip: --free found no enabled free provider — every free-chain provider is disabled by the allowlist. Enable models with: codewhip provider enable <provider>:<model> (see: codewhip provider allowed)");
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    // Chain hops run on each provider's DEFAULT model, so that exact id must
+    // be enabled — a provider with one non-default model enabled would 403
+    // mid-hop.
+    const hopUsable = (id: string): boolean =>
+      resolveKey(id).key.length > 0 && isModelAllowed(id, getProviderConfig(id)?.defaultModel ?? "");
+    const head = opts.providerExplicit ? opts.provider : candidates.find(hopUsable);
     if (head === undefined || !candidates.some((c) => c === head)) {
       console.error(
         opts.providerExplicit
           ? `codewhip: --free runs the free chain only — "${opts.provider}" is not in it (see: codewhip free)`
-          : "codewhip: --free found no runnable free provider (no keys set and no keyless candidate) — see: codewhip free"
+          : "codewhip: --free found no runnable free provider (no key + enabled default model; see: codewhip free, codewhip provider allowed)"
       );
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
@@ -686,7 +703,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     }
     const headModel = opts.modelExplicit ? opts.model : getProviderConfig(head)?.defaultModel ?? opts.model;
     freeChain = candidates
-      .filter((id) => id !== head && resolveKey(id).key.length > 0)
+      .filter((id) => id !== head && hopUsable(id))
       .flatMap((id) => {
         const cfg = getProviderConfig(id);
         if (cfg === null) return [];
@@ -731,15 +748,37 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     console.log("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
   }
   console.log(`model: ${opts.provider}:${opts.model}`);
-  if (opts.models.length > 1) {
-    console.log(`!! rotation armed: on rate-limit/timeout/5xx walk ${opts.models.join(" -> ")} (each once per run)`);
-  }
   const runCfg = getProviderConfig(opts.provider);
   if (runCfg === null) {
     console.error(`codewhip: unknown provider "${opts.provider}" (see: codewhip provider list)`);
     process.exitCode = 1;
     printStubReceipt(opts.model, opts.provider);
     return;
+  }
+  // Consent gate: no exact provider:model entry, no run — the same rule serve
+  // enforces. Loopback locals are exempt (registration is the consent there).
+  if (!isLoopbackBaseUrl(runCfg.baseUrl) && !isModelAllowed(opts.provider, opts.model)) {
+    console.error(`codewhip: model "${opts.provider}:${opts.model}" is not enabled — run: codewhip provider enable ${opts.provider}:${opts.model} (see: codewhip provider allowed)`);
+    process.exitCode = 1;
+    logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:model-not-enabled", `${opts.provider}:${opts.model} not enabled`);
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  if (opts.models.length > 1) {
+    const kept = opts.models.filter((m) => isLoopbackBaseUrl(runCfg.baseUrl) || isModelAllowed(opts.provider, m));
+    if (kept.length !== opts.models.length) {
+      console.log(`!! rotation pruned to enabled models: ${opts.models.join(" -> ")} → ${kept.join(" -> ") || "(none left)"} (enable with: codewhip provider enable ${opts.provider}:<model>)`);
+    }
+    if (kept.length === 0 && opts.models.length > kept.length) {
+      console.error("codewhip: --models rotation has no enabled models left — enable them with: codewhip provider enable <provider>:<model>");
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    opts = { ...opts, models: kept };
+  }
+  if (opts.models.length > 1) {
+    console.log(`!! rotation armed: on rate-limit/timeout/5xx walk ${opts.models.join(" -> ")} (each once per run)`);
   }
   if (opts.timeoutMs !== undefined) {
     console.log(`!! --timeout-ms armed: provider calls abort after ${opts.timeoutMs}ms (provider default ${runCfg.timeoutMs}ms overridden)`);
@@ -795,9 +834,11 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       printStubReceipt(opts.model, opts.provider);
       return;
     }
-    const next = listAllProviderConfigs().map((c) => c.id).find((id) => id !== opts.provider && resolveKey(id).key.length > 0);
+    const next = listAllProviderConfigs()
+      .map((c) => c.id)
+      .find((id) => id !== opts.provider && resolveKey(id).key.length > 0 && isModelAllowed(id, getProviderConfig(id)?.defaultModel ?? ""));
     if (next === undefined) {
-      console.error("codewhip: --failover needs a key for some other provider (env var or: codewhip auth login <other>)");
+      console.error("codewhip: --failover needs another provider with a key AND an enabled default model (env var or: codewhip auth login <other>; enable models with: codewhip provider enable <provider>:<model>)");
       process.exitCode = 1;
       printStubReceipt(opts.model, opts.provider);
       return;
@@ -1315,8 +1356,13 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
       const { source } = resolveKey(c.id);
       const tag = isBuiltinProviderId(c.id) ? "builtin" : "custom";
       const key = source === "none" ? "no key" : source;
-      console.log(`  ${c.id} [${tag}] ${c.baseUrl} default=${c.defaultModel} env=${c.envVar} key=${key}`);
+      const n = allowedModelsFor(c.id).length;
+      console.log(`  ${c.id} [${tag}] ${c.baseUrl} default=${c.defaultModel} env=${c.envVar} key=${key} enabled=${n}`);
     }
+    const total = loadAllowedEntries().length;
+    console.log(total === 0
+      ? "allowlist: EMPTY — deny by default, nothing is callable. Enable with: codewhip provider enable <provider>:<model>"
+      : `allowlist: ${total} model(s) enabled (deny by default; \`codewhip provider allowed\` lists them)`);
     return;
   }
   if (sub === "show") {
@@ -1387,6 +1433,7 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
       return;
     }
     console.log(`provider: added "${result.id}" (${baseUrl}, default ${model})`);
+    console.log(`  enabled ${result.id}:${model} (registration is consent — add more models with: codewhip provider enable ${result.id}:<model>)`);
     if (isLoopbackBaseUrl(baseUrl)) {
       console.log("  local runtime: no credential needed — the router's `private` class routes here");
     } else {
@@ -1407,10 +1454,53 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
       process.exitCode = 1;
       return;
     }
-    console.log(`provider: removed "${id}" (stored key, if any, left in place — clear with: codewhip auth logout ${id})`);
+    console.log(`provider: removed "${id}" (stored key, if any, left in place — clear with: codewhip auth logout ${id}; its allowlist entries were dropped)`);
     return;
   }
-  console.log("Usage: codewhip provider [list|show <id>|add <id> --base-url …|remove <id>]");
+  if (sub === "enable" || sub === "disable") {
+    const raw = args.slice(1).join(",").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    if (raw.length === 0) {
+      console.error(`usage: codewhip provider ${sub} <provider>:<model>[,<provider>:<model>…]`);
+      console.error("  exact ids only — there are no wildcards. The first colon splits provider from model,");
+      console.error("  so ids like kilo:cohere/north-mini-code:free keep their own colons.");
+      process.exitCode = 1;
+      return;
+    }
+    if (sub === "enable") {
+      const result = enableEntries(raw);
+      if (!result.ok) {
+        console.error(`provider: ${result.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(result.added.length > 0
+        ? `provider: enabled ${result.added.join(", ")}`
+        : "provider: already enabled (nothing changed)");
+    } else {
+      const result = disableEntries(raw);
+      if (!result.ok) {
+        console.error(`provider: ${result.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(result.removed.length > 0
+        ? `provider: disabled ${result.removed.join(", ")}`
+        : "provider: nothing was enabled (nothing changed)");
+    }
+    console.log("  a running `codewhip serve` honors this within its 60s catalog cache (chat gating is immediate)");
+    return;
+  }
+  if (sub === "allowed") {
+    const entries = loadAllowedEntries();
+    if (entries.length === 0) {
+      console.log("allowlist: EMPTY — deny by default. Enable with: codewhip provider enable <provider>:<model> (or model-by-model at the /auth UI).");
+      return;
+    }
+    console.log(`allowlist: ${entries.length} model(s) enabled:`);
+    for (const e of entries) console.log(`  ${e}`);
+    return;
+  }
+  console.log("Usage: codewhip provider [list|show <id>|add <id> --base-url …|remove <id>|enable <p:m>[,…]|disable <p:m>[,…]|allowed]");
 }
 
 function renderAuditEntry(e: AuditEntry): string {
