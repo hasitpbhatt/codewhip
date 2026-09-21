@@ -29,6 +29,7 @@ import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
+import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { removeRule } from "./remember-store.js";
 import { isVerdict, proposeVerdict, resolveRunPrefix, setVerdict, type Verdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
@@ -141,6 +142,8 @@ function printCommandHelp(topic: string): boolean {
       printRunOptions();
       console.log("  No key yet? codewhip demo --deny (offline, $0) — or --provider llm7 (keyless, rate-limited).");
       console.log("  Key consoles and keyless tiers: codewhip help keys");
+      console.log('  Custom commands: codewhip run "/name args" expands .codewhip/commands/<name>.md ($ARGUMENTS substituted).');
+      console.log("  One-shot expansion is exact-match only — a prompt like \"/api returns 500\" runs verbatim; in the REPL unknown /name errors. See .help.");
       return true;
     case "keys":
       printKeysHelp();
@@ -286,6 +289,8 @@ function printHelp(): void {
   console.log("  policy               promote repeated declines into denies (candidates/approve/list)");
   console.log("  pack                 team policy packs shipped locally (list/pull <name> [--force])");
   console.log("  help [command]       show this help (or one command's: codewhip help run)");
+  console.log("");
+  console.log('  "/name args"         custom slash command — expands .codewhip/commands/<name>.md (run + REPL; .help lists them)');
   console.log("");
   printRunOptions();
   console.log("");
@@ -1070,6 +1075,21 @@ function cmdSessions(): void {
   }
 }
 
+/** REPL-local help: tips plus the custom-command table with parse errors. */
+function printReplHelp(cwd: string): void {
+  console.log("codewhip repl — type a prompt to run it; .exit/.quit to leave; .help for this list.");
+  console.log("  /<name> [args] expands .codewhip/commands/<name>.md ($ARGUMENTS substituted) before the run.");
+  const { commands, errors } = listCommandsWithErrors(cwd);
+  if (commands.length === 0) {
+    console.log("  no custom commands yet — add .codewhip/commands/<name>.md (body = prompt template).");
+  } else {
+    for (const c of commands) {
+      console.log(`  /${c.name}${c.description.length > 0 ? ` — ${c.description}` : ""}`);
+    }
+  }
+  for (const e of errors) console.error(`  !! ${e}`);
+}
+
 function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
   const cwd = process.cwd();
   const shared: ReplState = { history: [], provider: defaults.provider, model: defaults.model, lastRunId: null };
@@ -1115,10 +1135,24 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
       rl.close();
       return;
     }
+    if (trimmed === ".help") {
+      printReplHelp(cwd);
+      rl.prompt();
+      return;
+    }
     if (trimmed.length > 0) {
+      // In the REPL a leading "/" is unambiguous intent: unknown commands
+      // error to the user instead of being sent blind to the model.
+      const expanded = trimmed.startsWith("/") ? expandCommand(cwd, trimmed) : null;
+      if (expanded !== null && "error" in expanded) {
+        console.error(`codewhip: ${expanded.error}`);
+        rl.prompt();
+        return;
+      }
+      const promptText = expanded !== null ? expanded.prompt : trimmed;
       // continue:false here: persistence is deferred to .exit (one file for
       // the whole REPL), while history threads in-memory via shared.
-      void cmdRun({ ...defaults, prompt: trimmed, continue: false }, shared).finally(() => rl.prompt());
+      void cmdRun({ ...defaults, prompt: promptText, continue: false }, shared).finally(() => rl.prompt());
       return;
     }
     rl.prompt();
@@ -2195,6 +2229,15 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
+    // One-shot lenient expansion: only an EXACT command-file match rewrites
+    // the prompt — path-like prompts ("/api endpoint 500") run verbatim.
+    const expanded = maybeExpandCommand(process.cwd(), opts.prompt);
+    if (expanded !== null && "error" in expanded) {
+      console.error(`codewhip: ${expanded.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (expanded !== null) opts.prompt = expanded.prompt;
     await cmdRun(opts);
     return;
   }
