@@ -176,7 +176,7 @@ function lookupTool(name: string): ToolDef | null {
   if (
     name === "read" || name === "search" || name === "edit" || name === "write" ||
     name === "bash" || name === "webfetch" || name === "delegate" || name === "delegate_many" ||
-    name === "run_in_background" || name === "task_output" || name === "task_stop"
+    name === "run_in_background" || name === "task_output" || name === "task_stop" || name === "todo"
   ) {
     return TOOLS[name];
   }
@@ -607,6 +607,16 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "loop:child-no-network", sha256Hex(out), "policy", out);
         emit("tool", `deny ${call.name} ${preview} (loop:child-no-network)`);
+        continue;
+      }
+      // todo is parent-run state (the checklist IS the parent's plan); the
+      // spec filter hides it from children, this closes the fabricated-call
+      // path — lookupTool admits any TOOLS key regardless of depth.
+      if (isChild && def.name === "todo") {
+        const out = "subagents are read-only — the parent run owns the task list";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "loop:child-readonly", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (loop:child-readonly)`);
         continue;
       }
       // Plan mode is run-scoped policy: mutations and delegation are refused

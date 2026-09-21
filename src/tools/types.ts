@@ -12,7 +12,8 @@ export type ToolName =
   | "delegate_many"
   | "run_in_background"
   | "task_output"
-  | "task_stop";
+  | "task_stop"
+  | "todo";
 
 export type ToolResult = {
   ok: boolean;

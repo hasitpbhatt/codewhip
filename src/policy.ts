@@ -282,6 +282,10 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
     const p = (parsed as { path?: unknown }).path;
     if (typeof p === "string") return p;
   }
+  if (tool === "todo") {
+    const a = (parsed as { action?: unknown }).action;
+    if (typeof a === "string") return `todo:${a}`;
+  }
   return preview;
 }
 
@@ -380,6 +384,16 @@ export function checkPermission(
       decision: "allow",
       ruleId: "delegate:read-only",
       reason: "subagents are read-only (read/search only, no network, no delegation) — delegation grants no extra authority",
+    };
+  }
+  // todo mutates only harness todo state (.codewhip/todos.json) — never a
+  // workspace file, never the shell. It lands after promoted-deny matching,
+  // so a team can still compile `deny todo:<action>` in policy.md.
+  if (tool === "todo") {
+    return {
+      decision: "allow",
+      ruleId: "default:todo:allow",
+      reason: "todo mutates only harness todo state (.codewhip/todos.json), never the workspace",
     };
   }
   const norm = normalize(commandPreview);

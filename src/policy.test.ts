@@ -11,6 +11,13 @@ describe("policy", () => {
     strictEqual(checkPermission("read", "any").decision, "allow");
     strictEqual(checkPermission("search", "x").decision, "allow");
   });
+  it("todo allows by default with an action-scoped subject (never the blob preview)", () => {
+    const v = checkPermission("todo", "todo:replace");
+    strictEqual(v.decision, "allow");
+    strictEqual(v.ruleId, "default:todo:allow");
+    strictEqual(permissionSubject("todo", { action: "replace" }, '{"action":"replace","items":['), "todo:replace");
+    strictEqual(permissionSubject("todo", { action: "list" }, "preview"), "todo:list");
+  });
   it("denylist blocks rm -rf / and git push --force", () => {
     strictEqual(checkPermission("bash", "rm -rf /").decision, "deny");
     strictEqual(checkPermission("bash", "git push --force").decision, "deny");
