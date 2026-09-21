@@ -130,133 +130,158 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
 
 export async function createTuiView(deps: TuiViewDeps): Promise<TuiViewHandle> {
   try {
-    // Eagerly try to lazy-import OpenTUI. If it's not installed, we fall
-    // back to the readline-based view so the TUI bridge still functions.
-    // @ts-expect-error — opentui is an optional peer dep; absent in headless builds.
-    const mod = await import("opentui");
-    return createOpentuiView(deps, mod);
+    // Eagerly try to lazy-import OpenTUI. If it's not installed (or the
+    // renderer can't initialize on this runtime/OS), we fall back to the
+    // readline view so the TUI bridge still functions everywhere. The
+    // indirection keeps the optional dep out of static type resolution:
+    // builds are identical whether or not it happens to be installed.
+    const opentuiSpec = "@opentui/core";
+    const mod = (await import(opentuiSpec)) as {
+      createCliRenderer?: (opts?: Record<string, unknown>) => Promise<OpentuiRenderer> | OpentuiRenderer;
+      Box?: (props: Record<string, unknown>, children?: unknown[]) => unknown;
+      Text?: (props: Record<string, unknown>) => unknown;
+    };
+    return await createOpentuiView(deps, mod);
   } catch {
-    // OpenTUI not installed — use the fallback.
+    // OpenTUI not installed or unsupported here — use the fallback.
     return createFallbackView(deps);
   }
 }
 
+type OpentuiRenderer = {
+  render?: (el: unknown) => void;
+  destroy?: () => void;
+  keyInput?: { on?: (ev: string, cb: (k: { name?: string; sequence?: string }) => void) => void };
+};
+
 // Full OpenTUI-backed view — only loaded when the package is available.
-async function createOpentuiView(deps: TuiViewDeps, mod: any): Promise<TuiViewHandle> {
+// Every call is guarded: if the API differs from what we expect, the factory
+// throws and createTuiView's catch falls back to the readline view.
+async function createOpentuiView(deps: TuiViewDeps, mod: {
+  createCliRenderer?: (opts?: Record<string, unknown>) => Promise<OpentuiRenderer> | OpentuiRenderer;
+  Box?: (props: Record<string, unknown>, children?: unknown[]) => unknown;
+  Text?: (props: Record<string, unknown>) => unknown;
+}): Promise<TuiViewHandle> {
+  if (mod.createCliRenderer == null || mod.Box == null || mod.Text == null) {
+    throw new Error("opentui api not recognized");
+  }
+  const renderer = await mod.createCliRenderer({});
+  if (typeof renderer.render !== "function" || typeof renderer.destroy !== "function") {
+    renderer.destroy?.();
+    throw new Error("opentui renderer api not recognized");
+  }
   const { model } = deps;
   const Box = mod.Box;
   const Text = mod.Text;
-  const app: { root: any; render: (s: any) => void; unmount: () => void; onKey: (cb: (k: string) => void) => void; onInput: (cb: (s: string) => void) => void } = {
-    root: null,
-    render: (_s: any) => {},
-    unmount: () => {},
-    onKey: (_cb: (k: string) => void) => {},
-    onInput: (_cb: (s: string) => void) => {},
-  };
-
-  // Build a minimal OpenTUI-compatible renderer. If the real API differs,
-  // the fallback path keeps things working.
   let approvalResolve: ((v: "yes" | "session" | "always" | "no") => void) | null = null;
   let composerText = "";
 
-  function renderPendingCard(pending: PendingApproval | null): any {
+  function renderPendingCard(pending: PendingApproval | null): unknown {
     if (!pending) return null;
-    return Box({ border: { type: "line" }, title: "approval", width: "100%" }, [
-      Text(pending.question),
-      Text(""),
-      Text("[y]es  [s]ession  [a]lways  [n]o / Esc"),
+    return Box({ borderStyle: "single", title: "approval", width: "100%" }, [
+      Text({ content: pending.question }),
+      Text({ content: "[y]es  [s]ession  [a]lways  [n]o / Esc" }),
     ]);
   }
 
-  function renderHeader(snap: TuiModelSnapshot): any {
-    const scope = "scope: auto";
-    return Box({ border: { type: "line" }, title: "codewhip tui", width: "100%" }, [
-      Text(`run: ${scope}  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}`),
+  function renderHeader(snap: TuiModelSnapshot): unknown {
+    return Box({ borderStyle: "single", title: "codewhip tui", width: "100%" }, [
+      Text({ content: `run: ${snap.runId?.slice(0, 8) ?? "<pending>"}  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}` }),
     ]);
   }
 
-  function renderTranscript(snap: TuiModelSnapshot): any {
+  function renderTranscript(snap: TuiModelSnapshot): unknown {
     const lines = snap.tail.length === 0
-      ? [Text("(no events yet)")]
-      : snap.tail.map((l) => Text(l));
-    return Box({ border: { type: "line" }, title: "transcript", flex: 1 }, lines);
+      ? [Text({ content: "(no events yet)" })]
+      : snap.tail.map((l) => Text({ content: l }));
+    return Box({ borderStyle: "single", title: "transcript", flexGrow: 1 }, lines);
   }
 
-  function renderBackground(snap: TuiModelSnapshot): any {
+  function renderBackground(snap: TuiModelSnapshot): unknown {
     if (snap.background.length === 0) return null;
     const cards = snap.background.map((c: BackgroundCard) =>
-      Box({ border: { type: "line" }, title: c.label, width: "50%" }, [
-        Text(`${c.status}: ${c.preview}`),
+      Box({ borderStyle: "single", title: c.label, width: "50%" }, [
+        Text({ content: `${c.status}: ${c.preview}` }),
       ])
     );
-    return Box({ border: { type: "line" }, title: "background" }, cards);
+    return Box({ borderStyle: "single", title: "background" }, cards);
   }
 
-  function renderFooter(snap: TuiModelSnapshot): any {
-    return Box({ border: { type: "line" }, title: "footer", width: "100%" }, [
-      Text(`rollback: <prefix>  |  /model /free /plan /rollback /sessions  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}`),
+  function renderFooter(snap: TuiModelSnapshot): unknown {
+    const rollbackId = snap.runId ? snap.runId.slice(0, 8) : "<pending>";
+    const revoke = snap.pending ? " | Esc = revoke" : "";
+    return Box({ borderStyle: "single", title: "footer", width: "100%" }, [
+      Text({ content: `rollback: ${rollbackId}  |  /model /free /plan /rollback /sessions  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}${revoke}` }),
     ]);
   }
 
-  function renderRoot(): any {
+  function renderRoot(): unknown {
     const snap = model.snapshot();
-    const children: any[] = [
+    const children: unknown[] = [
       renderHeader(snap),
       renderTranscript(snap),
       renderPendingCard(snap.pending),
-      Box({ border: { type: "line" }, title: "composer", width: "100%" }, [
-        Text(`/ ${composerText}`),
+      Box({ borderStyle: "single", title: "composer", width: "100%" }, [
+        Text({ content: `/ ${composerText}` }),
       ]),
       renderFooter(snap),
     ];
     if (snap.background.length > 0) {
-      children.push(renderBackground(snap));
+      const bg = renderBackground(snap);
+      if (bg !== null) children.push(bg);
     }
-    return Box({ border: { type: "line" }, title: "root", flex: 1 }, children);
+    return Box({ borderStyle: "single", title: "root", height: "100%" }, children.filter((c) => c !== null));
   }
 
   function rerender(): void {
-    app.render(renderRoot());
+    renderer.render?.(renderRoot());
   }
 
   // Wire up keymap. Keys y/s/a/n resolve the pending approval.
-  app.onKey((key: string) => {
-    if (approvalResolve === null) {
-      // Not in an approval — handle slash commands or navigation.
-      if (key === "ctrl-c" || key === "ctrl-d") {
-        // Abort parity with headless — same as Ctrl-C in cmdRun.
-        // The bridge owns the AbortController; we just notify via signal.aborted.
-        // In the fallback, this exits via the bridge's signal handler.
-        return;
-      }
-      if (key === "escape") {
-        // Esc with no pending approval = deny/no-op
-        return;
+  renderer.keyInput?.on?.("key", (key: { name?: string; sequence?: string }) => {
+    const name = key.name ?? key.sequence ?? "";
+    if (approvalResolve !== null) {
+      const resolve = approvalResolve;
+      approvalResolve = null;
+      if (name === "y") {
+        model.clearPending();
+        resolve("yes");
+      } else if (name === "s") {
+        model.clearPending();
+        resolve("session");
+      } else if (name === "a") {
+        model.clearPending();
+        resolve("always");
+      } else {
+        model.clearPending();
+        resolve("no");
       }
       return;
     }
-
-    const resolve = approvalResolve;
-    approvalResolve = null;
-    if (key === "y") {
-      model.clearPending();
-      resolve("yes");
-    } else if (key === "s") {
-      model.clearPending();
-      resolve("session");
-    } else if (key === "a") {
-      model.clearPending();
-      resolve("always");
-    } else if (key === "n" || key === "escape" || key === "ctrl-c") {
-      model.clearPending();
-      resolve("no");
+    if (name === "escape") {
+      return;
     }
-  });
-
-  // Composer input
-  app.onInput((s: string) => {
-    if (s.length === 1 && s !== "\n" && s !== "\r") {
-      composerText += s;
+    if (name === "return" || name === "enter") {
+      if (composerText.length > 0) {
+        const cmd = parseSlashCommand(composerText);
+        if (cmd !== null && deps.onSlashCommand !== undefined) {
+          deps.onSlashCommand(cmd);
+        }
+        composerText = "";
+        rerender();
+      }
+      return;
+    }
+    if (name === "backspace") {
+      composerText = composerText.slice(0, -1);
+      rerender();
+      return;
+    }
+    // printable char
+    const ch = key.sequence ?? "";
+    if (ch.length === 1 && ch >= " ") {
+      composerText += ch;
+      rerender();
     }
   });
 
@@ -273,12 +298,12 @@ async function createOpentuiView(deps: TuiViewDeps, mod: any): Promise<TuiViewHa
   }
 
   function unmount(): void {
-    app.unmount();
+    renderer.destroy?.();
     approvalResolve = null;
   }
 
   // Initial mount
-  app.render(renderRoot());
+  rerender();
 
   model.onTick = () => rerender();
 

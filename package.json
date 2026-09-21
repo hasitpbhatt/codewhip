@@ -51,10 +51,10 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "opentui": ">=0.1.0"
+    "@opentui/core": ">=0.5.0"
   },
   "peerDependenciesMeta": {
-    "opentui": {
+    "@opentui/core": {
       "optional": true
     }
   },
