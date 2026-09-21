@@ -84,14 +84,14 @@ describe("subagents", () => {
     }
   });
 
-  it("toolSpecs: depth 0 sees all 11 tools; children see only read+search (no network, no delegation)", () => {
+  it("toolSpecs: depth 0 sees all 12 tools; children see only read+search (no network, no delegation)", () => {
     const names0 = toolSpecs(0).map((s) => s.name);
-    strictEqual(names0.length, 11);
+    strictEqual(names0.length, 12);
     ok(names0.includes("delegate") && names0.includes("delegate_many"));
     const names1 = toolSpecs(1).map((s) => s.name);
     strictEqual(names1.length, 2);
     ok(names1.includes("read") && names1.includes("search"));
-    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch"));
+    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch") && !names1.includes("todo"));
   });
 
   it("delegate: child runs, audit chain carries the child runId, usage folds into the receipt", async () => {
@@ -119,8 +119,8 @@ describe("subagents", () => {
       ok(childSystem.includes("READ-ONLY SUBAGENT RUN"));
       ok(!childSystem.includes("Delegable subagents"));
       // Child advertised specs are read+search (no network, no delegation);
-      // parent saw all 11 (incl. background tools).
-      strictEqual(record[0]?.toolCount, 11);
+      // parent saw all 12 (incl. background + todo tools).
+      strictEqual(record[0]?.toolCount, 12);
       strictEqual(record[1]?.toolCount, 2);
       // Usage folds honestly into the parent's totals and buckets.
       strictEqual(r.promptTokens, 100 + 50 + 50 + 10);
@@ -196,6 +196,32 @@ describe("subagents", () => {
       ok(child !== undefined, "expected child outcome");
       const deny = child?.tool_calls.find((c) => c.ruleId === "loop:child-no-network");
       ok(deny !== undefined && deny.decision === "deny", JSON.stringify(child?.tool_calls));
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("children are read-only: a child todo call is denied pre-ladder (loop:child-readonly)", async () => {
+    const runCwd = tmpDir("codewhip-sub-todo-");
+    try {
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "keep a todo list" })),
+        toolTurn("todo", JSON.stringify({ action: "replace", items: [{ id: "1", text: "x", status: "pending" }] })),
+        textTurn("child done"),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+      });
+      strictEqual(r.text, "done");
+      const child = readOutcomeRecords(runCwd).find((o) => o.runId !== r.runId);
+      ok(child !== undefined, "expected child outcome");
+      const deny = child?.tool_calls.find((c) => c.ruleId === "loop:child-readonly");
+      ok(deny !== undefined && deny.decision === "deny", JSON.stringify(child?.tool_calls));
+      // The deny closed no file: the child never reached todoTool's persist.
+      strictEqual(fs.existsSync(path.join(runCwd, ".codewhip", "todos.json")), false);
       strictEqual(verifyChain(runCwd).valid, true);
     } finally {
       fs.rmSync(runCwd, { recursive: true, force: true });

@@ -286,6 +286,15 @@ plan, which you review, then re-run without `--plan` to execute it. The
 banner prints `!! --plan armed` up front and every refusal lands on the
 audit trail as `deny:plan:read-only`.
 
+### Task lists
+
+On multi-step work the model keeps a visible checklist with the `todo`
+tool: `replace` the full plan up front, `update` statuses as steps
+finish, `list` to re-read. The list lives in `.codewhip/todos.json` —
+harness state, never a workspace file — so it is allow-by-default
+(`default:todo:allow`, still deniable via a promoted `policy.md` rule),
+redacted at save, and parent-run-only (children stay read-only).
+
 ### Subagents: explore, review, and converge in parallel
 
 The model can spawn **read-only subagents** for investigation and
@@ -309,7 +318,7 @@ built-in.
 Why this doesn't dilute the trust model:
 
 - children are **read-only and network-free** (read/search only —
-  edit/write/bash/delegate/webfetch refused pre-ladder; nothing inside a
+  edit/write/bash/delegate/webfetch/todo refused pre-ladder; nothing inside a
   child can prompt, mutate, delegate, or reach the network — the parent
   fetches and passes content) and depth-capped: subagents cannot spawn
   subagents;

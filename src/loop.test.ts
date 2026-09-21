@@ -606,6 +606,20 @@ describe("loop", () => {
     const readMsg = messagesSeen[1]?.find((m) => m.role === "tool");
     ok(readMsg !== undefined && readMsg.content.includes("hello"));
   });
+  it("plan mode: todo stays allowed — planning is the task there", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-loop-plan-todo-"));
+    const { port } = makeFakePort([
+      toolTurn("todo", JSON.stringify({ action: "replace", items: [{ id: "1", text: "sketch the change", status: "in_progress" }] })),
+      textTurn("plan ready"),
+    ]);
+    const r = await agentLoop({
+      prompt: "plan this", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 5, yolo: false,
+      stdinIsTTY: true, port, askUser: stubAsk, planMode: true, remembered: [],
+    });
+    strictEqual(r.text, "plan ready");
+    strictEqual(r.trace[0]?.policy, "allow:default:todo:allow");
+    ok(fs.existsSync(path.join(runCwd, ".codewhip", "todos.json")));
+  });
   it("plan mode: a remembered rule cannot bypass the read-only run", async () => {
     const { port } = makeFakePort([
       toolTurn("bash", JSON.stringify({ command: "echo hi" })),

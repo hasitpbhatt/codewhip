@@ -113,6 +113,7 @@ const CORE_EXPECTED = new Set([
   "src/tools/read.ts",
   "src/tools/registry.ts",
   "src/tools/search.ts",
+  "src/tools/todo.ts",
   "src/tools/types.ts",
   "src/tools/webfetch.ts",
   "src/tools/write.ts",

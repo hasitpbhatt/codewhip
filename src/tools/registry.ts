@@ -9,6 +9,7 @@ import { WEBFETCH_TIMEOUT_MS, isWebfetchArgs, webfetchTool } from "./webfetch.js
 import { delegateTool } from "./delegate.js";
 import { delegateManyTool } from "./delegate_many.js";
 import { runInBackgroundTool, taskOutputTool, taskStopTool } from "./background.js";
+import { isTodoArgs, todoTool } from "./todo.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
 // carries zero runtime deps. Week-1 ships static OpenAI specs + per-tool
@@ -126,6 +127,24 @@ function webfetchSpec(): ToolSpec {
   };
 }
 
+function todoSpec(): ToolSpec {
+  return {
+    name: "todo",
+    description: "Maintain this run's task checklist in harness state (.codewhip/todos.json; never touches workspace files). Args: action (list|replace|update); items for replace = the FULL new list of {id,text,status:pending|in_progress|done} (unique short ids, <=64 items, at most one in_progress — replaces the store); id+status for update. Plan with replace up front, update per step, list to re-read.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "replace", "update"] },
+        items: { type: "array" },
+        id: { type: "string" },
+        status: { type: "string" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  };
+}
+
 export const TOOLS: Record<ToolName, ToolDef> = {  read: {
     name: "read",
     spec: readSpec(),
@@ -176,6 +195,13 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
   run_in_background: runInBackgroundTool,
   task_output: taskOutputTool,
   task_stop: taskStopTool,
+  todo: {
+    name: "todo",
+    spec: todoSpec(),
+    timeoutMs: 10000,
+    exec: (ctx, args, _signal) =>
+      isTodoArgs(args) ? todoTool(ctx, args) : Promise.resolve({ ok: false, output: "todo: bad args" } as ToolResult),
+  },
 };
 
 /**
@@ -203,5 +229,6 @@ export function toolSpecs(depth = 0): ToolSpec[] {
     TOOLS.run_in_background.spec,
     TOOLS.task_output.spec,
     TOOLS.task_stop.spec,
+    TOOLS.todo.spec,
   ];
 }
