@@ -10,6 +10,7 @@ import { clearModelCatalogCache, createServeServer, createShutdown, IpRateLimite
 import type { ServeOptions } from "./serve.js";
 import { PROVIDERS, PROVIDER_IDS } from "./provider.js";
 import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
+import { enableEntries, loadAllowedEntries, saveAllowedEntries } from "./model-allowlist.js";
 import { resolveKey } from "./auth.js";
 import { estimateCost, isAutoEligible } from "./router.js";
 
@@ -18,6 +19,20 @@ for (const p of PROVIDER_IDS) {
   delete process.env[`${p.toUpperCase()}_API_KEY`];
 }
 process.env.CODEWHIP_CONFIG_DIR = TEST_CONFIG_DIR;
+
+// Deny-by-default gate: most tests below route across the registry, so seed
+// the exact combos they exercise — every builtin's default model, plus the
+// specials. The empty-allowlist behavior has its own describe that points
+// CODEWHIP_CONFIG_DIR at a throwaway dir.
+saveAllowedEntries([
+  ...PROVIDER_IDS.map((p) => `${p}:${PROVIDERS[p].defaultModel}`),
+  "llm7:gpt-4o-mini",
+  "llm7:m",
+  "kilo:some-model",
+  "kilo:cohere/north-mini-code:free",
+  "pollinations:m-alpha",
+  "pollinations:m-beta",
+]);
 
 /** OpenAI-shaped non-streaming reply, as the upstream provider would send it. */
 function openAiReply(content: string | null, toolCalls?: unknown[]): Response {
@@ -788,13 +803,14 @@ describe("IpRateLimiter (fixed window, 30 req / 60s per IP)", () => {
 });
 
 describe("serve /v1/models live catalog", () => {
-  /** A fetch stub that answers models listings but otherwise chat-replies. */
+  /** A fetch stub that answers models listings but otherwise chat-replies.
+   *  m-omega is live-but-never-enabled: it must not appear in /v1/models. */
   function catalogAwareFetch(upstream: Array<{ url: string; body?: string }>): void {
     globalThis.fetch = ((url: string, init?: { body?: string }) => {
       upstream.push({ url, body: init?.body ?? "" });
       if (url.endsWith("/models") || url.endsWith("/models/")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ object: "list", data: [{ id: "m-alpha" }, { id: "m-beta" }] }), {
+          new Response(JSON.stringify({ object: "list", data: [{ id: "m-alpha" }, { id: "m-beta" }, { id: "m-omega" }] }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
@@ -804,7 +820,7 @@ describe("serve /v1/models live catalog", () => {
     }) as unknown as typeof fetch;
   }
 
-  it("expands keyed providers into <provider>:<model> rows, defaults for the rest", async () => {
+  it("lists exactly the enabled ids — live catalogs never expand access", async () => {
     clearModelCatalogCache();
     const h = await harness({}, () => openAiReply("ok"));
     try {
@@ -812,19 +828,22 @@ describe("serve /v1/models live catalog", () => {
       const res = await h.client(`${h.base}/v1/models`);
       strictEqual(res.status, 200);
       const body = (await res.json()) as { data: Array<{ id: string }> };
-      const ids = body.data.map((m) => m.id);
-      // pollinations resolves an anonymous key -> its catalog expands.
-      ok(ids.includes("pollinations:m-alpha"), "expanded row missing");
-      ok(ids.includes("pollinations:m-beta"), "expanded row missing");
-      // nvidia has no key in tests -> it keeps its default-model row.
-      ok(ids.includes(`nvidia:${PROVIDERS.nvidia.defaultModel}`), "fallback row missing");
+      const ids = new Set(body.data.map((m) => m.id));
+      const allowed = new Set(loadAllowedEntries());
+      // Every emitted row is an enabled entry…
+      for (const id of ids) ok(allowed.has(id), `non-enabled row emitted: ${id}`);
+      // …and every enabled row appears even when no probe listed it
+      // (nvidia is keyless here — its probe cannot succeed).
+      ok(ids.has(`nvidia:${PROVIDERS.nvidia.defaultModel}`), "enabled keyless-provider row missing");
+      // A live model that was never enabled must not sneak in.
+      ok(!ids.has("pollinations:m-omega"), "un-enabled live row leaked");
     } finally {
       await h.close();
       clearModelCatalogCache();
     }
   });
 
-  it("--ping-models filters to providers whose listModels probe succeeded", async () => {
+  it("--ping-models narrows the enabled rows to ids the live probe confirmed", async () => {
     clearModelCatalogCache();
     const h = await harness({ pingModels: true }, () => openAiReply("ok"));
     try {
@@ -833,7 +852,9 @@ describe("serve /v1/models live catalog", () => {
       strictEqual(res.status, 200);
       const body = (await res.json()) as { data: Array<{ id: string }> };
       const ids = body.data.map((m) => m.id);
-      ok(ids.includes("pollinations:m-alpha"), "live provider's catalog missing");
+      ok(ids.includes("pollinations:m-alpha"), "enabled + live row missing");
+      // Enabled, but the stubbed catalog says the model does not exist.
+      ok(!ids.includes("kilo:some-model"), "enabled-but-not-live row must be filtered");
       // A provider we could not probe (no key) is absent, not defaulted.
       ok(!ids.some((id) => id.startsWith("nvidia:")), "unprobed provider should be filtered out");
     } finally {
@@ -844,7 +865,7 @@ describe("serve /v1/models live catalog", () => {
 
   it("?refresh=1 bypasses the 60s cache and rebuilds the sweep", async () => {
     clearModelCatalogCache();
-    const h = await harness({}, () => openAiReply("ok"));
+    const h = await harness({ pingModels: true }, () => openAiReply("ok"));
     try {
       // First sweep: the stub answers with m-alpha/m-beta.
       let catalog = [{ id: "m-alpha" }, { id: "m-beta" }];
@@ -861,20 +882,272 @@ describe("serve /v1/models live catalog", () => {
       }) as unknown as typeof fetch;
 
       const first = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
-      ok(first.data.some((m) => m.id === "pollinations:m-alpha"), "first sweep should expand");
+      ok(first.data.some((m) => m.id === "pollinations:m-alpha"), "first sweep should keep the live-confirmed row");
 
       // Upstream catalog changes; a cached request must still serve the old
-      // rows, while ?refresh=1 must re-sweep and pick the change up.
+      // probe rows, while ?refresh=1 must re-sweep and pick the change up.
+      // m-gamma is not enabled, so after refresh pollinations lists nothing.
       catalog = [{ id: "m-gamma" }];
       const cached = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: Array<{ id: string }> };
       ok(cached.data.some((m) => m.id === "pollinations:m-alpha"), "cached sweep must not re-fetch");
 
       const refreshed = (await (await h.client(`${h.base}/v1/models?refresh=1`)).json()) as { data: Array<{ id: string }> };
-      ok(refreshed.data.some((m) => m.id === "pollinations:m-gamma"), "?refresh=1 must re-sweep");
       ok(!refreshed.data.some((m) => m.id === "pollinations:m-alpha"), "stale row should be gone after refresh");
     } finally {
       await h.close();
       clearModelCatalogCache();
     }
+  });
+});
+
+describe("serve deny-by-default allowlist", () => {
+  /** Empty-allowlist behavior needs a config dir with no allowed-models.json. */
+  async function withEmptyAllowlist<T>(fn: () => Promise<T>): Promise<T> {
+    const tmp = await mkdtemp(join(os.tmpdir(), "cw-serve-allow-"));
+    const prev = process.env["CODEWHIP_CONFIG_DIR"];
+    process.env["CODEWHIP_CONFIG_DIR"] = tmp;
+    clearModelCatalogCache();
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env["CODEWHIP_CONFIG_DIR"];
+      else process.env["CODEWHIP_CONFIG_DIR"] = prev;
+      clearModelCatalogCache();
+    }
+  }
+
+  it("403s every chat request while the allowlist is empty; /v1/models is empty", async () => {
+    await withEmptyAllowlist(async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const res = await post(h.base, { model: "kilo:cohere/north-mini-code:free", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 403);
+        const body = (await res.json()) as { error: { code: string; message: string } };
+        strictEqual(body.error.code, "model_not_enabled");
+        ok(body.error.message.includes("codewhip provider enable"), body.error.message);
+        ok(body.error.message.includes("/auth"), "with --auth-ui the message must name the UI");
+        const models = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: unknown[] };
+        strictEqual(models.data.length, 0);
+        // Denial happens before any key resolution or upstream call.
+        strictEqual(h.upstream.length, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("the 403 names the CLI when the auth UI is off", async () => {
+    await withEmptyAllowlist(async () => {
+      const h = await harness({ authUi: false }, () => openAiReply("ok"));
+      try {
+        const res = await post(h.base, { model: "llm7:default", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 403);
+        const body = (await res.json()) as { error: { message: string } };
+        ok(body.error.message.includes("--auth-ui"), body.error.message);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("auto with an empty allowlist resolves to an error that names the remedy", async () => {
+    await withEmptyAllowlist(async () => {
+      const h = await harness({ provider: "auto", model: "auto" }, () => openAiReply("ok"));
+      try {
+        const res = await post(h.base, { model: "auto", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 400);
+        const body = (await res.json()) as { error: { message: string } };
+        ok(body.error.message.includes("provider enable"), body.error.message);
+        strictEqual(h.upstream.length, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("an enabled exact id proxies; its provider's other models stay 403", async () => {
+    await withEmptyAllowlist(async () => {
+      enableEntries(["kilo:cohere/north-mini-code:free"]);
+      const h = await harness({}, () => openAiReply("ok"));
+      try {
+        const ok1 = await post(h.base, { model: "kilo:cohere/north-mini-code:free", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(ok1.status, 200);
+        strictEqual(h.upstream.length, 1);
+        // Same provider, different model — no wildcard, so still refused.
+        const denied = await post(h.base, { model: "kilo:some-model", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(denied.status, 403);
+        strictEqual(h.upstream.length, 1);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("allowlist and capability blocklist compose: consent does not un-block a 410", async () => {
+    await withEmptyAllowlist(async () => {
+      enableEntries(["kilo:retired-model"]);
+      const h = await harness({}, () => new Response("gone", { status: 410 }));
+      try {
+        const first = await post(h.base, { model: "kilo:retired-model", messages: [{ role: "user", content: "hi" }] });
+        ok(first.status >= 400, `first must fail, got ${first.status}`);
+        // The 410 was recorded; the second request must refuse WITHOUT
+        // touching upstream (blocked by the wire-level gate).
+        const second = await post(h.base, { model: "kilo:retired-model", messages: [{ role: "user", content: "hi" }] });
+        ok(second.status >= 400, `second must fail, got ${second.status}`);
+        const body = (await second.json()) as { error: { message: string } };
+        ok(/blocked|retired/i.test(body.error.message), body.error.message);
+        strictEqual(h.upstream.length, 1);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+});
+
+describe("auth UI allowlist API", () => {
+  /** These tests write allowed-models.json, so they get a throwaway dir. */
+  async function withSeededAllowlist<T>(seed: string[], fn: () => Promise<T>): Promise<T> {
+    const tmp = await mkdtemp(join(os.tmpdir(), "cw-serve-ui-"));
+    const prev = process.env["CODEWHIP_CONFIG_DIR"];
+    process.env["CODEWHIP_CONFIG_DIR"] = tmp;
+    saveAllowedEntries(seed);
+    clearModelCatalogCache();
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env["CODEWHIP_CONFIG_DIR"];
+      else process.env["CODEWHIP_CONFIG_DIR"] = prev;
+      clearModelCatalogCache();
+    }
+  }
+
+  type ModelsRow = { id: string; isDefault: boolean; live: boolean; enabled: boolean };
+  type ModelsBody = { id: string; models: ModelsRow[]; listingError?: string };
+
+  it("GET /auth/_models/<id> merges live catalog ∪ enabled ∪ default; 404 unknown", async () => {
+    await withSeededAllowlist(["llm7:default", "llm7:enabled-only", "kilo:some-model"], async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        // Catalog stub: one live model the allowlist has never seen.
+        const realStub = globalThis.fetch;
+        globalThis.fetch = ((url: string, init?: { body?: string }) => {
+          if (url.endsWith("/models") || url.endsWith("/models/")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ object: "list", data: [{ id: "m-live" }] }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              })
+            );
+          }
+          return realStub(url, init);
+        }) as unknown as typeof fetch;
+        const body = (await (await h.client(`${h.base}/auth/_models/llm7`)).json()) as ModelsBody;
+        strictEqual(body.id, "llm7");
+        const byId = new Map(body.models.map((m) => [m.id, m]));
+        ok(byId.get("default")?.isDefault, "default model must be flagged");
+        ok(byId.get("default")?.enabled, "seeded default must read enabled");
+        strictEqual(byId.get("enabled-only")?.enabled, true);
+        strictEqual(byId.get("enabled-only")?.live, false);
+        strictEqual(byId.get("m-live")?.live, true);
+        strictEqual(byId.get("m-live")?.enabled, false, "live-but-never-enabled must read disabled");
+        const missing = await h.client(`${h.base}/auth/_models/ghost-provider`);
+        strictEqual(missing.status, 404);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("PUT allowlist replaces one provider's exact ids and takes effect immediately", async () => {
+    await withSeededAllowlist(["llm7:default", "llm7:enabled-only", "kilo:some-model"], async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const put = await h.client(`${h.base}/auth/llm7/allowlist`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ models: ["default", "fresh"] }),
+        });
+        strictEqual(put.status, 200);
+        const body = (await put.json()) as { id: string; allowed: string[] };
+        deepStrictEqual(body.allowed, ["llm7:default", "llm7:fresh"]);
+        const entries = loadAllowedEntries();
+        ok(entries.includes("llm7:fresh"), "write must land in allowed-models.json");
+        ok(!entries.includes("llm7:enabled-only"), "replaced entry must be gone");
+        ok(entries.includes("kilo:some-model"), "other providers must be untouched");
+        // Immediate effect on chat, no restart, no cache wait.
+        const ok1 = await post(h.base, { model: "llm7:fresh", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(ok1.status, 200);
+        const gone = await post(h.base, { model: "llm7:enabled-only", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(gone.status, 403);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it('{"all":true} writes the live catalog\'s exact ids; {"all":false} clears', async () => {
+    await withSeededAllowlist(["llm7:stale"], async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const realStub = globalThis.fetch;
+        globalThis.fetch = ((url: string, init?: { body?: string }) => {
+          if (url.endsWith("/models") || url.endsWith("/models/")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ object: "list", data: [{ id: "m-x" }, { id: "m-y" }] }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              })
+            );
+          }
+          return realStub(url, init);
+        }) as unknown as typeof fetch;
+        const all = (await (await h.client(`${h.base}/auth/llm7/allowlist`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ all: true }),
+        })).json()) as { allowed: string[] };
+        deepStrictEqual(all.allowed, ["llm7:m-x", "llm7:m-y"]);
+        // No wildcard was ever written — the file holds exact ids only.
+        for (const e of loadAllowedEntries()) ok(!e.endsWith(":*"), `wildcard leaked: ${e}`);
+        const none = (await (await h.client(`${h.base}/auth/llm7/allowlist`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ all: false }),
+        })).json()) as { allowed: string[] };
+        deepStrictEqual(none.allowed, []);
+        strictEqual(loadAllowedEntries().length, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("rejects malformed bodies and the retired PATCH toggle", async () => {
+    await withSeededAllowlist(["llm7:default"], async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const bad = await h.client(`${h.base}/auth/llm7/allowlist`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ models: [42] }),
+        });
+        strictEqual(bad.status, 400);
+        strictEqual(((await bad.json()) as { error: { code: string } }).error.code, "invalid_allowlist");
+        const wildcard = await h.client(`${h.base}/auth/llm7/allowlist`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ models: ["*"] }),
+        });
+        strictEqual(wildcard.status, 400, "wildcards must never be writable");
+        const patched = await h.client(`${h.base}/auth/llm7`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ disabled: true }),
+        });
+        strictEqual(patched.status, 405, "the provider-level toggle is retired");
+      } finally {
+        await h.close();
+      }
+    });
   });
 });

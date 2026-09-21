@@ -120,11 +120,41 @@ The registry does NOT:
 - Endorse any provider
 - Guarantee uptime or availability
 - Filter providers by quality, privacy policy, or ToS
-- Rate-limit or gate access (that's the user's key's problem)
+- Gate what you may call (the registry is a directory; the separate
+  model allowlist (below) is the consent layer that does)
 - Collect any usage data about which providers users choose
 
 The registry is a directory. It is honest about what it doesn't
 filter.
+
+## Gates: consent, capability, eligibility
+
+Three independent gates stand between a request and an upstream call,
+and all three must pass. They are deliberately separate so each can
+change without touching the others:
+
+1. **Consent — the model allowlist** (`src/model-allowlist.ts`,
+   `allowed-models.json`). Deny by default: the file is a sorted set
+   of *exact* `provider:model` ids and an absent or corrupt file means
+   nothing is enabled. There are no wildcards — "enable all of a
+   provider" writes the current live ids, so a catalog change can
+   never silently re-open access. Enforced at the call sites (serve
+   chat + auto-pick + /v1/models listing; CLI run pre-flight,
+   `--models` rotation, `--free` chain, `--failover`, and the
+   `routeFor`/`pickRandomHealthy` auto routes). Loopback locals are
+   exempt in v1: registering one is the consent.
+2. **Capability — the blocklist** (`src/provider-blocklist.ts`).
+   An upstream HTTP 410 marks a model permanently dead; it is refused
+   even when enabled. Maintainer-unblock only.
+3. **Eligibility — health & billing** (`router.ts`). Auto paths never
+   spend a paid key (`isAutoEligible`) and skip recently-failed
+   combos (TTL deactivation, explore/exploit). A user key on an
+   untracked route stays out of auto without
+   `CODEWHIP_AUTO_INCLUDE_UNTRACKED=1`.
+
+The older provider-level disable (`disabled-providers.json`) is
+dormant — hidden from listings, not enforced; the per-model allowlist
+replaced it.
 
 ## Security considerations for maintainers
 

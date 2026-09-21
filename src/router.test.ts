@@ -3,11 +3,22 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, pickExplorePool, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
+import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, pickExplorePool, pickRandomHealthy, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
 import type { ModelHealth } from "./provider-stats.js";
 import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
 import { PROVIDERS } from "./provider.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
+import { saveAllowedEntries } from "./model-allowlist.js";
+
+/**
+ * Pinned config dir for the whole file: the allowlist is deny-by-default and
+ * `routeFor` now consults it, so without this these assertions would pass or
+ * fail depending on the developer machine's real ~/.codewhip. Seed exactly the
+ * two ids the hardcoded auto routes target.
+ */
+const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-cfg-"));
+process.env[CONFIG_DIR_ENV] = cfgDir;
+saveAllowedEntries([`nvidia:${PROVIDERS.nvidia.defaultModel}`, `kilo:${PROVIDERS.kilo.defaultModel}`]);
 
 /**
  * Pinned empty config dir. `private` now consults registered local providers,
@@ -340,5 +351,53 @@ describe("auto recovery (explore/exploit)", () => {
     ok(explore.exploring && explore.pool.includes("b"));
     const forced = pickExplorePool([], gated, () => 0.99);
     ok(forced.exploring && forced.pool.includes("b"));
+  });
+});
+
+describe("allowlist gate (deny by default)", () => {
+  const SEED = [`nvidia:${PROVIDERS.nvidia.defaultModel}`, `kilo:${PROVIDERS.kilo.defaultModel}`];
+  it("routeFor implement/polish refuse unenabled targets and name the remedy", () => {
+    saveAllowedEntries([]);
+    try {
+      const impl = routeFor("implement");
+      ok("error" in impl && (impl as { error: string }).error.includes(`codewhip provider enable nvidia:${PROVIDERS.nvidia.defaultModel}`));
+      const pol = routeFor("polish");
+      ok("error" in pol && (pol as { error: string }).error.includes(`codewhip provider enable kilo:${PROVIDERS.kilo.defaultModel}`));
+    } finally {
+      saveAllowedEntries(SEED);
+    }
+  });
+  it("pickRandomHealthy returns the enable-remedy error when nothing is enabled", () => {
+    saveAllowedEntries([]);
+    try {
+      const r = pickRandomHealthy(() => 0.5);
+      ok("error" in r && (r as { error: string }).error.includes("codewhip provider enable"));
+    } finally {
+      saveAllowedEntries(SEED);
+    }
+  });
+  it("pickRandomHealthy only ever picks exact enabled provider:model combos", () => {
+    // Enable exactly one keyless anonymous default; every other provider must
+    // be skipped no matter its health or key state.
+    const llm7 = getProviderConfig("llm7");
+    ok(llm7 !== null);
+    const prevEnv = llm7 === null ? undefined : process.env[llm7.envVar];
+    if (llm7 !== null) delete process.env[llm7.envVar];
+    saveAllowedEntries([`llm7:${PROVIDERS.llm7.defaultModel}`]);
+    try {
+      const r = pickRandomHealthy(() => 0.5);
+      ok(!("error" in r));
+      if (!("error" in r)) {
+        strictEqual(r.provider, "llm7");
+        strictEqual(r.model, PROVIDERS.llm7.defaultModel);
+      }
+    } finally {
+      if (prevEnv === undefined) {
+        if (llm7 !== null) delete process.env[llm7.envVar];
+      } else if (llm7 !== null) {
+        process.env[llm7.envVar] = prevEnv;
+      }
+      saveAllowedEntries(SEED);
+    }
   });
 });

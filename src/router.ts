@@ -3,6 +3,7 @@ import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocal
 import { resolveKey } from "./auth.js";
 import { readProviderCalls, summarizeCalls, type ModelHealth } from "./provider-stats.js";
 import { isBlocked } from "./provider-blocklist.js";
+import { isModelAllowed } from "./model-allowlist.js";
 import type { OutcomeRecord } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
@@ -182,6 +183,7 @@ export function pickRandomHealthy(rng: () => number = Math.random): Route | { er
   for (const cfg of configs) {
     const provider = cfg.id as ProviderId;
     const model = cfg.defaultModel;
+    if (!isModelAllowed(provider, model)) continue; // consent gate: exact ids only
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
     if (isRecentlyFailed(provider, model)) continue;
     const ph = summary.providers.find((p) => p.provider === provider);
@@ -190,7 +192,7 @@ export function pickRandomHealthy(rng: () => number = Math.random): Route | { er
   }
   const { pool, exploring } = pickExplorePool(pass, gatedOut, rng);
   if (pool.length === 0) {
-    return { error: "auto random: no healthy provider/model combos available — pass --provider to override" };
+    return { error: "auto random: no enabled, healthy provider/model combos available — enable one with: codewhip provider enable <provider>:<model> (see: codewhip provider allowed), or pass --provider to override" };
   }
   const pick = pool[Math.floor(rng() * pool.length)];
   return {
@@ -210,6 +212,9 @@ export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: s
   if (taskClass === "implement") {
     const provider = "nvidia";
     const model = PROVIDERS.nvidia.defaultModel;
+    if (!isModelAllowed(provider, model)) {
+      return { error: `auto route for 'implement' targets ${provider}:${model}, which is not enabled — run: codewhip provider enable ${provider}:${model}, or pass --provider to override` };
+    }
     if (!healthOk(provider, model)) {
       return { error: `auto route for 'implement' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
     }
@@ -221,8 +226,8 @@ export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: s
     // so polishGate can actually pass. Keyless anonymous, never bills.
     const provider = "kilo";
     const model = PROVIDERS.kilo.defaultModel;
-    if (!healthOk(provider, model)) {
-      return { error: `auto route for 'polish' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
+    if (!isModelAllowed(provider, model)) {
+      return { error: `auto route for 'polish' targets ${provider}:${model}, which is not enabled — run: codewhip provider enable ${provider}:${model}, or pass --provider to override` };
     }
     return { provider, model, note: "polish → cheapest inference (priced $0 free tier)" };
   }
@@ -233,6 +238,10 @@ export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: s
  * The `private` destination. Exactly one registered loopback provider is
  * unambiguous; several is not, and guessing which of them should see your
  * secrets is not a decision this classifier gets to make — so it asks.
+ *
+ * Loopback targets are exempt from the model allowlist by v1 decision: the
+ * registration itself (provider add) is the consent, nothing leaves the
+ * machine, and nothing bills.
  */
 function localRoute(dir?: string): Route | { error: string } {
   const locals = listLocalProviders(dir);
