@@ -234,3 +234,15 @@ P1 — trust that spreads:
   escape suite: 0 escapes / 0 autoimmune (claim P3), regression-pinned.
   Protocol, results and arXiv checklist: `docs/moat/18-verdict-privilege-
   experiments.md`.
+- 2026-09-21 — **QoL parity batch ratified (todo tool, custom slash
+  commands, hooks).** Not a marketplace (kill-list 3 holds): hooks are
+  config, commands are prompt expansion, todo is harness state. Six
+  rulings — infra-failure hooks warn+proceed (only an explicit assertion
+  denies); hooks stay downstream of redaction; Stop is observe-only;
+  frontmatter parser shared with agents; one-shot command expansion is
+  exact-match-only while the REPL errors on unknown `/name`; audit actor
+  union stays frozen (`hook:pretool` rides actor `policy`, outcome gains
+  additive `hooks` counters). Threat model stated: hook commands run
+  outside the jail by design; containment is the self-protected config
+  paths + load-once-at-run-start. Full reasoning:
+  `docs/moat/19-qol-parity.md`.
