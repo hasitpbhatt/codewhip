@@ -384,6 +384,14 @@ export const PROVIDERS: Record<BuiltinProviderId, ProviderConfig> = {
     // sends literally "public" as the bearer plus its identity headers; the
     // server presence-checks the session header (dummy value passes) and
     // enforces a small per-IP anonymous quota (FreeUsageLimitError on 429).
+    // TIER CLOSED 2026-09-20: direct probes now return FreeTierError
+    // "OpenCode's free tier can only be used from within OpenCode" for
+    // every combination — bearer "public" or none, and the full client
+    // header set the server reads (x-opencode-session/-request/-client/
+    // -project, client id "opencode-cli"). The gate moved from the
+    // presence-check above to attestation beyond headers (thrown by their
+    // internal Console backend; same error hits LiteLLM users). Keyless
+    // zen is dead for third-party proxies until a real key is set.
     anonymousKey: "public",
     headers: {
       "x-opencode-session": "ses-codewhip-free",
