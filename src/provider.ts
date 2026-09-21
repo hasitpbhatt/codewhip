@@ -504,7 +504,9 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
         JSON.stringify({
           model,
           messages: wireMessages,
-          tools: wireTools,
+          // Some strict gateways (empero) 400 on an empty tools array; the
+          // OpenAI schema treats the field as optional, so omit it when empty.
+          ...(wireTools.length > 0 ? { tools: wireTools } : {}),
           stream: useStream,
           ...(useStream ? { stream_options: { include_usage: true } } : {}),
         });
