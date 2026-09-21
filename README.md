@@ -559,6 +559,14 @@ errors never trigger either: retrying them only repeats the failure. `--failover
 
 ### TUI slash commands
 
+`codewhip run --tui` opts into the terminal UI. The rich renderer needs the
+optional peer `@opentui/core` (`npm i @opentui/core`) on a runtime its native
+core supports (Bun >=1.3 or Node >=26.4; win32/linux/darwin x64+arm64
+prebuilds). Headless stays the default, and every other environment — any OS
+without a prebuild, Node < 26.4, no install — falls back automatically to a
+readline-safe view that still shows the approval card, transcript tail and
+footer. The TUI never breaks a run; `--no-tui` forces 80-col output.
+
 Inside `--tui`, three commands steer the live run without restarting it:
 
 - `/model <provider>[:<model>]` — switch provider/model at the next turn
