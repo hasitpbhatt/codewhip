@@ -633,48 +633,94 @@ function authStatus(): Array<Record<string, unknown>> {
 }
 
 /**
- * Shared UI foundation for the serve surfaces (playground + auth).
+ * Shared UI foundation for the serve surfaces (playground + stats + auth).
  * One token sheet, one type scale, one header — the two pages are one product.
- * Accent is near-black, not a brand color: the content is the color.
+ * The language is the llm-api-validator look: GitHub-dark panels, hairline
+ * borders, blue as the only accent, mono for ids. It is reproduced by hand
+ * here — no Tailwind, no CDN, no network fonts. Dark is the default; the
+ * header toggle flips `data-theme=light` and remembers it.
  * Built once and reused across every page render.
  */
 let uiCssCache: string | null = null;
 function uiCss(): string {
   if (uiCssCache === null) {
-    uiCssCache = `:root{--bg:#f7f7f5;--surface:#fff;--fg:#1a1a1a;--muted:#6e6e6a;--line:#e3e3df;--accent:#1a1a1a;--accent-fg:#fff;--danger:#b30000;--ok:#0a7d32;--r:6px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
-@media (prefers-color-scheme:dark){:root{--bg:#111214;--surface:#191b1e;--fg:#e8e8e6;--muted:#9a9a95;--line:#2a2d31;--accent:#e8e8e6;--accent-fg:#111214;--danger:#ff8080;--ok:#4cc38a}}
+    uiCssCache = `:root{color-scheme:dark;--bg:#0d1117;--surface:#161b22;--panel2:#1c2330;--fg:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--accent-fg:#0d1117;--danger:#f85149;--ok:#3fb950;--warn:#d29922;--r:6px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
+html[data-theme=light]{color-scheme:light;--bg:#f6f8fa;--surface:#ffffff;--panel2:#eaeef2;--fg:#1f2328;--muted:#656d76;--line:#d0d7de;--accent:#0969da;--accent-fg:#ffffff;--danger:#cf222e;--ok:#1a7f37;--warn:#9a6700}
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
-a{color:inherit}
+body{margin:0;font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+a{color:var(--accent)}
 h1{margin:0;font-size:16px;font-weight:600}
 h2{margin:0;font-size:13px;font-weight:600}
-.kicker{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:var(--s4);padding:var(--s3) var(--s5);background:var(--surface);border-bottom:1px solid var(--line)}
-header .wordmark{font-weight:700}
-header nav{display:flex;gap:var(--s3);font-size:13px}
-header nav a{text-decoration:none;color:var(--muted)}
-header nav a[aria-current=page]{color:var(--fg);font-weight:600}
+.kicker{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:var(--s3);padding:var(--s2) var(--s4);background:var(--surface);border-bottom:1px solid var(--line);min-height:49px}
+header .wordmark{font-weight:700;display:inline-flex;align-items:center;gap:8px}
+header .wordmark .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);display:inline-block}
+header nav{display:flex;gap:var(--s1)}
+header nav a{text-decoration:none;color:var(--muted);font-size:12px;padding:4px 12px;border:1px solid transparent;border-radius:999px;white-space:nowrap}
+header nav a:hover{color:var(--fg);border-color:var(--line)}
+header nav a[aria-current=page]{color:var(--fg);background:var(--panel2);border-color:var(--line)}
+.pill{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 10px;white-space:nowrap}
 header .note{margin-left:auto;font-size:12px;color:var(--muted)}
 main{max-width:1100px;margin:0 auto;padding:var(--s5)}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:var(--s4)}
-button{font:inherit;cursor:pointer;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r);background:var(--accent);color:var(--accent-fg);font-weight:600}
-button.ghost{background:transparent;color:var(--fg)}
-button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}
+button{font:inherit;font-size:13px;cursor:pointer;padding:6px 12px;border:1px solid var(--accent);border-radius:var(--r);background:var(--accent);color:var(--accent-fg);font-weight:600}
+button.ghost{background:transparent;border-color:var(--line);color:var(--fg);font-weight:400}
+button.ghost:hover:not(:disabled){background:var(--panel2);border-color:var(--muted)}
+button.danger{background:transparent;border-color:var(--danger);color:var(--danger);font-weight:400}
 button:disabled{opacity:.5;cursor:not-allowed}
-input,select,textarea{font:inherit;width:100%;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r);background:var(--bg);color:var(--fg)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select,textarea{font:inherit;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg);color:var(--fg)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 textarea{min-height:96px;resize:vertical}
 label{display:block;font-weight:600;margin:var(--s2) 0 var(--s1)}
-code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px var(--s1)}
-.small{font-size:12px;color:var(--muted)}`;
+code{font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 4px}
+pre{font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+.small{font-size:12px;color:var(--muted)}
+[hidden]{display:none!important}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.banner{border:1px solid var(--warn);border-radius:var(--r);padding:var(--s2) var(--s3);margin-bottom:var(--s3);font-size:13px;display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.mono{font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}`;
   }
   return uiCssCache;
 }
 
-/** Shared header: wordmark, nav with current-page marker, honesty note. */
+/**
+ * Per-page boot script: applies the remembered theme before first paint of
+ * the toggle, wires ◐ (persisted to localStorage), and fills the header
+ * status pill from /v1/models. Shared verbatim by all three pages.
+ */
+function uiBoot(): string {
+  return `<script>
+(function(){
+  var d=document.documentElement;
+  try{
+    var t=localStorage.getItem('cw.theme');
+    if(!t)t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
+    if(t==='light')d.dataset.theme='light';
+  }catch(e){}
+  var b=document.getElementById('theme');
+  if(b)b.addEventListener('click',function(){
+    var n=d.dataset.theme==='light'?'dark':'light';
+    if(n==='light')d.dataset.theme='light';else d.removeAttribute('data-theme');
+    try{localStorage.setItem('cw.theme',n);}catch(e){}
+  });
+  var p=document.getElementById('pill');
+  if(p)fetch('/v1/models').then(function(r){
+    if(!r.ok){p.style.display='none';return null;}
+    return r.json();
+  }).then(function(j){
+    if(j)p.textContent=(j.data||[]).length+' models enabled';
+  }).catch(function(){p.style.display='none';});
+})();
+</script>`;
+}
+
+/** Shared header: dot wordmark, pill nav, live status pill, honesty note,
+ *  and the ◐ theme toggle (see `uiBoot`). */
 function uiHeader(title: string, active: "playground" | "stats" | "auth", note: string): string {
   const mark = (page: "playground" | "stats" | "auth", label: string): string =>
     `<a href="/${page}"${page === active ? ' aria-current="page"' : ""}>${label}</a>`;
-  return `<header><span class="wordmark">codewhip</span><nav>${mark("playground", "playground")}${mark("stats", "stats")}${mark("auth", "keys & providers")}</nav><h1 style="position:absolute;left:-9999px">${title}</h1><span class="note">${note}</span></header>`;
+  return `<header><span class="wordmark"><span class="dot"></span>codewhip</span><nav>${mark("playground", "playground")}${mark("stats", "stats")}${mark("auth", "providers & models")}</nav><span class="pill" id="pill">loading…</span><h1 style="position:absolute;left:-9999px">${title}</h1><span class="note">${note}</span><button id="theme" class="ghost" title="switch light/dark theme" style="padding:4px 10px">◐</button></header>`;
 }
 
 function authHtml(): string {
@@ -684,30 +730,27 @@ function authHtml(): string {
     const id = escapeHtml(r.id);
     const endpoint = r.custom === true ? `<div class="small">${escapeHtml(r.baseUrl)}</div>` : "";
     const keyUrl = String(r.keyUrl).length > 0 ? `<a href="${escapeHtml(r.keyUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.keyUrl)}</a>` : `<span class="small">(none)</span>`;
-    const keyState = r.hasKey ? `<span class="small" style="color:var(--ok)">key set (${escapeHtml(r.source)})</span>` : `<span class="small">no key</span>`;
+    const keyState = r.hasKey ? `<span class="keystat small" style="color:var(--ok)">key set (${escapeHtml(r.source)})</span>` : `<span class="keystat small">no key</span>`;
     const search = escapeHtml(`${r.id} ${r.envVar} ${r.baseUrl ?? ""}`).toLowerCase();
     const n = typeof r.enabledCount === "number" ? r.enabledCount : 0;
-    const badge = n > 0
-      ? `<span class="badge ok" data-badge>${n} model${n === 1 ? "" : "s"} enabled</span>`
-      : `<span class="badge" data-badge>none enabled</span>`;
+    const badge = `<span class="badge${n > 0 ? " ok" : ""}" data-badge title="these run in the playground">Allowed here: ${n}</span>`;
     return `<li class="card prov" id="prov-${id}" data-search="${search}" data-id="${id}" style="list-style:none;margin-bottom:var(--s3)">
 <div style="display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;align-items:flex-start">
 <div><strong>${id}</strong> ${badge}${r.custom === true ? ` <span class="small">custom</span>` : ""}${endpoint}</div>
 <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap">
 ${keyState}
-<button data-act="models" class="ghost">Manage models</button>
-<button data-act="login">Set key</button>
+<button data-act="models" class="ghost" title="Choose models the playground may run" aria-expanded="false" aria-controls="models-${id}">Choose models</button>
+<button data-act="login" aria-expanded="false" aria-controls="keyrow-${id}">Set key</button>
 ${r.hasKey === true ? `<button data-act="logout" class="ghost">Remove key</button>` : ``}
 ${r.custom === true ? `<button data-act="remove" class="danger">Remove provider</button>` : ``}
 </div>
 </div>
-<div class="keyrow" hidden>
-<input type="password" class="keyinput" placeholder="paste ${escapeHtml(r.envVar)} value — stored 0600, never logged" autocomplete="new-password">
-<button data-act="reveal" class="ghost">show</button>
+<div class="keyrow" id="keyrow-${id}" hidden>
+<div class="keywrap"><input type="password" class="keyinput" aria-label="API key for ${id} (${escapeHtml(r.envVar)})" placeholder="paste ${escapeHtml(r.envVar)} value — stored 0600, never logged" autocomplete="new-password"><button data-act="reveal" class="ghost" title="show / hide the key while typing">show</button></div>
 <button data-act="save">Save key</button>
-<span class="msg small"></span>
+<span class="msg small" role="status"></span>
 </div>
-<div class="modelrow" hidden></div>
+<div class="modelrow" id="models-${id}" hidden></div>
 <div class="small" style="display:flex;gap:var(--s5);margin-top:var(--s2);flex-wrap:wrap">
 <span>env <code>${escapeHtml(r.envVar)}</code></span>
 <span>console ${keyUrl}</span>
@@ -723,34 +766,42 @@ ${r.custom === true ? `<button data-act="remove" class="danger">Remove provider<
       : `<section style="margin-bottom:var(--s5)"><h2 class="kicker" style="margin-bottom:var(--s3)">${label} (${rows.length})</h2><ul id="g-${label.replace(/\s/g, "")}" style="padding:0;margin:0">${rows.map(rowHtml).join("")}</ul></section>`;
   return `<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>codewhip auth</title><style>${uiCss()}
 .keyrow{display:flex;gap:var(--s2);margin-top:var(--s3);align-items:center;flex-wrap:wrap}
-[hidden]{display:none!important}
-.keyrow input{flex:1;min-width:200px}
+.keywrap{position:relative;flex:1;min-width:220px}
+.keywrap input{width:100%;padding-right:52px}
+.keywrap button{position:absolute;right:4px;top:50%;transform:translateY(-50%);padding:1px 8px;font-size:11px;font-weight:400;background:transparent;border-color:transparent;color:var(--muted)}
+.keywrap button:hover{color:var(--fg)}
 .msg.ok{color:var(--ok)}
 .msg.bad{color:var(--danger)}
 .badge{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--muted)}
 .badge.ok{color:var(--ok)}
 .modelrow{margin-top:var(--s3);border-top:1px solid var(--line);padding-top:var(--s3)}
-.mlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px var(--s4);max-height:300px;overflow:auto;margin-top:var(--s2)}
-.mrow{font-size:13px;display:flex;gap:var(--s2);align-items:baseline}
+.mlist{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);margin-top:var(--s2)}
+.mghead{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;gap:var(--s3);padding:4px var(--s3);background:var(--surface);border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.mrow{font-size:13px;display:flex;gap:var(--s2);align-items:baseline;padding:2px var(--s3);font-weight:400;margin:0;flex-wrap:wrap}
+.mrow:hover{background:var(--panel2)}
+.mrow label{display:inline-flex;gap:var(--s2);align-items:baseline;margin:0;font-weight:400}
 .mrow input{width:auto;margin:0}
 .mtools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.mnew{flex:1;min-width:180px;margin:0}
 .msmall{color:var(--muted)}
+.msmall.bad{color:var(--danger)}
+.mwarn{color:var(--warn)}
+.mrec{color:var(--warn)}
+.mrow.miss{outline:1px solid var(--danger);border-radius:4px}
+.mdidyou{margin:0 var(--s2)}
+.mdidyou button{padding:0 6px;font-size:11px}
 .mfilter{margin:var(--s2) 0}
 </style></head><body>
 ${uiHeader("codewhip auth — providers & keys", "auth", "this page spends your keys — it stores and removes them")}
-<main>
-<p class="small" style="margin-top:0"><strong>Everything is disabled until you enable it — model by model.</strong> ${status.length} providers · ${totalEnabled} model${totalEnabled === 1 ? "" : "s"} enabled · ${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom. Open <em>Manage models</em> on a provider to tick models, or run <code>codewhip provider enable &lt;provider&gt;:&lt;model&gt;</code>.</p>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s5)">
-<section>
+<main style="max-width:860px">
+<p class="small" style="margin-top:0"><strong>Everything is disabled until you enable it — model by model.</strong> ${status.length} providers · ${totalEnabled} model${totalEnabled === 1 ? "" : "s"} enabled · ${withKey.length} keys set · ${keyless.length} keyless · ${custom.length} custom. Open <em>Choose models</em> on a provider to pick the models the playground may run, or run <code>codewhip provider enable &lt;provider&gt;:&lt;model&gt;</code>.</p>
 <label for="provfilter" class="kicker">Filter providers</label>
 <input id="provfilter" type="search" placeholder="Type an id, env var, or URL…" autocomplete="off" style="margin-bottom:var(--s4)">
 ${group("keys set", withKey)}
 ${group("keyless", keyless)}
 ${group("custom", custom)}
-</section>
-<section>
-<div class="card">
-<h2>Register custom endpoint</h2>
+<details class="card">
+<summary><strong>Register custom endpoint</strong></summary>
 <form id="add" autocomplete="off" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s3);margin-top:var(--s3)">
 <div><label for="f-id">id</label><input id="f-id" name="id" required placeholder="my-gateway"></div>
 <div><label for="f-baseUrl">base URL</label><input id="f-baseUrl" name="baseUrl" required placeholder="https://gateway.example.com"></div>
@@ -770,10 +821,8 @@ ${group("custom", custom)}
 <div class="err small" id="err" style="color:var(--danger)"></div>
 <button type="submit" style="grid-column:1/-1">Register</button>
 </form>
-<p class="small">https:// anywhere, http:// on loopback for local runtimes like Ollama. Ids: lowercase letters, digits, dashes.</p>
-</div>
-</section>
-</div>
+<p class="small" style="margin-bottom:0">https:// anywhere, http:// on loopback for local runtimes like Ollama. Ids: lowercase letters, digits, dashes.</p>
+</details>
 </main>
 <script>
 document.getElementById('provfilter').addEventListener('input',e=>{
@@ -818,22 +867,50 @@ document.addEventListener('click',async e=>{
     const mcard=mb.closest('li.prov'); if(!mcard) return;
     const mid=mcard.dataset.id;
     if(mb.dataset.mact==='all'){
-      for(const i of mcard.querySelectorAll('.mlist input[type=checkbox]')) i.checked=true;
+      const boxes=[...mcard.querySelectorAll('.mlist input[type=checkbox]')];
+      if(!confirm('Enable all '+boxes.length+' listed models of '+mid+'? Every one of them can spend your key.')) return;
+      for(const i of boxes) i.checked=true;
+      saveModels(mcard);
+    }
+    if(mb.dataset.mact==='rec'){
+      const recs=[...mcard.querySelectorAll('.mlist input[type=checkbox][data-rec="1"]')];
+      if(!recs.length){ showSaved(mcard,'⚠ no recommended rows — recommended means $0 and confirmed by the provider live list',true); return; }
+      for(const i of recs) i.checked=true;
       saveModels(mcard);
     }
     if(mb.dataset.mact==='none'){
+      const prev=[...mcard.querySelectorAll('.mlist input[type=checkbox]:checked')].map(i=>i.value);
+      if(!confirm('Disable all '+prev.length+' enabled models of '+mid+'? The playground will 403 until you enable some again.')) return;
       await guarded(mb,'Disabling…',async()=>{
         try{
           const res=await fetch('/auth/'+encodeURIComponent(mid)+'/allowlist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({all:false})});
-          if(!res.ok){ showSaved(mcard,await failBody(res),true); return false; }
+          if(!res.ok){ showSaved(mcard,'⚠ not saved: '+await failBody(res),true); return false; }
           const data=await res.json();
           for(const i of mcard.querySelectorAll('.mlist input[type=checkbox]')) i.checked=false;
           setBadge(mcard,(data.allowed||[]).length);
-          showSaved(mcard,'saved',false);
+          refreshGroupCounts(mcard.querySelector('.modelrow'));
+          showSaved(mcard,savedStamp(),false);
+          offerUndo(mcard,prev);
           return true;
-        }catch(e2){showSaved(mcard,'network error',true); return false;}
+        }catch(e2){showSaved(mcard,'⚠ not saved: network error',true); return false;}
       });
     }
+    if(mb.dataset.mact==='undo'){
+      const ids=mcard._undo; if(!ids || !ids.length) return;
+      clearTimeout(mcard._undoT); offerUndo(mcard,[]);
+      for(const i of mcard.querySelectorAll('.mlist input[type=checkbox]')) i.checked=ids.includes(i.value);
+      saveModels(mcard);
+    }
+    if(mb.dataset.mact==='rm'){
+      const lb=mb.closest('.mrow'); if(!lb) return;
+      lb.remove();
+      saveModels(mcard);
+    }
+    if(mb.dataset.mact==='use'){
+      const inp=mcard.querySelector('.mnew');
+      if(inp){ inp.value=mb.textContent; inp.focus(); }
+    }
+    if(mb.dataset.mact==='add') addModel(mcard);
     return;
   }
   const b=e.target.closest('button[data-act]'); if(!b) return;
@@ -845,10 +922,11 @@ document.addEventListener('click',async e=>{
   if(act==='login'){
     const row=card.querySelector('.keyrow');
     row.hidden=!row.hidden;
+    b.setAttribute('aria-expanded',String(!row.hidden));
     if(!row.hidden){
       const inp=card.querySelector('.keyinput');
       inp.focus();
-      inp.onkeydown=(ev)=>{if(ev.key==='Escape'){row.hidden=true; b.focus();}};
+      inp.onkeydown=(ev)=>{if(ev.key==='Escape'){row.hidden=true;b.setAttribute('aria-expanded','false');b.focus();}};
     }
     return;
   }
@@ -867,8 +945,19 @@ document.addEventListener('click',async e=>{
       try{
         const res=await fetch('/auth/'+encodeURIComponent(id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key})});
         if(!res.ok){say(await failBody(res),true); inp.focus(); return false;}
-        say('key saved — reloading',false);
-        setTimeout(()=>location.reload(),400);
+        // In-place card update: a reload would throw away scroll position and
+        // every already-loaded model panel just to repaint one badge.
+        const ks=card.querySelector('.keystat');
+        if(ks){ks.textContent='key set (saved)';ks.style.color='var(--ok)';}
+        const toggle=card.querySelector('[data-act="login"]');
+        if(!card.querySelector('[data-act="logout"]') && toggle){
+          const rm=document.createElement('button'); rm.className='ghost'; rm.dataset.act='logout'; rm.textContent='Remove key';
+          toggle.parentElement.append(rm);
+        }
+        const row=card.querySelector('.keyrow');
+        row.hidden=true;
+        if(toggle){toggle.setAttribute('aria-expanded','false'); toggle.focus(); inp.value='';}
+        say('key saved',false);
         return true;
       }catch(e2){say('network error',true); return false;}
     });
@@ -899,32 +988,149 @@ document.addEventListener('click',async e=>{
   if(act==='models'){
     const panel=card.querySelector('.modelrow');
     panel.hidden=!panel.hidden;
+    b.setAttribute('aria-expanded',String(!panel.hidden));
     if(!panel.hidden && !panel.dataset.loaded) loadModels(card);
     return;
   }
 });
 function setBadge(card,n){
   const el=card.querySelector('[data-badge]'); if(!el) return;
-  el.textContent=n>0?(n+' model'+(n===1?'':'s')+' enabled'):'none enabled';
+  el.textContent='Allowed here: '+n;
   el.classList.toggle('ok',n>0);
 }
+/** A 10s Undo next to the disable verdict — the only way to undo an
+ *  accidental Disable all without hunting the ticks back one by one. */
+function offerUndo(card,ids){
+  const tools=card.querySelector('.mtools');
+  const b=tools ? tools.querySelector('[data-mact="undo"]') : null;
+  clearTimeout(card._undoT);
+  if(!ids || !ids.length){
+    card._undo=null;
+    if(b) b.remove();
+    return;
+  }
+  card._undo=ids;
+  if(b===null){
+    const nb=document.createElement('button'); nb.className='ghost'; nb.dataset.mact='undo';
+    if(tools) tools.append(nb);
+    nb.textContent='Undo ('+ids.length+')';
+  }else{
+    b.textContent='Undo ('+ids.length+')';
+  }
+  card._undoT=setTimeout(()=>offerUndo(card,[]),10000);
+}
+function savedStamp(){ return '✓ saved ' + new Date().toTimeString().slice(0,5); }
 function showSaved(card,text,bad){
+  // Persistent slot: the last verdict stays visible until the next action
+  // replaces it — an error that self-clears in 1.5s is not an error report.
   const el=card.querySelector('.msmall'); if(!el) return;
   el.textContent=text;
-  el.style.color=bad?'var(--danger)':'';
-  if(!bad) setTimeout(()=>{el.textContent='';},1500);
+  el.classList.toggle('bad',!!bad);
+}
+/** Same grammar the backend parseEntry enforces: non-empty, ≤200 chars,
+ *  no control characters, and never the wildcard smuggle "*". */
+function modelIdOk(id){
+  return id.length>0 && id.length<=200 && id!=='*' && !/[\x00-\x1f\x7f]/.test(id);
+}
+/** Unique suffix-id source for rows added after the panel rendered. */
+let msSeq=0;
+function addModel(mcard){
+  const inp=mcard.querySelector('.mnew');
+  const raw=inp?inp.value.trim():'';
+  if(!raw){ showSaved(mcard,'⚠ type a model id first',true); return; }
+  if(!modelIdOk(raw)){ showSaved(mcard,'⚠ invalid model id (≤200 chars, no control characters, no "*")',true); return; }
+  // "kilo/free" / "kilo:free" typed on the kilo card → strip the prefix with
+  // a visible correction; saving it verbatim would create a ghost row whose
+  // id no provider will ever serve.
+  const p=mcard.dataset.id;
+  let id=raw;
+  if(id.length>p.length+1 && (id.startsWith(p+':')||id.startsWith(p+'/'))) id=id.slice(p.length+1);
+  if(id==='auto'){ showSaved(mcard,'"auto" is the picker, not a model — tick real models here, then choose "auto" in the playground',false); return; }
+  const boxes=[...mcard.querySelectorAll('.mlist input[type=checkbox]')];
+  const dup=boxes.find(i=>i.value===id);
+  if(dup!==undefined){
+    showSaved(mcard,'already listed — tick its box',false);
+    const dl=dup.closest('.mrow'); if(dl) dl.scrollIntoView({block:'nearest'});
+    if(inp) inp.value='';
+    return;
+  }
+  if(id!==raw) showSaved(mcard,'corrected "'+raw+'" → "'+id+'"',false);
+  const live=mcard._live||new Set();
+  // DOM nodes, not innerHTML: the id is user text and must never parse as markup.
+  const row=document.createElement('div'); row.className='mrow';
+  const lb=document.createElement('label');
+  const cb=document.createElement('input'); cb.type='checkbox'; cb.value=id; cb.checked=true; cb.dataset.live='0';
+  const code=document.createElement('code'); code.textContent=id;
+  lb.append(cb,code); row.append(lb);
+  if(!live.has(id)){
+    const warn=document.createElement('span'); warn.className='msuffix mwarn small';
+    warn.id='ms-'+p+'-d'+(++msSeq);
+    warn.textContent=' ⚠ not confirmed by the provider right now — typos fail at chat time';
+    cb.setAttribute('aria-describedby',warn.id);
+    const rm=document.createElement('button'); rm.className='ghost'; rm.dataset.mact='rm'; rm.textContent='Remove';
+    row.append(warn,rm);
+    const lc=id.toLowerCase();
+    const near=[...live].filter(x=>x!==id&&(x.toLowerCase().includes(lc)||lc.includes(x.toLowerCase()))).slice(0,3);
+    if(near.length){
+      const d=document.createElement('span'); d.className='small mdidyou'; d.textContent=' did you mean ';
+      for(const cand of near){
+        const b2=document.createElement('button'); b2.className='ghost'; b2.dataset.mact='use'; b2.textContent=cand;
+        d.append(b2,' ');
+      }
+      row.append(d);
+    }
+  }
+  const mlist=mcard.querySelector('.mlist');
+  // New rows join their prefix group so sticky headers stay honest.
+  const gk=groupKey(id);
+  let body=null;
+  for(const g of mlist.querySelectorAll('.mgroup')){
+    const h=g.querySelector('.mghead span');
+    if(h&&h.textContent===gk){body=g.querySelector('.mgbody');break;}
+  }
+  if(body) body.append(row); else mlist.append(row);
+  refreshGroupCounts(mcard.querySelector('.modelrow'));
+  if(inp) inp.value='';
+  saveModels(mcard);
 }
 async function saveModels(card){
   clearTimeout(card._t);
-  const checked=[...card.querySelectorAll('.mlist input[type=checkbox]')].map(i=>i.value);
+  // Consent state is exactly the TICKED boxes. The PUT replaces the
+  // provider's whole set, so sending every visible row would silently
+  // enable the entire catalog when the user ticks one model.
+  const ids=[...card.querySelectorAll('.mlist input[type=checkbox]:checked')].map(i=>i.value);
+  const seq=(card._seq||0)+1; card._seq=seq;
+  const btns=[...card.querySelectorAll('.mtools button')];
+  for(const b of btns) b.disabled=true;
   showSaved(card,'saving…',false);
   try{
-    const res=await fetch('/auth/'+encodeURIComponent(card.dataset.id)+'/allowlist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({models:checked})});
-    if(!res.ok){showSaved(card,await failBody(res),true); return;}
+    const res=await fetch('/auth/'+encodeURIComponent(card.dataset.id)+'/allowlist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({models:ids})});
+    if(card._seq!==seq) return; // a newer save owns the slot and the buttons
+    for(const b of btns) b.disabled=false;
+    if(!res.ok){showSaved(card,'⚠ not saved: '+await failBody(res),true); return;}
+    // The server's {allowed} list is the truth; the UI re-syncs to it, and
+    // any row the user ticked that did not stick is called out by id.
     const data=await res.json();
-    setBadge(card,(data.allowed||[]).length);
-    showSaved(card,'saved',false);
-  }catch(e){showSaved(card,'network error',true);}
+    const allowed=new Set(data.allowed||[]);
+    const prefix=card.dataset.id+':';
+    const sent=new Set(ids.map(i=>prefix+i));
+    const missed=[];
+    for(const i of card.querySelectorAll('.mlist input[type=checkbox]')){
+      const on=allowed.has(prefix+i.value);
+      i.checked=on;
+      const lb=i.closest('.mrow');
+      if(lb) lb.classList.toggle('miss',!on&&sent.has(prefix+i.value));
+      if(!on&&sent.has(prefix+i.value)) missed.push(i.value);
+    }
+    setBadge(card,allowed.size);
+    refreshGroupCounts(card.querySelector('.modelrow'));
+    showSaved(card,missed.length?('⚠ not saved: '+missed.join(', ')):savedStamp(),missed.length>0);
+  }catch(e){
+    if(card._seq===seq){
+      for(const b of btns) b.disabled=false;
+      showSaved(card,'⚠ not saved: network error',true);
+    }
+  }
 }
 async function loadModels(card){
   const panel=card.querySelector('.modelrow');
@@ -939,17 +1145,60 @@ async function loadModels(card){
 function renderModels(card,data){
   const panel=card.querySelector('.modelrow');
   const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  card._live=new Set(data.models.filter(m=>m.live).map(m=>m.id));
+  const sorted=data.models.slice().sort(function(a,b){return ((b.enabled?1:0)-(a.enabled?1:0))||a.id.localeCompare(b.id);});
+  const groups=[];const byKey=new Map();
+  for(const m of sorted){
+    const k=groupKey(m.id);
+    let g=byKey.get(k);
+    if(!g){g={key:k,items:[]};byKey.set(k,g);groups.push(g);}
+    g.items.push(m);
+  }
   let html='';
-  if(data.listingError) html+='<div class="small">'+esc(data.listingError)+'</div>';
-  html+='<div class="mtools"><button data-mact="all">Enable all listed</button><button data-mact="none" class="ghost">Disable all</button><span class="msmall small"></span></div>';
-  if(data.models.length>50) html+='<input class="mfilter" type="search" placeholder="Filter models…" autocomplete="off">';
-  html+='<div class="mlist">'+data.models.map(m=>'<label class="mrow"><input type="checkbox" value="'+esc(m.id)+'"'+(m.enabled?' checked':'')+'><code>'+esc(m.id)+'</code>'+(m.isDefault?' <span class="small">(default)</span>':'')+(m.live?'':' <span class="small">not in live catalog</span>')+'</label>').join('')+'</div>';
+  html+='<h2 class="kicker">Choose models the playground may run</h2>';
+  if(data.listingError) html+='<div class="banner">'+esc(data.listingError)+'</div>';
+  html+='<div class="mtools"><button data-mact="rec">Enable recommended ★</button><button data-mact="all" class="ghost">Enable all listed</button><button data-mact="none" class="ghost">Disable all</button><span class="msmall small" role="status"></span></div>';
+  html+='<div class="mtools madd" style="margin-top:var(--s2)"><input class="mnew" type="text" aria-label="exact model id to add to '+esc(card.dataset.id)+'" placeholder="exact model id, copied from the provider list" autocomplete="off"><button data-mact="add">Add model</button></div>';
+  html+='<input class="mfilter" type="search" aria-label="Filter models" placeholder="Filter models…" autocomplete="off" style="margin:var(--s2) 0">';
+  html+='<div class="mlist">';
+  let n=0;
+  for(const g of groups){
+    html+='<div class="mgroup"><div class="mghead"><span>'+esc(g.key)+'</span><span data-mgcount></span></div><div class="mgbody">';
+    html+=g.items.map(m=>{
+      const sid='ms-'+esc(card.dataset.id)+'-'+(++n);
+      const suffix=(m.isDefault?' <span class="small">(default)</span>':'')+(m.recommended?' <span class="mrec" title="$0 per million tokens and confirmed by the provider live list">★</span>':'')+(m.live?'':' <span class="small">not confirmed by the provider right now</span>');
+      return '<div class="mrow"><label><input type="checkbox" value="'+esc(m.id)+'" data-live="'+(m.live?1:0)+'" data-rec="'+(m.recommended?1:0)+'"'+(m.enabled?' checked':'')+' aria-describedby="'+sid+'"><code>'+esc(m.id)+'</code></label><span class="msuffix small" id="'+sid+'">'+suffix+'</span></div>';
+    }).join('');
+    html+='</div></div>';
+  }
+  html+='</div>';
   panel.innerHTML=html;
+  refreshGroupCounts(panel);
+}
+/** Model ids read as <family>/<name> (or provider:model on custom cards);
+ *  the first segment is the group the eye actually scans by. */
+function groupKey(id){
+  const s=id.indexOf('/');
+  if(s>0) return id.slice(0,s);
+  const c=id.indexOf(':');
+  if(c>0) return id.slice(0,c);
+  return 'models';
+}
+function refreshGroupCounts(panel){
+  if(!panel) return;
+  for(const g of panel.querySelectorAll('.mgroup')){
+    const boxes=g.querySelectorAll('.mgbody input[type=checkbox]');
+    let n=0;
+    for(const i of boxes){if(i.checked)n++;}
+    const c=g.querySelector('[data-mgcount]');
+    if(c)c.textContent=n+' / '+boxes.length;
+  }
 }
 document.addEventListener('change',e=>{
   const el=e.target;
   if(el.matches && el.matches('.mlist input[type=checkbox]')){
     const card=el.closest('li.prov');
+    refreshGroupCounts(card.querySelector('.modelrow'));
     clearTimeout(card._t);
     card._t=setTimeout(()=>saveModels(card),300);
   }
@@ -960,8 +1209,22 @@ document.addEventListener('input',e=>{
   const panel=el.closest('.modelrow');
   const q=el.value.trim().toLowerCase();
   for(const lb of panel.querySelectorAll('.mrow')) lb.style.display=!q||lb.textContent.toLowerCase().includes(q)?'':'none';
+  for(const g of panel.querySelectorAll('.mgroup')) g.style.display=[...g.querySelectorAll('.mrow')].some(lb=>lb.style.display!=='none')?'':'none';
 });
-</script></body></html>`;
+// Deep link from the chat 403 (/auth#prov-<id>): open that provider's panel.
+(function(){
+  const m=/^#prov-([a-z0-9-]+)$/.exec(location.hash||'');
+  if(!m) return;
+  const card=document.getElementById('prov-'+m[1]); if(!card) return;
+  card.scrollIntoView();
+  const panel=card.querySelector('.modelrow');
+  if(panel && panel.hidden){
+    const b=card.querySelector('button[data-act="models"]');
+    if(b) b.click();
+  }
+})();
+</script>
+${uiBoot()}</body></html>`;
 }
 
 let playgroundCache: string | null = null;
@@ -969,42 +1232,61 @@ function playgroundHtml(): string {
   if (playgroundCache === null) {
     playgroundCache = `<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>codewhip playground</title><style>
 ${uiCss()}
-main{display:grid;grid-template-columns:360px 1fr;gap:var(--s5);align-items:start}
+main{display:grid;grid-template-columns:320px 1fr;gap:var(--s5);align-items:start;max-width:1200px}
 @media (max-width:900px){main{grid-template-columns:1fr}}
-#chat{min-height:420px;max-height:70vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s4)}
-.turn .body{white-space:pre-wrap;font-size:14px}
-.turn.assistant .body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
-.turn.user .body{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:var(--s2) var(--s3)}
-.receipt{font-size:11px;color:var(--muted);margin-top:var(--s1)}
+.thread{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);height:calc(100vh - 110px);min-height:420px}
+#chat{flex:1;overflow:auto;display:flex;flex-direction:column;gap:var(--s4);padding:var(--s4)}
+.turn{max-width:100%}
+.turn.user{align-self:flex-end;max-width:85%}
+.turn.user .body{white-space:pre-wrap;font-size:14px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:var(--s2) var(--s3)}
+.turn.assistant{align-self:stretch;border-left:2px solid var(--line);padding-left:var(--s3)}
+.turn.assistant .body{white-space:pre-wrap;font-size:13px;font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+.receipt{font-size:11px;color:var(--muted);margin-top:var(--s1);font-family:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+.dots{display:inline-flex;gap:4px;padding:6px 0}
+.dots i{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:blink 1s infinite}
+.dots i:nth-child(2){animation-delay:.2s}
+.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}
+.composer{border-top:1px solid var(--line);padding:var(--s3);display:flex;flex-direction:column;gap:var(--s2)}
+.composer textarea{min-height:60px}
+.crow{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.modelchip{margin-left:auto}
 </style></head><body>
 ${uiHeader("codewhip playground", "playground", "requests run through the local proxy — auto picks a healthy free model")}
 <main>
-<section class="card">
-<label for="modelfilter">Model <span class="small" id="modelBadge">loading…</span> <button id="refresh" class="ghost" style="padding:2px 8px;margin-left:var(--s2)">refresh</button> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
+<aside class="card">
+<label for="modelfilter">Model <span class="small" id="modelBadge" role="status">loading…</span> <button id="refresh" class="ghost" style="padding:2px 8px;margin-left:var(--s2)">refresh</button> <button id="retry" class="ghost" hidden style="padding:2px 8px;margin-left:var(--s2)">retry</button></label>
 <input id="modelfilter" type="search" placeholder="Filter — type a provider or model" autocomplete="off">
-<select id="model" style="margin-top:var(--s2)"><option value="auto" selected>auto — health-weighted pick</option></select>
+<select id="model" aria-label="Model to run" style="margin-top:var(--s2)"><option value="auto" selected>auto — picks one of your models, free ones first</option></select>
 <label for="system" style="margin-top:var(--s4)">System <span class="small">optional, sent with every request</span></label>
 <textarea id="system" rows="2" placeholder="Optional system prompt"></textarea>
-<label for="prompt">Prompt</label>
-<textarea id="prompt" placeholder="Type a prompt…"></textarea>
-<div style="display:flex;gap:var(--s2);align-items:center;margin-top:var(--s3);flex-wrap:wrap">
-<label class="small" for="stream" style="display:flex;gap:var(--s1);margin:0;font-weight:400;align-items:center"><input type="checkbox" id="stream" style="width:auto" checked> Stream</label>
-<span style="flex:1"></span>
+<label class="small" for="stream" style="display:flex;gap:var(--s1);margin-top:var(--s3);font-weight:400;align-items:center"><input type="checkbox" id="stream" style="width:auto" checked> Stream</label>
+<details style="margin-top:var(--s3)">
+<summary class="small">Request inspector</summary>
+<pre id="inspJson" class="small" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin:var(--s2) 0 0">nothing sent yet</pre>
+</details>
+<p class="small" style="margin-bottom:0">Prompt and reply live only in this browser tab — the proxy keeps provider health stats, never your traffic.</p>
+</aside>
+<section class="thread">
+<div id="empty" class="banner" hidden style="margin:var(--s4) var(--s4) 0"><strong>Nothing enabled yet.</strong> The playground can only run models you tick at <a href="/auth">providers &amp; models</a>. <button id="starter" class="ghost">Enable starter set</button><span id="starterMsg" class="small"></span></div>
+<div id="chat" role="log" aria-live="off"></div>
+<div class="composer">
+<textarea id="prompt" aria-label="Prompt" placeholder="Type a prompt… — Ctrl+Enter sends"></textarea>
+<div class="crow">
 <button id="send">Send</button>
 <button id="stop" class="ghost">Stop</button>
 <button id="clear" class="ghost">Clear thread</button>
+<span id="modelChip" class="pill modelchip">auto</span>
 </div>
-<div id="err" class="small" style="color:var(--danger);margin-top:var(--s2)" role="alert"></div>
-</section>
-<section class="card">
-<h2 class="kicker">Thread</h2>
-<div id="chat" aria-live="polite"></div>
+<div id="err" class="small" style="color:var(--danger)" role="alert"></div>
+<span id="srStatus" class="sr-only" role="status"></span>
+</div>
 </section>
 </main>
 <script>
 const $ = s=>document.querySelector(s);
 const modelSel=$('#model'), filterEl=$('#modelfilter'), sys=$('#system'), promptEl=$('#prompt'), streamEl=$('#stream');
-const chat=$('#chat'), err=$('#err'), badge=$('#modelBadge');
+const chat=$('#chat'), err=$('#err'), badge=$('#modelBadge'), chip=$('#modelChip');
 let controller=null, messages=[], allModels=[];
 function turn(role, text){
   const wrap=document.createElement('div'); wrap.className='turn '+role;
@@ -1031,7 +1313,7 @@ function renderModels(){
     groups.get(prov).push(id);
   }
   const auto=document.createElement('option');
-  auto.value='auto'; auto.textContent='auto — health-weighted pick';
+  auto.value='auto'; auto.textContent='auto — picks one of your '+allModels.length+' allowed models, free ones first';
   if(!q || 'auto'.includes(q)) modelSel.append(auto);
   for(const prov of [...groups.keys()].sort()){
     const og=document.createElement('optgroup'); og.label=prov;
@@ -1044,6 +1326,7 @@ function renderModels(){
   if(saved){modelSel.value=saved; if(modelSel.value!==saved) localStorage.removeItem('codewhip.model');}
   if(!saved||modelSel.value!==saved) modelSel.value='auto';
   badge.textContent=allModels.length+' models'+(q?' · '+n+' match':'');
+  chip.textContent=modelSel.value;
 }
 async function loadModels(force){
   const retry=$('#retry'); retry.hidden=true;
@@ -1055,6 +1338,7 @@ async function loadModels(force){
     const j=await res.json();
     allModels=(j.data||[]).map(m=>m.id).sort();
     renderModels();
+    $('#empty').hidden=allModels.length>0;
   }catch(e){
     badge.textContent='could not load models — is the proxy running?';
     retry.hidden=false;
@@ -1062,9 +1346,21 @@ async function loadModels(force){
 }
 $('#retry').addEventListener('click',()=>loadModels(false));
 $('#refresh').addEventListener('click',async()=>{badge.textContent='refreshing…'; await loadModels(true);});
+$('#starter').addEventListener('click',async()=>{
+  const b=$('#starter'), m=$('#starterMsg');
+  b.disabled=true; m.textContent='enabling…';
+  try{
+    const res=await fetch('/auth/_starter',{method:'POST'});
+    const j=await res.json().catch(()=>null);
+    if(!res.ok){ m.textContent='could not enable: '+((j&&j.error&&j.error.message)||('http '+res.status))+' (needs serve --auth-ui)'; return; }
+    m.textContent='enabled '+(j.added||[]).length+' starter model(s)'+((j.added||[]).length?'':' — they were already enabled');
+    await loadModels(true);
+  }catch(e){ m.textContent='network error'; }
+  finally{ b.disabled=false; }
+});
 loadModels(false);
 filterEl.addEventListener('input',renderModels);
-modelSel.addEventListener('change',()=>{try{localStorage.setItem('codewhip.model',modelSel.value);}catch{}});
+modelSel.addEventListener('change',()=>{chip.textContent=modelSel.value;try{localStorage.setItem('codewhip.model',modelSel.value);}catch{}});
 $('#clear').addEventListener('click',()=>{chat.textContent=''; err.textContent=''; messages=[];});
 $('#stop').addEventListener('click',()=>{if(controller){controller.abort(); controller=null; err.textContent='Stopped';}});
 async function send(){
@@ -1074,7 +1370,12 @@ async function send(){
   if(!prompt){err.textContent='Enter a prompt'; promptEl.focus(); return;}
   turn('user',prompt); promptEl.value='';
   const outgoing=system?[{role:'system',content:system},...messages,{role:'user',content:prompt}]:[...messages,{role:'user',content:prompt}];
+  $('#inspJson').textContent=JSON.stringify({model:model,messages:outgoing,stream:streamEl.checked},null,1).slice(0,4000);
   const body=turn('assistant','');
+  // Typing dots until the first token (or the verdict) arrives.
+  const dots=document.createElement('div'); dots.className='dots'; dots.innerHTML='<i></i><i></i><i></i>';
+  body.parentElement.append(dots);
+  const killDots=()=>dots.remove();
   const t0=performance.now();
   controller=new AbortController();
   let usage=null, servicedBy=null, toolCalls=[];
@@ -1082,7 +1383,16 @@ async function send(){
     const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model,messages:outgoing,stream:streamEl.checked,...(streamEl.checked?{stream_options:{include_usage:true}}:{})}),signal:controller.signal});
     if(!res.ok){
       const j=await res.json().catch(()=>null);
-      err.textContent='Error '+res.status+(j&&j.error&&j.error.message?': '+j.error.message:'');
+      const msg=(j&&j.error&&j.error.message)?j.error.message:'';
+      err.textContent='Error '+res.status+(msg?': '+msg:'');
+      // A 403 remedy names /auth#prov-<id> — make it clickable, not typable.
+      const at=msg.indexOf('/auth');
+      if(at>=0){
+        let href=msg.slice(at); const sp=href.indexOf(' '); if(sp>0) href=href.slice(0,sp);
+        err.append(' — ');
+        const a=document.createElement('a'); a.href=href; a.textContent='open the model settings';
+        err.append(a);
+      }
       body.parentElement.remove(); messages.push({role:'user',content:prompt}); return;
     }
     let text='';
@@ -1099,7 +1409,7 @@ async function send(){
           try{
             const j=JSON.parse(data);
             const c=j.choices?.[0]?.delta?.content;
-            if(c){text+=c; body.textContent=text; chat.scrollTop=chat.scrollHeight;}
+            if(c){text+=c; body.textContent=text; killDots(); chat.scrollTop=chat.scrollHeight;}
             const tc=j.choices?.[0]?.delta?.tool_calls;
             if(tc) toolCalls.push(...tc);
             if(j.usage) usage=j.usage;
@@ -1125,22 +1435,24 @@ async function send(){
     const toks=usage?(usage.prompt_tokens+usage.completion_tokens)+' tok'+(usage.estimated?' (est.)':''):null;
     const tools=toolCalls.length>0?toolCalls.length+' tool call'+(toolCalls.length>1?'s':''):null;
     receipt(body,[model==='auto'&&servicedBy?servicedBy:null,secs,toks,tools].filter(x=>x!==null));
+    // One screen-reader announcement per reply — streaming tokens stay silent.
+    $('#srStatus').textContent='reply done';
     messages.push({role:'user',content:prompt},{role:'assistant',content:text});
   }catch(e){
     if(e.name!=='AbortError'){err.textContent='Network error'; body.parentElement.remove(); messages.push({role:'user',content:prompt});}
     else{receipt(body,['stopped',((performance.now()-t0)/1000).toFixed(1)+'s']); messages.push({role:'user',content:prompt});}
   }
-  finally{controller=null;}
+  finally{controller=null;killDots();}
 }
 $('#send').addEventListener('click',send);
 promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();send();}});
 document.addEventListener('keydown',e=>{
   const tag=document.activeElement?document.activeElement.tagName:'';
-  if(e.key==='/'&&tag!=='INPUT'&&tag!=='TEXTAREA'&&tag!=='SELECT'){e.preventDefault();filterEl.focus();}
+  if(e.key==='/'&&tag!=='INPUT'&&tag!=='TEXTAREA'&&tag!=='SELECT'&&tag!=='BUTTON'){e.preventDefault();filterEl.focus();}
   if(e.key==='Escape'&&controller){controller.abort();controller=null;err.textContent='Stopped';}
 });
 </script>
-</body></html>`;
+${uiBoot()}</body></html>`;
   }
   return playgroundCache;
 }
@@ -1179,11 +1491,11 @@ function statsHtml(): string {
                 const toks = mh.promptTokens + mh.completionTokens;
                 return `<tr>
 <td><code>${escapeHtml(mh.model)}</code></td>
-<td>${pct(mh.successRate)}</td>
-<td>${mh.ok}/${mh.total}</td>
-<td>${mh.avgMs > 0 ? `${Math.round(mh.avgMs)}ms` : "—"}</td>
-<td>${toks > 0 ? `${fmtTok(toks)} tok` : "—"}</td>
-<td>${mh.tokensPerSec > 0 ? `${mh.tokensPerSec.toFixed(0)} tok/s` : "—"}</td>
+<td class="num">${pct(mh.successRate)}</td>
+<td class="num">${mh.ok}/${mh.total}</td>
+<td class="num">${mh.avgMs > 0 ? `${Math.round(mh.avgMs)}ms` : "—"}</td>
+<td class="num">${toks > 0 ? `${fmtTok(toks)} tok` : "—"}</td>
+<td class="num">${mh.tokensPerSec > 0 ? `${mh.tokensPerSec.toFixed(0)} tok/s` : "—"}</td>
 <td>${status}</td>
 </tr>`;
               })
@@ -1198,7 +1510,7 @@ function statsHtml(): string {
 <a href="/auth#prov-${escapeHtml(ph.provider)}" class="small" style="margin-left:auto">manage key →</a>
 </div>
 <table>
-<thead><tr><th>model</th><th>success</th><th>ok/total</th><th>avg ms</th><th>tokens</th><th>speed</th><th></th></tr></thead>
+<thead><tr><th scope="col">model</th><th scope="col" class="num">success</th><th scope="col" class="num">ok/total</th><th scope="col" class="num">avg ms</th><th scope="col" class="num">tokens</th><th scope="col" class="num">speed</th><th scope="col"></th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
 </section>`;
@@ -1209,6 +1521,8 @@ ${uiCss()}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:var(--s2) var(--s4);text-align:left;border-bottom:1px solid var(--line)}
 th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:hover{background:var(--panel2)}
 tbody tr:last-child td{border-bottom:none}
 .dim td{color:var(--muted)}
 .warn{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:var(--r);padding:1px var(--s2)}
@@ -1218,7 +1532,7 @@ ${uiHeader("codewhip stats — provider health", "stats", "aggregates only — p
 <p class="small" style="margin-top:0">${s.total} calls recorded across ${s.providers.length} providers. Tokens appear only when the upstream provider reported usage — estimates are never invented here. A model marked <em>cooling</em> is temporarily skipped by <code>auto</code>.</p>
 ${sections}
 </main>
-</body></html>`;
+${uiBoot()}</body></html>`;
 }
 
 /** Body of `POST /auth/_custom`, before validation. */
