@@ -509,6 +509,37 @@ describe("serve HTTP surface", () => {
       }
       const page = await (await h.client(`${h.base}/playground`)).text();
       ok(page.includes('<option value="auto" selected>'), "auto pre-selected in static markup");
+      const authPage = await (await h.client(`${h.base}/auth`)).text();
+      ok(authPage.includes('class="mnew"') && authPage.includes('data-mact="add"'), "accordion offers a custom-model input");
+      // saveModels must send only TICKED rows — the PUT replaces the whole
+      // provider set, so sending every visible id enables the entire catalog.
+      ok(authPage.includes("input[type=checkbox]:checked"), "consent save collects checked boxes only");
+      ok(!authPage.includes('"auto" = provider-scoped'), 'add-model input must not advertise "auto" (and its raw quotes broke the attribute)');
+      // IA copy: the vocabulary points at the playground, not at internals.
+      ok(authPage.includes("providers & models"), 'nav says "providers & models"');
+      ok(!authPage.includes("keys & providers"), "old nav label is gone");
+      ok(authPage.includes("Choose models the playground may run"), "accordion names its real effect");
+      ok(authPage.includes('data-mact="rec"'), "accordion offers Enable recommended");
+      ok(authPage.includes("#prov-"), "hash deep link opens the named provider panel");
+      const pgPage = await (await h.client(`${h.base}/playground`)).text();
+      ok(pgPage.includes('id="starter"'), "playground empty state offers the starter set");
+      ok(pgPage.includes("free ones first"), "auto option explains what auto picks");
+      // Revamp contract (commits 3–4): theme + status pill boot everywhere,
+      // disclosures speak aria, and the save verdict slot is announced.
+      for (const [name, src] of [["auth", authPage], ["playground", pgPage]] as const) {
+        ok(src.includes('id="theme"'), `${name}: theme toggle present`);
+        ok(src.includes("cw.theme"), `${name}: theme persists to localStorage`);
+        ok(src.includes('id="pill"'), `${name}: header status pill present`);
+      }
+      ok(authPage.includes('aria-expanded'), "disclosures expose open/closed state");
+      ok(authPage.includes('aria-controls="models-'), "Choose models controls its panel");
+      ok(authPage.includes('role="status"'), "save verdict slot is announced");
+      ok(authPage.includes("refreshGroupCounts"), "group counts re-sync on save/tick");
+      ok(authPage.includes("aria-describedby"), "row badges are tied to their checkbox");
+      ok(pgPage.includes('role="log"'), "chat is a log, not a per-token flood");
+      ok(pgPage.includes('id="srStatus"'), "one screen-reader announcement per reply");
+      ok(pgPage.includes('id="modelChip"'), "composer shows the active model");
+      ok(pgPage.includes('id="inspJson"'), "request inspector ships with the page");
     } finally {
       await h.close();
     }
@@ -525,6 +556,7 @@ describe("serve HTTP surface", () => {
       ok(html.includes("<title>codewhip stats</title>"), "stats title");
       ok(html.includes("calls recorded"), "contains aggregate marker");
       ok(html.includes("per-request history is never served"), "per-request disclaimer");
+      ok(!html.includes("<thead>") || html.includes('scope="col"'), "table headers are scoped when rows exist");
     } finally {
       await h.close();
     }
