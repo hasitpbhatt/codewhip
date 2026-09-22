@@ -159,7 +159,9 @@ function contentToText(parts: unknown[]): string {
  * Resolve the `model` field. `provider:model` wins (split at the FIRST colon —
  * model ids legitimately contain colons, e.g. `kilo:cohere/north-mini-code:free`),
  * a bare provider id means "that provider's default model", anything else is a
- * model id on the server's default provider.
+ * model id on the server's default provider. `auto` is a routing word, never an
+ * upstream model id: bare `auto` health-weights across every enabled model,
+ * and `provider:auto` narrows the same pick to that provider.
  */
 /**
  * Health-weighted auto pick for `model: "auto"` (and `--provider auto`).
@@ -174,10 +176,12 @@ function contentToText(parts: unknown[]): string {
  * exploration: a gated model that re-enters picks at reduced probability.
  * No-data providers keep full weight — empty history is not failure.
  */
-function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string } {
+function pickAutoTarget(exclude?: ReadonlySet<string>, onlyProvider?: string): Target | { error: string } {
   const summary = summarizeCalls(readProviderCalls());
   const cands: Array<{ provider: string; model: string; weight: number }> = [];
   for (const cfg of listAllProviderConfigs()) {
+    // `provider:auto` narrows the pool to one provider; bare auto stays global.
+    if (onlyProvider !== undefined && cfg.id !== onlyProvider) continue;
     // Consent gate first: auto may only pick explicitly enabled models.
     if (!providerIsEnabled(cfg.id)) continue;
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
@@ -191,6 +195,9 @@ function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string
       .filter((m) => m.model !== LISTING_MODEL);
     const modelIds = served.length > 0 ? served.map((m) => m.model) : [cfg.defaultModel];
     for (const modelId of modelIds) {
+      // "auto" is a routing word, not a model — never a candidate, even if an
+      // old allowlist file still carries a `<provider>:auto` entry.
+      if (modelId === "auto") continue;
       if (!isModelAllowed(cfg.id, modelId)) continue;
       if (exclude !== undefined && exclude.has(`${cfg.id}:${modelId}`)) continue;
       const mh = served.find((m) => m.model === modelId);
@@ -211,6 +218,9 @@ function pickAutoTarget(exclude?: ReadonlySet<string>): Target | { error: string
     }
   }
   if (cands.length === 0) {
+    if (onlyProvider !== undefined) {
+      return { error: `${onlyProvider}:auto — no healthy enabled models on "${onlyProvider}" right now: enable at least one real model id at /auth (or \`codewhip provider enable ${onlyProvider}:<model>\`), or use bare "auto" to health-pick across all providers` };
+    }
     return { error: "auto: no enabled healthy provider/model combos available — enable models at /auth or run: codewhip provider enable <provider>:<model>, or pass an explicit model (a $0 route also needs health: set CODEWHIP_AUTO_INCLUDE_UNTRACKED=1 to let auto use untracked-cost providers)" };
   }
   const total = cands.reduce((a, c) => a + c.weight, 0);
@@ -238,6 +248,9 @@ export function resolveTarget(requested: string, fallback: { provider: string; m
     const model = trimmed.slice(colon + 1);
     if (getProviderConfig(provider) === null) return { error: `unknown provider "${provider}"` };
     if (model.length === 0) return { error: `missing model id after "${provider}:"` };
+    // `<provider>:auto` = auto-pick scoped to that provider. Without this
+    // intercept the word "auto" would ship upstream as a literal model id.
+    if (model === "auto") return pickAutoTarget(undefined, provider);
     return { provider, model };
   }
   const asProvider = getProviderConfig(trimmed);
