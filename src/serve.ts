@@ -7,7 +7,8 @@ import type { ChatPortResponse, LoopMsg, LoopToolCall, ToolSpec } from "./provid
 import { LISTING_MODEL, readProviderCalls, summarizeCalls } from "./provider-stats.js";
 import { estimateCost, healthPasses, healthRate, isAutoEligible, TTL_MS } from "./router.js";
 import { listModels } from "./models.js";
-import { allowedModelsFor, isModelAllowed, loadAllowedEntries, parseEntry, providerIsEnabled, setProviderAllowlist } from "./model-allowlist.js";
+import { FREE_CHAIN } from "./free-chain.js";
+import { allowedModelsFor, enableEntries, isModelAllowed, loadAllowedEntries, parseEntry, providerIsEnabled, setProviderAllowlist } from "./model-allowlist.js";
 
 /**
  * `codewhip serve` — expose the provider registry as an OpenAI-compatible HTTP
@@ -579,8 +580,16 @@ const CUSTOM_UI = `${AUTH_UI}${CUSTOM_PATH}`;
  */
 const MODELS_PATH = "/_models";
 
-/** Listing budget for a single accordion expand — one provider, not the sweep. */
-const UI_MODELS_TIMEOUT_MS = 5000;
+/**
+ * Sub-path for the one-click starter consent write — `POST /auth/_starter`.
+ * Same underscore-shield reasoning as the other control routes.
+ */
+const STARTER_PATH = "/_starter";
+
+/** Listing budget for a single accordion expand — one provider, not the sweep.
+ *  Generous enough for slow gateways (a 5 s probe made agnes list as if it had
+ *  no catalog at all); the /v1/models sweep keeps its own tighter budget. */
+const UI_MODELS_TIMEOUT_MS = 10_000;
 
 const MAX_KEY_BYTES = 1024;
 const MAX_CUSTOM_BODY_BYTES = 8 * 1024;
@@ -1336,13 +1345,58 @@ async function handleProviderModels(res: http.ServerResponse, id: string): Promi
   const { key } = resolveKey(cfg.id);
   const listed = key.length > 0
     ? await listModels(cfg.id, key, UI_MODELS_TIMEOUT_MS)
-    : { ok: false as const, error: "no key — live catalog listing unavailable" };
+    : { ok: false as const, error: "no key set, so the live model list can't be fetched — you can still enable models by exact id" };
   const live = listed.ok ? new Set(listed.models.map((m) => m.id)) : new Set<string>();
+  const tagById = new Map(listed.ok ? listed.models.map((m) => [m.id, m.tag] as const) : []);
+  // ★ = trackable $0, confirmed live right now, and not an embeddings/OCR-only
+  // endpoint. Untracked prices are deliberately NOT recommended: "unknown" is
+  // not "free", and one-click consent must only ever point at proven $0 rows.
+  const recommended = (mid: string): boolean =>
+    live.has(mid) &&
+    tagById.get(mid) !== "non-chat" &&
+    estimateCost(cfg.id as ProviderId, mid, 1000, 1000) === 0;
   const ids = new Set<string>([cfg.defaultModel, ...enabled, ...live]);
   const models = [...ids]
     .sort((a, b) => (a === cfg.defaultModel ? -1 : b === cfg.defaultModel ? 1 : a.localeCompare(b)))
-    .map((mid) => ({ id: mid, isDefault: mid === cfg.defaultModel, live: live.has(mid), enabled: enabled.has(mid) }));
+    .map((mid) => ({
+      id: mid,
+      isDefault: mid === cfg.defaultModel,
+      live: live.has(mid),
+      enabled: enabled.has(mid),
+      recommended: recommended(mid),
+    }));
   sendJson(res, 200, { id: cfg.id, models, ...(listed.ok ? {} : { listingError: listed.error }) });
+}
+
+/** How many models the starter set may enable in one click (consent cap). */
+const STARTER_CAP = 6;
+
+/**
+ * `POST /auth/_starter` — the smallest honest "make the playground usable"
+ * click: ADDITIVELY enables the anonymous free-chain providers whose DEFAULT
+ * model is a tracked $0 (never untracked — unknown is not free). Cap keeps one
+ * click from becoming a bulk consent; already-enabled entries stay untouched.
+ */
+function handleStarter(res: http.ServerResponse): void {
+  const entries: string[] = [];
+  for (const fe of FREE_CHAIN) {
+    if (entries.length >= STARTER_CAP) break;
+    if (fe.keyNeeded !== "no") continue;
+    const cfg = getProviderConfig(fe.id);
+    if (cfg === null || cfg.disabled === true) continue;
+    // "auto" is a routing word, not a model id — a provider defaulting to it
+    // contributes nothing to a starter set.
+    if (cfg.defaultModel === "auto") continue;
+    if (estimateCost(cfg.id as ProviderId, cfg.defaultModel, 1000, 1000) !== 0) continue;
+    entries.push(`${cfg.id}:${cfg.defaultModel}`);
+  }
+  const r = enableEntries(entries);
+  if (!r.ok) {
+    sendJson(res, 400, { error: { message: r.error, code: "invalid_allowlist" } });
+    return;
+  }
+  clearModelCatalogCache();
+  sendJson(res, 200, { ok: true, added: r.added, considered: entries });
 }
 
 /**
@@ -1410,6 +1464,14 @@ async function handleAuthUi(req: http.IncomingMessage, res: http.ServerResponse,
   }
   if (req.method === "GET" && (rest === MODELS_PATH || rest.startsWith(`${MODELS_PATH}/`))) {
     await handleProviderModels(res, rest.slice(MODELS_PATH.length).replace(/^\//, "").replace(/\/$/, ""));
+    return true;
+  }
+  if (rest === STARTER_PATH) {
+    if (req.method !== "POST") {
+      sendError(res, 405, `method ${req.method ?? ""} not allowed on ${AUTH_UI}${STARTER_PATH} (POST only)`, "method_not_allowed");
+      return true;
+    }
+    handleStarter(res);
     return true;
   }
   const allowMatch = /^\/([^/]+)\/allowlist\/?$/.exec(rest);
@@ -1594,7 +1656,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       sendError(
         res,
         403,
-        `model "${id}" is not enabled — ${opts.authUi === true ? "enable it at /auth or run:" : "start serve with --auth-ui to manage the allowlist, or run:"} codewhip provider enable ${id}`,
+        `model "${id}" is not enabled — ${opts.authUi === true ? `enable it at /auth#prov-${target.provider} or run:` : "start serve with --auth-ui to manage the allowlist, or run:"} codewhip provider enable ${id}`,
         "model_not_enabled",
       );
       return;

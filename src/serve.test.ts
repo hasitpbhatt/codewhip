@@ -13,6 +13,7 @@ import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
 import { enableEntries, loadAllowedEntries, saveAllowedEntries } from "./model-allowlist.js";
 import { resolveKey } from "./auth.js";
 import { estimateCost, isAutoEligible } from "./router.js";
+import { resetProviderStatsForTest } from "./provider-stats.js";
 
 const TEST_CONFIG_DIR = fs.mkdtempSync(join(os.tmpdir(), "codewhip-serve-"));
 for (const p of PROVIDER_IDS) {
@@ -939,6 +940,7 @@ describe("serve deny-by-default allowlist", () => {
         strictEqual(body.error.code, "model_not_enabled");
         ok(body.error.message.includes("codewhip provider enable"), body.error.message);
         ok(body.error.message.includes("/auth"), "with --auth-ui the message must name the UI");
+        ok(body.error.message.includes("/auth#prov-kilo"), "the 403 must deep-link the offending provider's panel");
         const models = (await (await h.client(`${h.base}/v1/models`)).json()) as { data: unknown[] };
         strictEqual(models.data.length, 0);
         // Denial happens before any key resolution or upstream call.
@@ -971,6 +973,44 @@ describe("serve deny-by-default allowlist", () => {
         strictEqual(res.status, 400);
         const body = (await res.json()) as { error: { message: string } };
         ok(body.error.message.includes("provider enable"), body.error.message);
+        strictEqual(h.upstream.length, 0);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("kilo:auto with a real model enabled proxies upstream under that real id", async () => {
+    await withEmptyAllowlist(async () => {
+      // The stats buffer is a process-wide cache; records from earlier tests
+      // would otherwise put non-allowlisted kilo models in the served pool and
+      // starve the scoped pick (fresh process = fresh history = default row).
+      resetProviderStatsForTest();
+      enableEntries(["kilo:cohere/north-mini-code:free"]);
+      const h = await harness({}, () => openAiReply("ok"));
+      try {
+        const res = await post(h.base, { model: "kilo:auto", messages: [{ role: "user", content: "hi" }] });
+        const j = (await res.json()) as { serviced_by?: string; error?: { message: string } };
+        strictEqual(res.status, 200, JSON.stringify(j));
+        strictEqual(h.upstream.length, 1);
+        ok(h.upstream[0].body.includes("cohere/north-mini-code:free"), h.upstream[0].body.slice(0, 200));
+        strictEqual(j.serviced_by, "kilo:cohere/north-mini-code:free");
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("kilo:auto with nothing enabled on kilo is a clear 400 — no upstream probe, no relayed 5xx", async () => {
+    await withEmptyAllowlist(async () => {
+      // The user's repro: they enabled only the id "auto", then chatted.
+      enableEntries(["kilo:auto", "llm7:default"]);
+      const h = await harness({}, () => openAiReply("ok"));
+      try {
+        const res = await post(h.base, { model: "kilo:auto", messages: [{ role: "user", content: "hi" }] });
+        strictEqual(res.status, 400);
+        const body = (await res.json()) as { error: { message: string } };
+        ok(body.error.message.includes('on "kilo"'), body.error.message);
         strictEqual(h.upstream.length, 0);
       } finally {
         await h.close();
@@ -1034,19 +1074,20 @@ describe("auth UI allowlist API", () => {
     }
   }
 
-  type ModelsRow = { id: string; isDefault: boolean; live: boolean; enabled: boolean };
+  type ModelsRow = { id: string; isDefault: boolean; live: boolean; enabled: boolean; recommended: boolean };
   type ModelsBody = { id: string; models: ModelsRow[]; listingError?: string };
 
   it("GET /auth/_models/<id> merges live catalog ∪ enabled ∪ default; 404 unknown", async () => {
     await withSeededAllowlist(["llm7:default", "llm7:enabled-only", "kilo:some-model"], async () => {
       const h = await harness({ authUi: true }, () => openAiReply("ok"));
       try {
-        // Catalog stub: one live model the allowlist has never seen.
+        // Catalog stub: one live model the allowlist has never seen, plus
+        // kilo's tracked-$0 default for the recommended-flag assertions.
         const realStub = globalThis.fetch;
         globalThis.fetch = ((url: string, init?: { body?: string }) => {
           if (url.endsWith("/models") || url.endsWith("/models/")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ object: "list", data: [{ id: "m-live" }] }), {
+              new Response(JSON.stringify({ object: "list", data: [{ id: "m-live" }, { id: "cohere/north-mini-code:free" }] }), {
                 status: 200,
                 headers: { "content-type": "application/json" },
               })
@@ -1063,8 +1104,35 @@ describe("auth UI allowlist API", () => {
         strictEqual(byId.get("enabled-only")?.live, false);
         strictEqual(byId.get("m-live")?.live, true);
         strictEqual(byId.get("m-live")?.enabled, false, "live-but-never-enabled must read disabled");
+        strictEqual(byId.get("m-live")?.recommended, false, "untracked price is never recommended");
+        const kb = (await (await h.client(`${h.base}/auth/_models/kilo`)).json()) as ModelsBody;
+        const kById = new Map(kb.models.map((m) => [m.id, m]));
+        strictEqual(kById.get("cohere/north-mini-code:free")?.recommended, true, "tracked $0 live chat model earns ★");
         const missing = await h.client(`${h.base}/auth/_models/ghost-provider`);
         strictEqual(missing.status, 404);
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  it("POST /auth/_starter additively enables the $0 anonymous defaults (capped, idempotent)", async () => {
+    await withSeededAllowlist([], async () => {
+      const h = await harness({ authUi: true }, () => openAiReply("ok"));
+      try {
+        const first = await h.client(`${h.base}/auth/_starter`, { method: "POST" });
+        strictEqual(first.status, 200);
+        const b1 = (await first.json()) as { ok: boolean; added: string[]; considered: string[] };
+        ok(b1.ok, "starter write reports ok");
+        ok(b1.considered.length > 0 && b1.considered.length <= 6, "candidate set is non-empty and capped at 6");
+        ok(b1.added.length > 0, "with an empty allowlist the starter must enable something");
+        const allowed = new Set(loadAllowedEntries());
+        for (const e of b1.added) ok(allowed.has(e), `added entry must land in the allowlist: ${e}`);
+        for (const e of b1.considered) ok(!e.endsWith(":auto"), `"auto" is a routing word, never a starter model: ${e}`);
+        // Idempotent: the second click adds nothing (enableEntries merges).
+        const b2 = (await (await h.client(`${h.base}/auth/_starter`, { method: "POST" })).json()) as { added: string[] };
+        strictEqual(b2.added.length, 0, "second starter click must be a no-op");
+        strictEqual((await h.client(`${h.base}/auth/_starter`)).status, 405, "GET is not a consent write");
       } finally {
         await h.close();
       }
