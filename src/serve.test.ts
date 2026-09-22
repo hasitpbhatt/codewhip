@@ -153,6 +153,19 @@ describe("serve model routing", () => {
   it("treats a bare model id as the default provider's model", () => {
     deepStrictEqual(resolveTarget("gpt-4o-mini", fallback), { provider: "llm7", model: "gpt-4o-mini" });
   });
+  it("provider:auto health-picks inside that provider — never the literal word \"auto\"", () => {
+    // Regression: `kilo:auto` used to resolve to model "auto" and ship that
+    // word upstream, where the provider rejects it (a user-visible 4xx/5xx).
+    for (let i = 0; i < 20; i++) {
+      const t = resolveTarget("kilo:auto", fallback);
+      ok(!("error" in t), `kilo:auto must resolve: ${JSON.stringify(t)}`);
+      if (!("error" in t)) {
+        strictEqual(t.provider, "kilo");
+        ok(t.model !== "auto", '"auto" is a routing word, not an upstream model id');
+        ok(loadAllowedEntries().includes(`kilo:${t.model}`), `scoped auto must stay allowlisted: kilo:${t.model}`);
+      }
+    }
+  });
   it("falls back to the server default when model is absent", () => {
     deepStrictEqual(resolveTarget("", fallback), fallback);
   });
