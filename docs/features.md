@@ -458,6 +458,75 @@ that ends badly stops the stream rather than continuing on poisoned history.
 `--max-budget-usd` and `--token-budget` move to process scope across the turns,
 and the session file is pinned to the first turn: a stream is one transcript.
 
+## In your process: `query()`, `tool()` and `canUseTool`
+
+```ts
+import { query, tool } from "codewhip";
+
+for await (const msg of query({
+  prompt: "why does the parser reject this file?",
+  options: { model: "groq:llama-3.3-70b-versatile", cwd: "/repo", maxTurns: 12 },
+})) {
+  if (msg.type === "result") console.log(msg.subtype, msg.receipt, msg.total_cost_usd);
+}
+
+const lookup = tool({
+  name: "lookup_bug",
+  description: "Open a ticket by id and return its summary line.",
+  inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+  handler: async ({ id }) => tracker.summary(Number(id)),
+});
+// query({ …, options: { tools: [lookup], canUseTool } })
+```
+
+The package is unpublished, so today this entry point is a built checkout —
+`npm install && npm run build`, then depended on by path
+(`"codewhip": "file:../codewhip"`). `main` and `exports` both point at
+`dist/sdk.js`; `bin` is unchanged.
+
+`src/sdk.ts` is a **mouth, not a second engine**. It resolves the route with the
+CLI's own functions — `resolveRoute` (including the private-route-without-an-
+explicit-provider refusal), the enabled-model allowlist, then `resolveKey` — so
+an SDK run that would be refused by `codewhip run` is refused here too, by the
+same code, and throws `SdkError` from the first iteration without contacting a
+provider. It honours plan mode, re-reads `hooks.json` and the remembered rules
+before every turn, and yields the identical `init` / `event` / `result`
+documents `--output-format stream-json` writes: the same `usage` with the
+`estimated` flag preserved, `total_cost_usd` **`null`** on an unpriced hop, and
+the same `receipt` line. A dollar ceiling is refused up front on a route whose
+cost the router cannot meter — the option never goes inert.
+
+`canUseTool(tool, input, ctx)` is mounted on exactly one rung of the consent
+ladder: `ask`. It can refuse more than the harness and cannot refuse less —
+a policy deny, a denylist match, `disallowedTools`, plan mode and the
+subagent guards never call it. The `ctx` it receives is the same structured
+context the CLI's prompt reads: the `subject` policy graded against, the
+`ruleId` that produced the ask, and the `runId`/`step`/`seq` it happened at.
+`{behavior:"allow", scope:"always"}` writes a repo
+rule the *next* run reads, so a host that means "remember this" has to say so,
+and the audit actor stays truthful (`human`, never `remembered`, for a decision
+made in-process).
+
+Three things are deliberately **not** offered, because each would weaken a
+guarantee rather than an API:
+
+- `updatedInput` on an allow. Verdict, audit `args_hash` and remembered shape
+  are all graded against one string; rewriting after that grading would leave a
+  trail describing bytes that were never executed.
+- A deny `message` handed to the model. A refusal reason from the caller's
+  process is a new injection path into the transcript.
+- Anything that talks past a deny.
+
+A host-provided tool is treated as unreasoned-about, which is what it is: it
+asks every time, is never remembered or memoized, is refused by plan mode and
+refused inside a `delegate` child, and is still screened by the denylist and by
+`policy.md` denies compiled to `deny <tool>:<shape>`. `options.port` exists for
+tests and for adapters this package does not ship; it replaces the provider/key
+lookup and nothing downstream, so it is a convenience, not a privilege boundary.
+The same engine is reachable from any other language over NDJSON — that is what
+`--input-format stream-json` is — so the TypeScript entry is not a second
+supported surface, it is the one surface without a terminal in front of it.
+
 ## Team packs + CI
 
 `codewhip pack list` shows packs shipped with the install; `pack pull starter`
