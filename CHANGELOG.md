@@ -168,6 +168,35 @@ parse time there rather than silently doing nothing.
     `permissions.defaultMode`), and the `stream-json` `init` line gains
     `permission_mode` and `additional_directories`. Cost behaviour is
     unchanged; a mode changes who approves, not what a run pays.
+- **`--json-schema` / `--json-schema-file`: the answer must be one JSON
+  document that satisfies a schema.** Parity-matrix Wave 2d; closes one GAP-2
+  row.
+  - `src/structured.ts` is a validator for a **documented subset** — `type`,
+    `properties`, `required`, `additionalProperties`, `items` (schema or
+    tuple), `enum`, `const`, `min`/`maxLength`, `pattern`,
+    `min`/`max(Exclusive)imum`, `min`/`maxItems`. A schema naming anything
+    else (`$ref`, `allOf`, `not`, `if`, `format`, or a typo like `tipe`) is
+    **refused before the run starts**, with the offending keyword and its path:
+    a gate that cannot fire must not look armed, or the caller writes `jq`
+    against a contract nothing enforced. `integer` accepts whole numbers and
+    is accepted by `number`, never the reverse; `pattern` reports the check it
+    could not make on oversized input rather than approving it silently.
+  - The schema is parsed and checked at **argv-parse time**
+    (`src/index.ts:666`/`:677`) and resolved before any request goes out
+    (`:1236`), so a bad document costs no tokens. Its length is reported as
+    `json_schema_chars` in the `stream-json` `init` line.
+  - A miss costs exactly one **billed** repair turn (`MAX_REPAIRS = 1`,
+    `src/loop.ts:672`): the loop pushes a real `user` message and continues,
+    so `num_turns`, `usage` and the receipt all show the extra spend. An answer
+    that still fails ends the run with `stopReason: "error"` — never as a
+    result carrying a document that broke the contract.
+  - `structured_output` is added **beside** the prose `result`
+    (`src/run-output.ts:208`), with `structured_errors` and `structured_repairs`
+    when they apply; the raw answer stays recoverable. Text mode prints the
+    validated document, and in `-p` mode the repair chatter is an event on
+    stderr so stdout remains one machine document.
+  - `--plan` plus `--json-schema` is refused: a plan is prose, and arming both
+    would pay for a document the run has already decided not to act on.
 - **`npm run parity`: the parity matrix now counts itself.**
   `scripts/parity.mjs` parses the status column of every row in
   `docs/moat/20-claude-code-parity.md`, recomputes the percentage and the
