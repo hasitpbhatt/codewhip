@@ -1,4 +1,4 @@
-import type { Permission, ToolName } from "./tools/types.js";
+import { isToolName, type Permission } from "./tools/types.js";
 import { matchesPromoted, type PromotedDeny } from "./policy-store.js";
 
 export type PermissionDecision = {
@@ -267,9 +267,11 @@ export function matchWorktreeEscape(command: string): string | null {
  * The string `checkPermission` screens against. For bash this is the
  * FULL command (not the truncated log preview) so denylist/chain patterns
  * past the preview boundary are caught. For everything else the preview
- * is already the right subject.
+ * is already the right subject — including a host-provided tool, whose
+ * subject is whatever its caller was handed and can still be screened by a
+ * `deny <tool>:<shape>` line in policy.md.
  */
-export function permissionSubject(tool: ToolName, parsed: unknown, preview: string): string {
+export function permissionSubject(tool: string, parsed: unknown, preview: string): string {
   if (tool === "bash") {
     const c = (parsed as { command?: unknown }).command;
     if (typeof c === "string") return c;
@@ -291,7 +293,7 @@ export function permissionSubject(tool: ToolName, parsed: unknown, preview: stri
 
 export const POLICY_VERSION = "v1-2026-09-18";
 export function checkPermission(
-  tool: ToolName,
+  tool: string,
   commandPreview: string,
   promoted: PromotedDeny[] = [],
   /** Bench-only ablation: when the experiment moves policy CONTENT to the
@@ -367,6 +369,18 @@ export function checkPermission(
       };
     }
   }
+  // A host-provided tool has no row in this table, and the harness cannot see
+  // what its body does. So it asks — every run, every call — and it is never
+  // allow-by-default: not "it looks like a read tool" is not a policy verdict.
+  // (Additive ruleId; the ladder and the stored shapes are unchanged, so
+  // POLICY_VERSION does not move.)
+  if (!isToolName(tool)) {
+    return {
+      decision: "ask",
+      ruleId: "default:host-tool:ask",
+      reason: "a host-provided tool has no policy row: it asks each time and is never remembered",
+    };
+  }
   if (tool === "read" || tool === "search") {
     return {
       decision: "allow",
@@ -421,5 +435,5 @@ export function checkPermission(
 }
 
 export function describePolicy(): string {
-  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; interpreter inline code / nested shells / encoded payloads denied; dynamic paths denied; bash containment is string-based, file tools use realpath jail); run-scoped flags sit outside these verdicts: --disallowed-tools refuses above the ladder, --plan refuses above the ladder, --allowed-tools answers the ask only; --permission-mode chooses who answers the ask (plan/bypassPermissions are --plan/--yolo, acceptEdits self-answers in-jail file edits, dontAsk refuses rather than prompting, manual prompts for every ask) and never outranks a deny";
+  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; interpreter inline code / nested shells / encoded payloads denied; dynamic paths denied; bash containment is string-based, file tools use realpath jail); run-scoped flags sit outside these verdicts: --disallowed-tools refuses above the ladder, --plan refuses above the ladder, --allowed-tools answers the ask only; --permission-mode chooses who answers the ask (plan/bypassPermissions are --plan/--yolo, acceptEdits self-answers in-jail file edits, dontAsk refuses rather than prompting, manual prompts for every ask) and never outranks a deny; a host-provided tool (the programmatic entry) has no row at all — it asks every time, is never memorable, and is refused by plan mode and in subagents";
 }
