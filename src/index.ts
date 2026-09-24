@@ -17,6 +17,8 @@ import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
 import { labelSession, listSessions, loadSession, nameTaken, sanitizeSessionLabel, sanitizeSessionName, saveSession, sessionIdentity, sessionRecord, SESSION_NAME_RULE, SESSION_TAG_RULE, type SessionLabels } from "./sessions.js";
 import { describeToolFilter, parseToolFilterList, TOOL_FILTER_RULE, type ToolFilter } from "./tool-filter.js";
+import { loadSettings, parsePermissionMode, PERMISSION_MODES, type PermissionMode } from "./settings.js";
+import { MAX_ROOTS, resolveRoots } from "./tools/jail.js";
 import { APPEND_MAX_CHARS } from "./system.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
@@ -52,6 +54,14 @@ const pkg: { version: string } = require("../package.json");
 /** Built-in agent names, for the [builtin]/[file] source tag in `codewhip agents`. */
 const BUILTIN_AGENT_NAMES = new Set<string>(BUILTIN_AGENTS.map((a) => a.name));
 
+/** One line per mode that needs explaining in the pre-run banner: the three
+ * shorthands already have their own (`--plan`, `--yolo`). */
+const MODE_NOTES: Record<"acceptEdits" | "dontAsk" | "manual", string> = {
+  acceptEdits: "edit/write on a path inside the jail answer themselves; shell, network and .codewhip/ state still ask",
+  dontAsk: "no prompt is ever shown — an ask that policy or --allowed-tools did not grant is refused",
+  manual: "every ask is a prompt: --allowed-tools, --yolo and remembered rules pre-authorize nothing this run",
+};
+
 type RunOptions = {
   prompt: string;
   model: string;
@@ -75,6 +85,11 @@ type RunOptions = {
   autoFailover: boolean;
   /** Run-scoped read-only: edit/write/bash denied, output is the plan. */
   plan: boolean;
+  /** `--permission-mode`: which rung an ask terminates on. Unset means the
+   * `--plan`/`--yolo` shorthands, then `permissions.defaultMode`, then default. */
+  permissionMode?: PermissionMode;
+  /** `--add-dir`: extra directories the file jail also accepts (repeatable). */
+  addDirs: string[];
   /**
    * `--allowed-tools`: shapes this run may pass an ask without a prompt.
    * Session-scoped by construction — it is an argument, never a file, so the
@@ -165,6 +180,8 @@ function printRunOptions(): void {
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log(`  --allowed-tools <f>  session rung of the ladder: these shapes pass an ask with no prompt, this run only — nothing is written to disk. ${TOOL_FILTER_RULE}. Never a policy deny, --plan, or a .codewhip path (also --allowedTools)`);
   console.log("  --disallowed-tools <f>  refused above the ladder: no --yolo, remembered rule or human yes grants these, and a bare tool name is not even advertised to the model (also --disallowedTools)");
+  console.log(`  --permission-mode <m>  one mode decides where an ask ends: ${PERMISSION_MODES.join(" | ")} — plan and bypassPermissions are what --plan/--yolo spell; acceptEdits self-answers in-jail file edits, dontAsk refuses instead of prompting, manual prompts for everything and pre-authorizes nothing. Outranks permissions.defaultMode; the denylist outranks all of it`);
+  console.log(`  --add-dir <dir>  widen the file jail to another directory (repeatable, max ${MAX_ROOTS}; also permissions.additionalDirectories in settings.json). Containment only: secret files and .codewhip/ state stay refused inside it`);
   console.log(`  --append-system-prompt <text>  your own last line of the system prompt (<=${APPEND_MAX_CHARS} chars, re-pays every turn); --append-system-prompt-file <path> reads it from a file`);
   console.log("  --exclude-dynamic-system-prompt-sections   drop the per-run delegable-agent roster from the system prompt (refusal notes are never dropped)");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
@@ -488,6 +505,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let plan = false;
   const allowedTools: ToolFilter[] = [];
   const disallowedTools: ToolFilter[] = [];
+  let permissionMode: PermissionMode | undefined;
+  const addDirs: string[] = [];
   let appendSystemPrompt: string | undefined;
   let appendSystemPromptFile: string | undefined;
   let excludeDynamicSections = false;
@@ -582,6 +601,24 @@ function parseRunArgs(args: string[]): RunOptions | null {
       autoFailover = true;
     } else if (a === "--plan") {
       plan = true;
+    } else if (a === "--permission-mode" || a.startsWith("--permission-mode=")) {
+      const v = takeValue(a, args, i, `--permission-mode needs one of ${PERMISSION_MODES.join("|")}`);
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const m = parsePermissionMode(v.value);
+      if (m === null) {
+        return fail(`--permission-mode "${v.value}" is not one of ${PERMISSION_MODES.join("|")}`);
+      }
+      if (permissionMode !== undefined && permissionMode !== m) {
+        return fail(`--permission-mode given twice with different modes (${permissionMode}, ${m})`);
+      }
+      permissionMode = m;
+    } else if (a === "--add-dir" || a.startsWith("--add-dir=")) {
+      const v = takeValue(a, args, i, "--add-dir needs a directory");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      addDirs.push(v.value);
+      if (addDirs.length > MAX_ROOTS) return fail(`--add-dir is capped at ${MAX_ROOTS} directories`);
     } else if (a === "--allowed-tools" || a === "--allowedTools" || a.startsWith("--allowed-tools=") || a.startsWith("--allowedTools=")) {
       const v = takeValue(a, args, i, "--allowed-tools needs a filter list");
       if (!v.ok) return fail(v.error);
@@ -683,6 +720,16 @@ function parseRunArgs(args: string[]): RunOptions | null {
   if (forkSession && !cont) return fail("--fork-session needs -r/--continue <session> to fork from");
   // `-p`/`--output-format` owns stdout, so the mode that grabs it for itself loses.
   if (headlessFlag && tui) return fail("--output-format/-p cannot combine with --tui (stdout is reserved for data)");
+  // A mode flag that contradicts its own shorthand is a typo, and a typo about
+  // who approves a tool call must not silently resolve to either reading.
+  if (permissionMode !== undefined) {
+    if (plan && permissionMode !== "plan") {
+      return fail(`--plan and --permission-mode ${permissionMode} disagree on the run's ladder — drop one`);
+    }
+    if (yolo && permissionMode !== "bypassPermissions") {
+      return fail(`--yolo and --permission-mode ${permissionMode} disagree on the run's ladder — drop one`);
+    }
+  }
   if (maxBudgetUsd !== undefined && (free || autoFailover)) {
     return fail("--max-budget-usd is meaningless on the free chain (it never bills pay-go) — cap tokens with --token-budget");
   }
@@ -693,6 +740,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     models: modelsArg ?? [],
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, autoFailover, plan, share, sharePrint,
     allowedTools, disallowedTools, excludeDynamicSections,
+    addDirs,
+    ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt }),
     ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
     taskClass, timeoutMs, noStream,
@@ -968,6 +1017,32 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       : routed;
   opts = { ...opts, provider: route.provider, model: route.model };
   say(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
+  // Flags and settings meet once, here, into one mode: `--permission-mode`
+  // outranks the `--plan`/`--yolo` shorthands, which outrank
+  // `permissions.defaultMode`. Roots are validated before the run starts — a
+  // mistyped --add-dir that silently did nothing would advertise authority the
+  // run does not have.
+  const settings = loadSettings(process.cwd());
+  for (const e of settings.errors) say(`!! settings: ${e}`);
+  const mode: PermissionMode =
+    opts.permissionMode ??
+    (opts.plan ? "plan" : opts.yolo ? "bypassPermissions" : settings.defaultMode ?? "default");
+  const modeSource = opts.permissionMode !== undefined ? "--permission-mode" : opts.plan || opts.yolo ? "a shorthand" : "permissions.defaultMode";
+  const runRoots = resolveRoots([...settings.additionalDirs, ...opts.addDirs], process.cwd());
+  for (const e of runRoots.errors) say(`!! extra root refused: ${e}`);
+  const roots = runRoots.roots;
+  if (roots.length > 0) {
+    say(`!! jail widened: file tools may also reach ${roots.join(", ")} — containment only: secret files and .codewhip/ state stay refused inside them`);
+  }
+  if (mode === "plan" && !opts.plan) {
+    say(`!! ${modeSource}=plan armed: read-only run — edit/write/bash/delegate denied for the whole run; the output is the plan.`);
+  }
+  if (mode === "bypassPermissions" && !opts.yolo) {
+    say(`!! ${modeSource}=bypassPermissions armed: asks answer themselves. The denylist still applies, and .codewhip/ state stays refused.`);
+  }
+  if (mode === "acceptEdits" || mode === "dontAsk" || mode === "manual") {
+    say(`!! ${modeSource}=${mode} armed: ${MODE_NOTES[mode]} (the denylist and --disallowed-tools outrank it; every grant is audited)`);
+  }
   if (opts.plan) {
     say("!! --plan armed: read-only run — edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan.");
   }
@@ -1234,7 +1309,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     model: opts.model,
     task_class: route.taskClass,
     output_format: opts.outputFormat,
-    permission_mode: opts.plan ? "plan" : opts.yolo ? "yolo" : "ask",
+    // The mode is the truth about who answers an ask; "yolo"/"ask" are kept as
+    // the historical spellings of the two modes a flag can still spell.
+    permission_mode: mode === "default" ? (opts.yolo ? "yolo" : "ask") : mode,
+    ...(roots.length > 0 ? { additional_directories: roots } : {}),
     ...(opts.allowedTools.length > 0 ? { allowed_tools: opts.allowedTools.map(describeToolFilter) } : {}),
     ...(opts.disallowedTools.length > 0 ? { disallowed_tools: opts.disallowedTools.map(describeToolFilter) } : {}),
     ...(runAppend.length > 0 ? { appended_system_prompt_chars: runAppend.length } : {}),
@@ -1263,7 +1341,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       signal: ctrl.signal,
       askUser: askUserFn,
       remembered: listRules(process.cwd()),
-      planMode: opts.plan,
+      planMode: mode === "plan",
+      permissionMode: mode,
+      roots,
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
       ...(runAppend.length > 0 ? { appendSystemPrompt: runAppend } : {}),

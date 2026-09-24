@@ -42,6 +42,7 @@ export function runChild(
     compactTokens: ctx.compactTokens,
     models: ctx.rotationModels,
     retryWait: ctx.retryWait,
+    roots: ctx.roots,
     parentRunId: ctx.parentRunId,
     deadlineMs: child.deadlineMs,
     ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),

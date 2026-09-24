@@ -118,6 +118,56 @@ parse time there rather than silently doing nothing.
     `disallowed_tools`, `appended_system_prompt_chars` and
     `exclude_dynamic_system_prompt_sections`. Cost behaviour is unchanged:
     receipts print exactly as before.
+- **Permission modes, extra jail roots and a default mode:
+  `--permission-mode <mode>`, `--add-dir <path>`,
+  `permissions.defaultMode`/`additionalDirectories` in `settings.json`.**
+  Parity-matrix Wave 2c; closes three GAP-2 rows.
+  - Six modes — `default`, `acceptEdits`, `plan`, `bypassPermissions`,
+    `dontAsk`, `manual` (`src/settings.ts`). Each one answers the question
+    "who replies to this ask", and none of them outranks a denial: the
+    non-overridable denylist, structural refusals, `--disallowed-tools` and
+    policy denies all still fire first. `auto` is deliberately not shipped —
+    it names a classifier, and a mode string that behaves like `acceptEdits`
+    while advertising judgement would be a label, not a feature.
+  - `acceptEdits` answers edit/write asks itself, but never a write into
+    self-protected `.codewhip/` state or past the jail, and never a
+    policy `ask` on `bash`. `dontAsk` **denies** instead of prompting, and
+    records `+mode:dontAsk` with actor `policy`, so "nothing happened" and
+    "something refused" stay distinguishable in the audit. `manual` is the
+    loud one: it is immune to `--allowed-tools`, remembered rules and
+    `--yolo`, because an operator who asked to be asked has already answered.
+    `plan` stays structural — `--plan` outranks `--yolo`, and a mode string
+    cannot un-plan a run either.
+  - A mode granted by a flag, a setting or `--yolo` says which in its `ruleId`
+    (`+mode:acceptEdits`, `+mode:bypassPermissions`, `+yolo`), so the audit
+    answers "was this written because of a flag?" without a schema change.
+    `AuditActor` stays the frozen four and `POLICY_VERSION` is unchanged —
+    `checkPermission` returns the same verdicts it always did. The outcome
+    record gains one additive field, `permission_mode`, on the `task_class`
+    precedent (absence means unknown, never `default`).
+  - `--add-dir <path>` (repeatable, ≤16, also
+    `permissions.additionalDirectories`) widens the file-tool jail to real
+    directories outside cwd. Roots are realpath'd and existence-checked
+    before the run starts, and a mistyped one is reported as refused rather
+    than quietly ignored. Inside an extra root the rules are the same as
+    inside cwd: secret files and `.codewhip/` state stay refused. Widening is
+    containment, never authority.
+  - The undo path follows the jail: writes into an `--add-dir` root are
+    checkpointed, so `codewhip rollback` can restore or remove them. This
+    caught a real bug — `rollbackRun` rejected any manifest entry whose path
+    escaped cwd, which made an authorized out-of-cwd write un-rollback-able.
+    Protection is now checked by absolute path, which keeps the wall against a
+    hand-edited manifest and admits the roots the run was given. Children
+    inherit the roots but **not** the mode: a subagent still runs plan-mode
+    read-only (`src/subagents.ts:237`), so no parent-side grant can delegate
+    its way past the ladder into a write.
+  - `settings.json` is read from the config dir and then
+    `.codewhip/settings.json` on top; a malformed file costs one reported
+    `!! settings:` line and never the run. Mode is announced on stderr with
+    its source (`--permission-mode`, `a shorthand`, or
+    `permissions.defaultMode`), and the `stream-json` `init` line gains
+    `permission_mode` and `additional_directories`. Cost behaviour is
+    unchanged; a mode changes who approves, not what a run pays.
 
 ### Changed
 

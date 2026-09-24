@@ -70,8 +70,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:325`; flags at `src/index.ts:601`/`:609`/`:615`, file read pre-flight at `:1098` |
 | `--model` / `--fallback-model` | HAVE | `--model`, `--models`, `--failover`, `--free` |
 | `--effort low…max` | **GAP-3** | no thinking-budget control |
-| `--permission-mode` 7 modes | PARTIAL → **GAP-2** | `--plan` + `--yolo` only; no `acceptEdits`, `dontAsk`, `manual` |
-| `--add-dir` multi-root | **GAP-2** | single-cwd jail, `src/tools/jail.ts` |
+| `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:604`, precedence `:1028`, ladder rungs `src/loop.ts:784`–`:822`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
+| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:616`, validation before the run `:1031`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:40` → read/edit/write/search → `src/subagents.ts:242`. Was a single-cwd jail before Wave 2c |
 | `--bare` (skip discovery of hooks/skills/commands) | **GAP-4** | absent |
 | `--debug`, `--debug-file` | **GAP-3** | absent |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
@@ -114,7 +114,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
 | allow/deny/ask rules in settings | HAVE | `policy.md`, `codewhip-policy.yaml`, `src/policy.ts` |
-| `permissions.defaultMode` | **GAP-2** | no default-mode config key |
+| `permissions.defaultMode` | **HAVE** | `src/settings.ts:56` `mergeFile` reads `defaultMode` (`:85`) and its twin `additionalDirectories` (`:95`), reporting and ignoring a bad value; `:117` `loadSettings` layers user then project, project wins; consumed once at `src/index.ts:1025` |
 | `EnterPlanMode`/`ExitPlanMode` approval flow | PARTIAL | `--plan` is run-scoped, not mid-run enter/exit |
 | Auto mode + classifier rules | PARTIAL → **GAP-3** | the C3 verdict-induction research *is* this, but it is not wired as a runtime mode |
 | `/fewer-permission-prompts` (scan transcripts → allowlist) | ALIAS | `policy candidates` / `policy approve` from declines |
@@ -211,8 +211,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 ## Score
 
 Counted mechanically from the rows below, N/S excluded: **102 in-scope rows** —
-**HAVE/ALIAS/HAVE-plus 34**, **PARTIAL 16**, **GAP 52**, i.e. **33.3%** at parity
-or better. Remaining GAP rows by wave: 2 → 6, 3 → 24, 4 → 13, 5 → 9.
+**HAVE/ALIAS/HAVE-plus 37**, **PARTIAL 16**, **GAP 49**, i.e. **36.3%** at parity
+or better. Remaining GAP rows by wave: 2 → 3, 3 → 24, 4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
@@ -272,6 +272,70 @@ Also verified against the real binary rather than only in tests: with
 `▸ ok write notes.md (default:write:ask+allowed-tools)`; without the flag the
 same call prints `▸ held write notes.md (default:write:ask)` and writes nothing.
 
+Wave 2c (permission modes, extra roots, default mode) closed 3 rows:
+`--permission-mode`, `--add-dir`, `permissions.defaultMode`. HAVE-or-better
+34 → 37, GAP 52 → 49; the wave-2 remainder is now 3 rows
+(`--input-format stream-json`, `--json-schema`, programmatic entry). 28 new
+tests in `src/permission-mode.test.ts`, all 669 pre-existing tests untouched.
+Five rulings inside it:
+
+- **A mode chooses who answers an ask. It never outranks a deny.** The ladder
+  keeps its order — non-overridable denylist and structural refusals, then
+  `--disallowed-tools`, then policy, then the mode, then the prompt — so
+  `bypassPermissions` answers asks and nothing else. `src/permission-mode.test.ts:338`
+  asserts it in the test that matters: with mode *and* `--yolo` *and* an
+  allowed-tools match, a `rm -rf` still dies on `deny:denylist:`. `manual` is the
+  mirror image: it is the only rung that can be *overridden by nothing*, not
+  `--allowed-tools` (`src/loop.ts:784`), not a remembered rule (`:848`), not
+  `--yolo`, because an operator who says "ask me" has already answered the
+  question the other flags would answer.
+- **Six modes, not seven.** `auto` is deliberately absent: it names a
+  classifier, and shipping the word without the judgement behind it would add
+  a label that behaves like `acceptEdits` and advertises something else. It is
+  the §C classifier row, which stays GAP-3.
+- **`plan` is structural, not a permission.** `--plan` outranks `--yolo` and
+  `--allowed-tools` (creed, `docs/moat/00-convergence.md`), so a mode string
+  cannot un-plan a run either: `src/loop.ts:335` ORs the two sources and the
+  read-only refusal fires from `planMode`, above every grant.
+- **A wider jail is still only a jail.** `--add-dir` roots are realpath'd,
+  existence-checked, capped at 16 and reported when dropped
+  (`src/tools/jail.ts:23`); inside them the secret denylist and `.codewhip/`
+  self-protection still bite, because containment and authority are different
+  questions. `dontAsk` denies rather than answering — an ask that quietly
+  disappears is a silent failure; the audit line says
+  `+mode:dontAsk` with actor `policy`, so a run that did nothing is
+  distinguishable from a run that refused.
+- **Every grant says which flag granted it.** `+mode:bypassPermissions`,
+  `+mode:acceptEdits`, `+yolo` and `+allowed-tools` are distinct `ruleId`
+  suffixes on the same verdict, so the audit can answer "was this written
+  because of a flag or a rule?" without a schema change. `AuditActor` stays
+  the frozen four (`policy|human|remembered|yolo`) and `POLICY_VERSION` stays
+  `v1-2026-09-18`: `checkPermission` returns the same verdicts it always did,
+  so there was nothing to re-rule. The outcome record gained one additive
+  field, `permission_mode` (`src/outcomes.ts`), on the `task_class` precedent —
+  readers treat absence as unknown, never as `default`.
+
+Widening the jail exposed a real bug in the undo path, caught by the new test
+rather than by reading: `rollbackRun` refused any manifest entry whose path
+escaped cwd, which made `--add-dir` un-rollback-able — a file created outside
+the workspace with full authorization and no way back. The guard now checks
+protection by absolute path instead of by `..`
+(`src/checkpoints.ts:173`), which keeps the wall against a hand-edited
+manifest and admits the roots the run was given. `captureBefore` gained the
+same roots (`:65`), so out-of-cwd targets are checkpointed like in-cwd ones.
+
+Also verified against the real binary: `--permission-mode=acceptEdits` prints
+`!! --permission-mode=acceptEdits armed:` and then
+`▸ ok write notes.md (default:write:ask+mode:acceptEdits)` with no prompt; a
+`.codewhip/settings.json` with `permissions.defaultMode: "dontAsk"` prints
+`!! permissions.defaultMode=dontAsk armed:` and `▸ deny write dont.md
+(mode:dontAsk)`; `--add-dir <dir>` prints `!! jail widened:` and the init
+document carries `"permission_mode":"dontAsk"` and
+`"additional_directories":[…]`. The jail itself was checked against `dist/`
+rather than a shell, because Git-Bash rewrites POSIX paths in argv before the
+process sees them: the same absolute target reads `1: content from the extra
+dir` with the root and `read: path escapes workspace jail` without it.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -291,10 +355,11 @@ ruling that it is out of scope.
    `--allowed-tools`/`--disallowed-tools` + `--append-system-prompt[-file]` +
    `--exclude-dynamic-system-prompt-sections` **closed 2026-09-24**
    (`src/tool-filter.ts`, `src/system.ts`);
-   still open: `--permission-mode` ladder,
-   `--add-dir`,
-   `--input-format`/`--json-schema`, public
-   programmatic entry, `permissions.defaultMode`.
+   `--permission-mode` ladder + `--add-dir` + `permissions.defaultMode`
+   **closed 2026-09-24** (`src/settings.ts`, `src/tools/jail.ts`,
+   `src/loop.ts`, `src/checkpoints.ts`);
+   still open: `--input-format`/`--json-schema`, public
+   programmatic entry.
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
    subagent frontmatter, task-list tool, `AskUserQuestion`, web search tool,

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sha256Hex } from "./hash.js";
+import { jailWritePath } from "./tools/jail.js";
 
 /**
  * Per-run file checkpoints (committee ruling 1: undo ships first). Before
@@ -45,15 +46,35 @@ function selfProtectedRel(rel: string): boolean {
   );
 }
 
-/** Capture the before-image for an edit/write target. Null when not capturable. */
-export function captureBefore(cwd: string, parsed: unknown): BeforeImage | null {
+/** The same wall for a path that leaves the workspace into an --add-dir root,
+ * where the relative check above cannot see the segments. */
+function selfProtectedAbs(abs: string): boolean {
+  const segs = abs.split(path.sep);
+  return (
+    segs.includes(".codewhip") ||
+    segs[segs.length - 1] === "codewhip-policy.yaml" ||
+    segs[segs.length - 1] === "policy.md"
+  );
+}
+
+/** Capture the before-image for an edit/write target. Null when not capturable.
+ * `roots` are the run's extra jail roots: a file there is editable, so it must
+ * be checkpointed too — an undo that quietly skipped --add-dir targets would be
+ * worse than no undo at all. The manifest keeps the workspace-relative path,
+ * which may walk up out of the workspace and resolves back to the same file. */
+export function captureBefore(cwd: string, parsed: unknown, roots?: readonly string[]): BeforeImage | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const p = (parsed as Record<string, unknown>)["path"];
   if (typeof p !== "string" || p.length === 0) return null;
   const abs = path.resolve(cwd, p);
   const rel = path.relative(cwd, abs);
-  if (rel.length === 0 || rel.startsWith("..") || path.isAbsolute(rel)) return null;
-  if (selfProtectedRel(rel)) return null;
+  if (rel.length === 0 || path.isAbsolute(rel)) return null;
+  if (rel.startsWith("..")) {
+    if (jailWritePath(cwd, p, roots ?? []) === null) return null;
+    if (selfProtectedAbs(abs)) return null;
+  } else if (selfProtectedRel(rel)) {
+    return null;
+  }
   try {
     return { rel, abs, content: fs.readFileSync(abs, "utf8") };
   } catch {
@@ -145,7 +166,11 @@ export function rollbackRun(cwd: string, runId: string): { ok: true; restored: s
   for (const e of [...entries].sort((a, b) => b.seq - a.seq)) {
     const abs = path.resolve(cwd, e.file);
     const rel = path.relative(cwd, abs);
-    if (rel.startsWith("..") || path.isAbsolute(rel) || selfProtectedRel(rel)) {
+    // A hand-edited manifest must still not restore over harness state, so the
+    // protected names are refused wherever they appear. Walking up out of the
+    // workspace is allowed: that is how an --add-dir target is recorded, and
+    // only a run holding that root could have written the entry.
+    if (path.isAbsolute(rel) || selfProtectedRel(rel) || selfProtectedAbs(abs)) {
       return { ok: false, error: `manifest targets a protected path (${e.file}) — refusing to restore anything` };
     }
     try {

@@ -59,7 +59,7 @@ export async function searchTool(
       break;
     }
     if (globRx && !globRx.test(rel) && !globRx.test(path.basename(rel))) continue;
-    const abs = jailPath(ctx.cwd, rel);
+    const abs = jailPath(ctx.cwd, rel, ctx.roots);
     if (abs === null) continue;
     let stat: fs.Stats;
     try {
