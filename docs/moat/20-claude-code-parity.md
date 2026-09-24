@@ -63,7 +63,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `cat file \| codewhip -p "query"` stdin piping | HAVE | `readStdin` (`src/run-output.ts:92`): stdin is the prompt when there is no argv prompt (`src/index.ts:2387`), and is appended as context when there is one (`src/index.ts:2406`) |
 | `--output-format text\|json\|stream-json` | HAVE | `src/run-output.ts:22` parse, `:161` result document, `:208` emit; NDJSON init/event/result on stream-json |
 | `--input-format stream-json` | **GAP-2** | absent |
-| `--json-schema` validated result | **GAP-2** | absent |
+| `--json-schema` validated result | **HAVE** | `src/structured.ts` — `parseSchema:34` (subset enforced at the door, names the offending keyword and its path), `validateJson:100`, `extractJson:223`; the gate is in the loop at `src/loop.ts:672` (one billed repair round, then `stopReason: "error"`); flags at `src/index.ts:666`/`:677`, resolved pre-flight at `:1236`; `structured_output` beside the prose at `src/run-output.ts:208` |
 | `--max-budget-usd` | HAVE | `src/index.ts:546` parse, `:1065` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1021`) |
 | `--max-turns` | ALIAS | `--max-steps 25` |
 | `--allowedTools` / `--disallowedTools` | HAVE | `src/tool-filter.ts:46` parse, `:146` match; `src/loop.ts:755` grant inside ask, `:715` refuse above the ladder; `src/index.ts:585`/`:593` (both spellings + `=` form) |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 37**, **PARTIAL 16**, **GAP 49**,
-i.e. **36.3%** at parity or better. Remaining GAP rows by wave: 2 → 3, 3 → 24,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 38**, **PARTIAL 16**, **GAP 48**,
+i.e. **37.3%** at parity or better. Remaining GAP rows by wave: 2 → 2, 3 → 24,
 4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -276,7 +276,7 @@ same call prints `▸ held write notes.md (default:write:ask)` and writes nothin
 
 Wave 2c (permission modes, extra roots, default mode) closed 3 rows:
 `--permission-mode`, `--add-dir`, `permissions.defaultMode`. HAVE-or-better
-34 → 37, GAP 52 → 49; the wave-2 remainder is now 3 rows
+34 → 37, GAP 52 → 49; the wave-2 remainder at that point was 3 rows
 (`--input-format stream-json`, `--json-schema`, programmatic entry). 28 new
 tests in `src/permission-mode.test.ts`, all 669 pre-existing tests untouched.
 Five rulings inside it:
@@ -338,6 +338,57 @@ rather than a shell, because Git-Bash rewrites POSIX paths in argv before the
 process sees them: the same absolute target reads `1: content from the extra
 dir` with the root and `read: path escapes workspace jail` without it.
 
+Wave 2d (validated output) closed 1 row: `--json-schema`. HAVE-or-better
+37 → 38, GAP 49 → 48; the wave-2 remainder is now 2 rows (`--input-format
+stream-json`, programmatic entry). 41 new tests in `src/structured.test.ts`,
+all 697 pre-existing tests untouched. Five rulings inside it:
+
+- **A gate that cannot fire must not look armed.** `--json-schema` enforces a
+  *documented subset* — `type`, `properties`, `required`, `additionalProperties`,
+  `items`, `enum`, `const`, `min`/`maxLength`, `pattern`, `min`/`max(Exclusive)imum`,
+  `min`/`maxItems` — and a schema naming anything else (`$ref`, `allOf`, `anyOf`,
+  `oneOf`, `not`, `if`, `format`, or a typo like `tipe`) is refused before the
+  run starts, naming the keyword and its path (`src/structured.ts:50`, checked
+  at `parseSchema:34`). The alternative — accept the document and ignore the
+  half of it that is hard — is worse than no flag, because the caller writes
+  `jq` against a contract nothing enforced.
+- **`integer` is a number, not the other way round**
+  (`src/structured.ts:86`/`:92`): a whole number satisfies `number`, a fraction
+  never satisfies `integer`. This is the one place where being laxer than the
+  letter of JSON Schema is the correct reading, and it is asserted rather than
+  implied.
+- **"I could not check it" is an error, not a pass.** `pattern` is only
+  evaluated against input under `MAX_PATTERN_INPUT` (16 KiB); over that the
+  validator reports the check it skipped (`src/structured.ts:18`) instead of
+  silently approving — same principle as the subset refusal, one scale down.
+- **The repair round is a real billed turn.** A miss pushes a `user` message
+  asking for the document again and `continue`s the existing step loop
+  (`src/loop.ts:672`, `MAX_REPAIRS = 1`), so `num_turns`, `steps`, token usage
+  and the cost receipt all show the extra spend — the metering path is not
+  bypassed to make validation look free. An answer that still fails ends the
+  run with `stopReason: "error"`: a wrong-shaped document is reported as a
+  failure, never as a result.
+- **Validation adds beside, never instead.** `structured_output` sits next to
+  `result` (`src/run-output.ts:208`, plus `structured_errors` /
+  `structured_repairs`), the prose answer is preserved, and in `-p` mode the
+  repair chatter is an event on stderr while stdout stays a single machine
+  document. Text mode prints the validated document — that is what the flag
+  was asked for — but the raw prose remains recoverable from the json envelope.
+
+`--plan` and `--json-schema` conflict is refused pre-flight
+(`src/index.ts:1243`): a plan is prose, and arming both would spend tokens
+producing a document the run has already decided not to act on. Resolved
+before any request goes out (`:1236`), unreadable `--json-schema-file` bails
+the same way, and the schema's size is reported in the init document as
+`json_schema_chars` (`:1381`) so a caller can see what it paid to enforce.
+
+Also verified against the real binary: asking for `{name, year}` with a schema
+requiring a `pattern` on `name` printed `!! --json-schema armed:…`, then
+`◈ structured answer rejected (2 problem(s)) — asking for a repair, attempt
+1/1`, then `{"name":"Windows","year":1985}` on stdout, with
+`receipt: 4494 prompt + 48 completion tokens / llm7:default` — two turns,
+charged as two turns.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -361,7 +412,9 @@ count is the instrument, not the memory of it.
    `--permission-mode` ladder + `--add-dir` + `permissions.defaultMode`
    **closed 2026-09-24** (`src/settings.ts`, `src/tools/jail.ts`,
    `src/loop.ts`, `src/checkpoints.ts`);
-   still open: `--input-format`/`--json-schema`, public
+   `--json-schema` **closed 2026-09-24** (`src/structured.ts`,
+   `src/loop.ts:672`, `src/run-output.ts`);
+   still open: `--input-format`/stream-json input, public
    programmatic entry.
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
