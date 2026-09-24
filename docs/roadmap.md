@@ -40,6 +40,16 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [x] **Todo tool** — `todo` list/replace/update over `.codewhip/todos.json`, harness-state allow (`default:todo:allow`), child-denied, redacted at save. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [x] **Custom slash commands** — `.codewhip/commands/*.md` + `$ARGUMENTS`, REPL `.help` + error-on-unknown, one-shot exact-match expansion. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [x] **Hooks** — `PreToolUse/PostToolUse/Stop` from self-protected `hooks.json`, fail-open-on-infra-failure, redaction-downstream, observe-only Stop. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
+- [x] **Claude Code parity program — waves 1–2 of 5.** Row-level build order
+  lives in `docs/moat/20-claude-code-parity.md` (the matrix counts itself:
+  `npm run parity`); this line is the pointer, not a second plan. Wave 1
+  (headless scripting) and Wave 2 (session naming/branching, run-scoped tool
+  filters, prompt surface, the permission-mode ladder, multi-root jail,
+  `--json-schema`, `--input-format stream-json`, and the programmatic entry
+  `src/sdk.ts`) closed 2026-09-24 — 40 HAVE/ALIAS, 16 PARTIAL, 46 GAP
+  (**39.2%**). Next is Wave 3: agent capability, 24 rows, led by parallel tool
+  exec and hook events 3→33. No row is closed by downgrading it, and the MCP
+  client row carries its own ruling before it lands.
 - [ ] **Pick the 90-day frame** — verifiable team delegation vs honest $0 on-ramp; running both produces a brand war (trust pitch vs anonymous free relays). Decision + analysis: `docs/moat/10-competitive-reality.md`.
 - [x] **Paper track: REOPENED as verdict-driven privilege (C3, ML frame).** 2026-09-20 ruling (`docs/moat/00-convergence.md`): single bet = induce per-repo least-privilege tool permissions from one-bit human verdicts + near-miss co-signals; target NeurIPS/ICML (main: method + sample-complexity; D&B: first public verdict-telemetry corpus). Shipped: core/surface boundary (`src/boundary.test.ts`, no deletions — registry/serve/TUI frozen as product surface), approval-shape telemetry on outcomes, `src/immunity/` samples+rules+miner+simuser+LLM baselines, 67-case escape suite (`npm run immunity`; first run found+fixed a real Windows-destructor escape), 16-seed robustness sweep (`--sim --seeds`), salted corpus export (`--export`), induced-set replay (`--replay`, P3 PASS). Protocol + results: `docs/moat/18-verdict-privilege-experiments.md`. Next: real dogfood telemetry (≥100 labeled events), capable-model baselines, arXiv. *(2026-09-18 physiology scaffold in `docs/moat/15-agent-physiology.md` stays as the frame; C2/C1 demoted to follow-up)*
 

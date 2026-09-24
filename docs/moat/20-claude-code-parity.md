@@ -58,20 +58,20 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
-| `claude "query"` interactive start | HAVE | `src/index.ts:2227` |
-| `-p/--print` headless one-shot | HAVE | `-p`/`--headless` (`src/index.ts:535`); `src/run-output.ts` owns stdout, prose moves to stderr. `--print` keeps its older share-markdown meaning — the long name diverges, the short flag does not |
-| `cat file \| codewhip -p "query"` stdin piping | HAVE | `readStdin` (`src/run-output.ts:92`): stdin is the prompt when there is no argv prompt (`src/index.ts:2387`), and is appended as context when there is one (`src/index.ts:2406`) |
+| `claude "query"` interactive start | HAVE | `src/index.ts:2948` bare `codewhip` on a TTY opens the REPL, `cmdRepl:1781`; a positional query is the first turn of a run (`:1475`) |
+| `-p/--print` headless one-shot | HAVE | `-p`/`--headless` (`src/index.ts:676`); `src/run-output.ts` owns stdout, prose moves to stderr. `--print` keeps its older share-markdown meaning — the long name diverges, the short flag does not |
+| `cat file \| codewhip -p "query"` stdin piping | HAVE | `readStdin` (`src/run-output.ts:92`): stdin is the prompt when there is no argv prompt (`src/index.ts:2952`), and is appended as context when there is one (`src/index.ts:2971`) |
 | `--output-format text\|json\|stream-json` | HAVE | `src/run-output.ts:22` parse, `:161` result document, `:208` emit; NDJSON init/event/result on stream-json |
-| `--input-format stream-json` | **HAVE** | `src/stream-input.ts` — `parseUserMessage:47` (one accepted shape; every refusal names what it saw), `inboundMessages:102` (lazy NDJSON generator, 64-message cap); flag at `src/index.ts:743` with the two conflicts at `:770`/`:775`, first message resolved pre-flight at `:1063`, the turn driver at `:1537` (`runTurn:1477`, session pin `:1536`, process-scoped budgets `:1457`) |
-| `--json-schema` validated result | **HAVE** | `src/structured.ts` — `parseSchema:34` (subset enforced at the door, names the offending keyword and its path), `validateJson:100`, `extractJson:223`; the gate is in the loop at `src/loop.ts:672` (one billed repair round, then `stopReason: "error"`); flags at `src/index.ts:666`/`:677`, resolved pre-flight at `:1236`; `structured_output` beside the prose at `src/run-output.ts:208` |
-| `--max-budget-usd` | HAVE | `src/index.ts:546` parse, `:1065` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1021`) |
+| `--input-format stream-json` | **HAVE** | `src/stream-input.ts` — `parseUserMessage:47` (one accepted shape; every refusal names what it saw), `inboundMessages:102` (lazy NDJSON generator, 64-message cap); flag at `src/index.ts:686` with the two conflicts at `:713`/`:718`, first message resolved pre-flight at `:1008`, the turn driver at `:1480` (`runTurn:1420`, session pin `:1481`, process-scoped budgets `:1400`) |
+| `--json-schema` validated result | **HAVE** | `src/structured.ts` — `parseSchema:34` (subset enforced at the door, names the offending keyword and its path), `validateJson:100`, `extractJson:223`; the gate is in the loop at `src/loop.ts:731` (one billed repair round, then `stopReason: "error"`); flags at `src/index.ts:618`/`:629`, resolved pre-flight at `:1251`; `structured_output` beside the prose at `src/run-output.ts:208` |
+| `--max-budget-usd` | HAVE | `src/index.ts:694` parse, `:1447` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1361`) |
 | `--max-turns` | ALIAS | `--max-steps 25` |
-| `--allowedTools` / `--disallowedTools` | HAVE | `src/tool-filter.ts:46` parse, `:146` match; `src/loop.ts:755` grant inside ask, `:715` refuse above the ladder; `src/index.ts:585`/`:593` (both spellings + `=` form) |
-| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:325`; flags at `src/index.ts:601`/`:609`/`:615`, file read pre-flight at `:1098` |
+| `--allowedTools` / `--disallowedTools` | HAVE | `src/tool-filter.ts:46` parse, `:146` match; `src/loop.ts:907` grant inside ask, `:863` refuse above the ladder; `src/index.ts:587`/`:595` (both spellings + `=` form) |
+| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:404`; flags at `src/index.ts:603`/`:611`/`:616`, file read pre-flight at `:1202` |
 | `--model` / `--fallback-model` | HAVE | `--model`, `--models`, `--failover`, `--free` |
 | `--effort low…max` | **GAP-3** | no thinking-budget control |
-| `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:604`, precedence `:1028`, ladder rungs `src/loop.ts:784`–`:822`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
-| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:616`, validation before the run `:1031`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:40` → read/edit/write/search → `src/subagents.ts:242`. Was a single-cwd jail before Wave 2c |
+| `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:569`, precedence `:1056`, ladder rungs `src/loop.ts:897`–`:1001`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
+| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:581`, validation before the run `:1059`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:51` → read/edit/write/search → `src/subagents.ts:242`. Was a single-cwd jail before Wave 2c |
 | `--bare` (skip discovery of hooks/skills/commands) | **GAP-4** | absent |
 | `--debug`, `--debug-file` | **GAP-3** | absent |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
@@ -92,8 +92,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 |---|---|---|
 | `-c/--continue` most-recent | HAVE | `--continue` |
 | `-r <id-or-name>` resume by name | HAVE | `-r`/`--resume`/`--continue` all take a name or a ≥4-char id prefix — `src/sessions.ts:199` (`resolveSession`), `src/sessions.ts:217` (`loadSession`) |
-| `--name` / `--fork-session` / `/branch` | HAVE | `--name` + `--fork-session` at `src/index.ts:580`/`src/index.ts:595`, identity decided by `sessionIdentity` (`src/sessions.ts:187`); `.branch` in the REPL at `src/index.ts:1415` |
-| `/rename`, `/tag`, `tagSession()` | HAVE | `codewhip sessions rename\|tag` (`src/index.ts:1329`) over `labelSession` (`src/sessions.ts:263`); REPL `.rename`/`.tag` at `src/index.ts:1393` |
+| `--name` / `--fork-session` / `/branch` | HAVE | `--name` + `--fork-session` at `src/index.ts:659`/`src/index.ts:674`, identity decided by `sessionIdentity` (`src/sessions.ts:187`); `.branch` in the REPL at `src/index.ts:1737` |
+| `/rename`, `/tag`, `tagSession()` | HAVE | `codewhip sessions rename\|tag` (`src/index.ts:1654`) over `labelSession` (`src/sessions.ts:263`); REPL `.rename`/`.tag` at `src/index.ts:1715` |
 | `/clear [name]`, `/compact [instructions]` | PARTIAL | compaction is automatic and model-aware (`src/compact.ts`); no manual `/compact`, no instructions arg |
 | `--autocompact auto\|tokens` | ALIAS | `compactTokens: 0` to disable |
 | `/context`, `/usage`, `/cost` | PARTIAL | receipts print tokens/model/`$`; no context grid |
@@ -114,7 +114,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
 | allow/deny/ask rules in settings | HAVE | `policy.md`, `codewhip-policy.yaml`, `src/policy.ts` |
-| `permissions.defaultMode` | **HAVE** | `src/settings.ts:56` `mergeFile` reads `defaultMode` (`:85`) and its twin `additionalDirectories` (`:95`), reporting and ignoring a bad value; `:117` `loadSettings` layers user then project, project wins; consumed once at `src/index.ts:1025` |
+| `permissions.defaultMode` | **HAVE** | `src/settings.ts:56` `mergeFile` reads `defaultMode` (`:85`) and its twin `additionalDirectories` (`:95`), reporting and ignoring a bad value; `:117` `loadSettings` layers user then project, project wins; consumed once at `src/index.ts:1053` |
 | `EnterPlanMode`/`ExitPlanMode` approval flow | PARTIAL | `--plan` is run-scoped, not mid-run enter/exit |
 | Auto mode + classifier rules | PARTIAL → **GAP-3** | the C3 verdict-induction research *is* this, but it is not wired as a runtime mode |
 | `/fewer-permission-prompts` (scan transcripts → allowlist) | ALIAS | `policy candidates` / `policy approve` from declines |
@@ -140,7 +140,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | LSP tool | **GAP-5** | absent |
 | CronCreate/List/Delete, RemoteTrigger, PushNotification, SendUserFile, EndConversation, ReportFindings, Artifact | N/S | cloud/push platform surface |
 | Image input to Read | **GAP-3** | `LoopMsg.content` is `string` (`src/provider-port.ts:18`); `read` refuses binary (`src/tools/read.ts:68`) |
-| Parallel tool execution | **GAP-3** | `src/loop.ts:577` sequential `for`; deferred in `torvalds-architecture-review.md:105` |
+| Parallel tool execution | **GAP-3** | `src/loop.ts:755` sequential `for`; deferred in `torvalds-architecture-review.md:105` |
 | Prompt caching | **GAP-3** | no `cache_control` anywhere in `src/` |
 
 ## E. Subagents and delegation
@@ -178,7 +178,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | MCP resources/prompts as tools and slash commands | **GAP-3** | absent |
 | `mcp__server__tool` namespacing into the permission layer | **GAP-3** | must be designed with policy, not bolted on |
 | `allowedMcpServers` / deny lists (enterprise control) | **GAP-3** | same ruling |
-| Agent SDK (TS/Python `query()`, `canUseTool`, custom tools) | PARTIAL → **GAP-2** | `src/loop.ts` is importable and core-clean (`src/boundary.test.ts`) but there is no public programmatic entry |
+| Agent SDK (TS/Python `query()`, `canUseTool`, custom tools) | PARTIAL → **GAP-2** → **HAVE** · Python ALIAS | `src/sdk.ts:480` `query()`, `:161` `tool()`, `:319` `askUserFor` (`canUseTool` on the ask rung); gates resolved at `:217` before any call. Python drives the same engine over NDJSON (`--input-format`/`--output-format stream-json`), without an in-process decider |
 
 ## H. Memory and project files
 
@@ -212,9 +212,9 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 39**, **PARTIAL 16**, **GAP 47**,
-i.e. **38.2%** at parity or better. Remaining GAP rows by wave: 2 → 1, 3 → 24,
-4 → 13, 5 → 9.
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 40**, **PARTIAL 16**, **GAP 46**,
+i.e. **39.2%** at parity or better. Remaining GAP rows by wave: 3 → 24, 4 → 13,
+5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
@@ -288,7 +288,7 @@ Five rulings inside it:
   asserts it in the test that matters: with mode *and* `--yolo` *and* an
   allowed-tools match, a `rm -rf` still dies on `deny:denylist:`. `manual` is the
   mirror image: it is the only rung that can be *overridden by nothing*, not
-  `--allowed-tools` (`src/loop.ts:784`), not a remembered rule (`:848`), not
+  `--allowed-tools` (`src/loop.ts:907`), not a remembered rule (`:974`), not
   `--yolo`, because an operator who says "ask me" has already answered the
   question the other flags would answer.
 - **Six modes, not seven.** `auto` is deliberately absent: it names a
@@ -297,7 +297,7 @@ Five rulings inside it:
   the §C classifier row, which stays GAP-3.
 - **`plan` is structural, not a permission.** `--plan` outranks `--yolo` and
   `--allowed-tools` (creed, `docs/moat/00-convergence.md`), so a mode string
-  cannot un-plan a run either: `src/loop.ts:335` ORs the two sources and the
+  cannot un-plan a run either: `src/loop.ts:383` ORs the two sources and the
   read-only refusal fires from `planMode`, above every grant.
 - **A wider jail is still only a jail.** `--add-dir` roots are realpath'd,
   existence-checked, capped at 16 and reported when dropped
@@ -363,7 +363,7 @@ all 697 pre-existing tests untouched. Five rulings inside it:
   silently approving — same principle as the subset refusal, one scale down.
 - **The repair round is a real billed turn.** A miss pushes a `user` message
   asking for the document again and `continue`s the existing step loop
-  (`src/loop.ts:672`, `MAX_REPAIRS = 1`), so `num_turns`, `steps`, token usage
+  (`src/loop.ts:731`, `MAX_REPAIRS = 1`), so `num_turns`, `steps`, token usage
   and the cost receipt all show the extra spend — the metering path is not
   bypassed to make validation look free. An answer that still fails ends the
   run with `stopReason: "error"`: a wrong-shaped document is reported as a
@@ -376,11 +376,11 @@ all 697 pre-existing tests untouched. Five rulings inside it:
   was asked for — but the raw prose remains recoverable from the json envelope.
 
 `--plan` and `--json-schema` conflict is refused pre-flight
-(`src/index.ts:1243`): a plan is prose, and arming both would spend tokens
+(`src/index.ts:1239`): a plan is prose, and arming both would spend tokens
 producing a document the run has already decided not to act on. Resolved
-before any request goes out (`:1236`), unreadable `--json-schema-file` bails
+before any request goes out (`:1251`), unreadable `--json-schema-file` bails
 the same way, and the schema's size is reported in the init document as
-`json_schema_chars` (`:1381`) so a caller can see what it paid to enforce.
+`json_schema_chars` (`:1378`) so a caller can see what it paid to enforce.
 
 Also verified against the real binary: asking for `{name, year}` with a schema
 requiring a `pattern` on `name` printed `!! --json-schema armed:…`, then
@@ -414,15 +414,15 @@ untouched. Five rulings inside it:
   prompt either, and asks stay held and denied as under any `-p` run.
 - **N turns cannot spend N times the cap.** `agentLoop` is untouched — each
   turn is an ordinary run whose transcript is fed back as `history`
-  (`src/index.ts:1572`), which keeps step budgets, the policy ladder and
+  (`src/index.ts:1515`), which keeps step budgets, the policy ladder and
   per-run audit records meaningful. What moves to process scope is the metering
-  (`src/index.ts:1457`): `--max-budget-usd` is checked against the turns
+  (`src/index.ts:1400`): `--max-budget-usd` is checked against the turns
   already spent, and each turn's `--token-budget` is what remains — while the
   `result` envelope keeps reporting the configured ceiling, not the residual.
 - **One session, one result line per turn.** A turn is not merged into a bigger
   document: each finished turn emits its own `result` with its own `run_id`
   and receipt, and the session file is pinned to the first turn
-  (`src/index.ts:1536`) so a stream accumulates into one transcript instead of
+  (`src/index.ts:1481`) so a stream accumulates into one transcript instead of
   one file per message. Requiring `--output-format stream-json` is the same
   claim from the other side — one `json` document for N turns would have to
   drop N-1 receipts.
@@ -441,6 +441,55 @@ Two negative paths, same run: a forged `{"type":"assistant",…}` printed
 hand still reported normally; a provider 502 on turn 1 printed
 `codewhip: turn 1 ended as error — the rest of stdin is not read` instead of
 billing the rest of the queue.
+
+Wave 2f (the programmatic entry) closed the last row of wave 2: `query()`,
+`tool()`, `canUseTool`. HAVE-or-better 39 → 40, GAP 47 → 46, wave 2 → 0. 11 new
+tests in `src/sdk.test.ts`, and `src/sdk.ts` is classified surface in
+`src/boundary.test.ts` (it resolves providers, keys and consent, then calls
+into core — never the reverse). Four rulings inside it:
+
+- **The SDK is a mouth, not a second engine.** Every gate is the CLI's own
+  function on the same path: `resolveRoute` (so a `private` prompt still needs
+  an explicit provider), `isModelAllowed` before `resolveKey` before
+  `makePortForConfig` (`src/sdk.ts:267`, `:272`), the unpriced-route refusal of
+  a dollar ceiling (`:284`), plan mode, `listRules`, `loadHooks` once per turn.
+  A gate that refuses throws from the first iteration, so a call this module
+  rejects never contacts a provider — the test for that asserts the *order*
+  (enabling the model moves the refusal to the credential check), not just the
+  message.
+- **`canUseTool` sits on one rung and cannot climb.** It is mounted where the
+  ladder reaches `ask`, which is the only place a host decider exists: a policy
+  deny, plan mode, the denylist and `disallowedTools` never call it, so a host
+  can refuse more and never less. `loop.ts:86` gains `askUserIsHost` for exactly
+  one reason — the non-TTY rung exists because a terminal prompt needs a
+  terminal, and an in-process callback does not. The CLI never sets it; an ask
+  with no `canUseTool` stays held and denied.
+- **No `updatedInput`, no host prose into the transcript.** Policy graded one
+  string, the audit hashed that string, and the remembered shape was cut from
+  it; swapping the arguments after the decision would make the trail describe
+  bytes that were never executed, so the field is absent from the type and a
+  test sends one anyway to pin that the handler still receives `{"id":7}`.
+  A deny's `message` is likewise not forwarded — a caller's text arriving as a
+  tool result is a new injection path, and the loop's own refusal is already
+  audited. A decider that throws or answers nonsense is a bug in the host, and
+  the safe reading of that bug is the rung it was asked about: deny.
+- **`port` is a convenience, not a privilege boundary.** Supplying a transport
+  replaces the provider/key lookup and nothing else — policy, budgets, audit
+  and the ask ladder are downstream of it either way, and `dist/loop.js` has
+  never been closed. Pretending otherwise would be marketing, not a gate.
+
+Also verified against the real binary, importing `dist/sdk.js` from outside the
+repo (`pollinations:openai-fast`, one host tool, a `canUseTool` that logs and
+allows, `maxTurns 4`): `init: pollinations:openai-fast mode=default
+custom=["lookup_bug"]`, `[host decider] lookup_bug rule=default:host-tool:ask
+subject={"id":42}`, `result: subtype=success turns=2 tools=1`, receipt
+`3083 prompt + 119 completion tokens / pollinations:openai-fast 3083+119`,
+`total_cost_usd=null` and `cost: cost untracked (see https://pollinations.ai)`
+— an unpriced route reports unpriced, never a fake 0 — with
+`trace: [{seq:1, tool:"lookup_bug", policy:"allow:default:host-tool:ask",
+actor:"human", subject:"{\"id\":42}"}]` and a one-sentence answer that quoted
+the tool's output. The declarations ship too (`dist/sdk.d.ts`), so the entry is
+typed from the package, not from the source tree.
 
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
@@ -466,10 +515,13 @@ count is the instrument, not the memory of it.
    **closed 2026-09-24** (`src/settings.ts`, `src/tools/jail.ts`,
    `src/loop.ts`, `src/checkpoints.ts`);
    `--json-schema` **closed 2026-09-24** (`src/structured.ts`,
-   `src/loop.ts:672`, `src/run-output.ts`);
+   `src/loop.ts:731`, `src/run-output.ts`);
    `--input-format stream-json` **closed 2026-09-24** (`src/stream-input.ts`,
-   `src/index.ts:1537`);
-   still open: public programmatic entry (the Agent SDK row).
+   `src/index.ts:1480`);
+   the public programmatic entry **closed 2026-09-24** (`src/sdk.ts` —
+   `query()`/`tool()`/`canUseTool`, on top of the host-tool substrate in
+   `src/tools/registry.ts` and the structured ask in `src/loop.ts`). **Wave 2
+   is complete: no row is left in it.**
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
    subagent frontmatter, task-list tool, `AskUserQuestion`, web search tool,

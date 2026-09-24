@@ -240,6 +240,34 @@ parse time there rather than silently doing nothing.
   status column now reads left-to-right, final state wins. An invented status
   is now an error rather than a dropped row, so the instrument cannot be
   quietly flattered. `npm run parity` is the gate on claiming completion.
+- **Host-provided tools, and an ask that carries its own evidence.**
+  `agentLoop` accepts `customTools` — functions a caller in the same process
+  offers the model. A host tool inherits the fail-closed defaults rather than a
+  private path around them: it has no policy row of its own (so it asks every
+  time), is never remembered, never memoized, is refused by plan mode and
+  refused inside a `delegate` child — while the denylist and a `policy.md`
+  `deny <tool>:<shape>` still bite. The ask callback gained a second argument
+  (`{tool, subject, ruleId, …}`), so a decider sees the exact subject policy was
+  graded against instead of a display string. Cost behaviour is unchanged: the
+  receipt line still prints `tokens / model mix / $`, and an unmeterable route
+  still prints `cost untracked`. 9 tests (`src/host-tools.test.ts`).
+- **The programmatic entry: `query()`, `tool()` and `canUseTool`.**
+  Parity-matrix Wave 2f (`docs/moat/20-claude-code-parity.md`), which closes
+  that wave. `src/sdk.ts` is a second mouth on one engine, not a second engine:
+  `query()` resolves the route with the CLI's own `resolveRoute` → allowlist →
+  `resolveKey` chain, refuses a dollar ceiling on an unpriced route, honours
+  plan mode, re-reads hooks and remembered rules per turn, and yields the same
+  `init` / `event` / `result` documents `--output-format stream-json` writes —
+  receipt included, `total_cost_usd` still `null` on an unpriced hop.
+  `canUseTool` is mounted on the `ask` rung only, so a host decider can refuse
+  more than the harness, never less; a gate that refuses throws `SdkError` from
+  the first iteration, having contacted no provider. Three affordances are
+  deliberately absent — `updatedInput`, a host-supplied deny message, and any
+  way to talk past a deny — and each absence is recorded as a ruling.
+  `package.json` publishes `main`/`exports` → `dist/sdk.js` (the `bin` is
+  unchanged); Python and any other language drive the same engine over NDJSON.
+  11 tests (`src/sdk.test.ts`), plus a live run of the built binary on the
+  keyless `pollinations:openai-fast` route at $0.0000.
 
 ### Changed
 
