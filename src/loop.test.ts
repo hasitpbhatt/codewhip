@@ -523,7 +523,7 @@ describe("loop", () => {
       failovers: [{ label: "groq", model: "m1", port: t1.port }],
       onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
     });
-    ok(r.error !== undefined && r.error.includes("something else"), r.error);
+    ok(r.error !== undefined && r.error.includes("something else"), `error was: ${r.error}`);
     strictEqual(r.failovers.length, 0);
     strictEqual(t1.record.length, 0);
   });
@@ -755,7 +755,7 @@ describe("loop", () => {
       failovers: [{ label: "groq", model: "m1", port: t1.port }],
       onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
     });
-    ok(r.error !== undefined && r.error.includes("invalid key"), r.error);
+    ok(r.error !== undefined && r.error.includes("invalid key"), `error was: ${r.error}`);
     strictEqual(r.failovers.length, 0);
     strictEqual(primary.record.length, 1);
     strictEqual(t1.record.length, 0);
@@ -797,7 +797,7 @@ describe("loop", () => {
       failovers: [{ label: "groq", model: "m1", port: t1.port }],
       onEvent: () => { /* no-op */ }, remembered: listRules(cwd),
     });
-    ok(r.error !== undefined && r.error.includes("retry list exhausted"), r.error);
+    ok(r.error !== undefined && r.error.includes("retry list exhausted"), `error was: ${r.error}`);
     strictEqual(r.failovers.length, 1);
     strictEqual(r.failovers[0]?.to, "groq:m1");
     strictEqual(primary.record.length, 1);
