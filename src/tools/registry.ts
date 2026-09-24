@@ -8,7 +8,7 @@ import { BASH_TIMEOUT_MS, bashTool, isBashArgs } from "./bash.js";
 import { WEBFETCH_TIMEOUT_MS, isWebfetchArgs, webfetchTool } from "./webfetch.js";
 import { delegateTool } from "./delegate.js";
 import { delegateManyTool } from "./delegate_many.js";
-import { runInBackgroundTool, taskOutputTool, taskStopTool } from "./background.js";
+import { runInBackgroundTool, taskOutputTool, taskStopTool } from "./background-tools.js";
 import { isTodoArgs, todoTool } from "./todo.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json

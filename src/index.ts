@@ -20,7 +20,7 @@ import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRe
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
-import { getTaskStatuses } from "./tools/background.js";
+import { getTaskStatuses } from "./tools/background-status.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
 import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";

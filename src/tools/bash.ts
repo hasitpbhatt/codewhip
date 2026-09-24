@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ToolContext, ToolResult } from "./types.js";
-import { CHAIN_RX, matchDenylist, matchScriptBlock, matchWorktreeEscape } from "../policy.js";
+import { commandGuard } from "./shell-guard.js";
 
 export const BASH_TIMEOUT_MS = 30000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -26,29 +26,9 @@ export async function bashTool(
   signal?: AbortSignal
 ): Promise<ToolResult> {
   const command = args.command.trim();
-  if (command.length === 0) {
-    return { ok: false, output: "bash: missing required arg `command` (string)" };
-  }
-  if (command.length > 2000) {
-    return { ok: false, output: "bash: `command` too long (max 2000 chars)" };
-  }
-  const denied = matchDenylist(command);
-  if (denied !== null) {
-    return { ok: false, output: `bash: denied by denylist:${denied} (non-overridable)` };
-  }
-  // Defense-in-depth: the loop's policy denies chaining before exec, but the
-  // shell is a privileged primitive — refuse separators here too so a future
-  // non-loop caller can't smuggle statements past the prefix allowlist.
-  if (CHAIN_RX.test(command)) {
-    return { ok: false, output: "bash: shell chaining/statement separation is denied (newlines, ;, |, &, <, >, `, $())" };
-  }
-  const escape = matchWorktreeEscape(command);
-  if (escape !== null) {
-    return { ok: false, output: `bash: denied — ${escape} (non-overridable)` };
-  }
-  const block = matchScriptBlock(command);
-  if (block !== null) {
-    return { ok: false, output: `bash: denied — ${block} (non-overridable)` };
+  const refused = commandGuard(command);
+  if (refused !== null) {
+    return { ok: false, output: refused };
   }
   const timeout = args.timeoutMs ?? BASH_TIMEOUT_MS;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 120000) {
