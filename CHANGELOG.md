@@ -91,6 +91,14 @@ pointer) except where noted; the free chain is unchanged (43 hops).
 - **Optional TUI peer renamed `opentui` → `@opentui/core` (>=0.5.0)** and
   `--tui` wired to its real API; every missing-TUI path degrades gracefully
   instead of throwing.
+- **Tool modules split back under the size bar** — `background` 383 → 124
+  (process lifecycle / registration+specs / behaviour), `webfetch` 160 → 127
+  (html→text extracted), `delegate_many` 156 → 142 and `delegate` 114 → 99
+  (shared `child-run.ts`), `search` 153 → 100 (filesystem walk extracted).
+  `bash` and the background tools now share one `shell-guard.ts`, so the two
+  shell screens cannot drift — background commands are trimmed before the
+  screen and before spawn, as `bash` already did. No behaviour change beyond
+  that; the `boundary.test.ts` allowlist covers the seven new core modules.
 
 ### Fixed
 
