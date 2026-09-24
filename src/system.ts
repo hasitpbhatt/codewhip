@@ -23,3 +23,49 @@ export const SYSTEM_PROMPT = [
   "- transient failure (network, timeout, block, no match) → diagnose and vary: different arguments, smaller scope, another tool, another source. Two honest variants of one approach, then report. Report what failed and what you tried. Never fake success.",
   "Answer shape: lead with the outcome (\"fixed X by Y\"), then the evidence (files touched, commands run). Never invent file contents; never print secrets. Finish with a short summary of what was done — receipts are the harness's job.",
 ].join("\n");
+
+/** Ceiling for `--append-system-prompt[-file]`: it re-pays on every turn of
+ * the run, and compaction cannot touch the system message. */
+export const APPEND_MAX_CHARS = 8000;
+
+export type SystemPromptParts = {
+  /** Base text: the main prompt, or an agent's own body for a child run. */
+  base?: string;
+  /** The human's `--append-system-prompt` / `-file` text, already read. */
+  append?: string;
+  planMode?: boolean;
+  isChild?: boolean;
+  /** Pre-formatted delegable-agent roster ("- name: description" lines). */
+  roster?: string;
+  /**
+   * `--exclude-dynamic-system-prompt-sections`: drop the run-dynamic roster.
+   * The plan-mode note is NOT droppable — it states which calls the harness
+   * will refuse, and a prompt that hides a refusal produces a model that
+   * retries it. Only advertising costs are optional here.
+   */
+  excludeDynamicSections?: boolean;
+};
+
+/**
+ * Compose the run's system message. Pure and exported so the ordering rule is
+ * testable without a provider: harness policy first (it must outrank anything
+ * a human appends), then per-run advertising, then the human's own words last
+ * — the position a reader scans for "what is special about THIS run".
+ */
+export function composeSystemPrompt(parts: SystemPromptParts): string {
+  const base = parts.base ?? SYSTEM_PROMPT;
+  const sections = [base];
+  if (parts.planMode === true) {
+    sections.push(
+      parts.isChild === true
+        ? "READ-ONLY SUBAGENT RUN: edit/write/bash/delegate/webfetch are refused by the harness (no mutations, no network). Investigate the workspace freely, then answer with your findings."
+        : "PLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan."
+    );
+  }
+  if (parts.isChild !== true && parts.excludeDynamicSections !== true && (parts.roster ?? "").length > 0) {
+    sections.push(`Delegable subagents (delegate / delegate_many tools):\n${parts.roster}`);
+  }
+  const append = parts.append ?? "";
+  if (append.length > 0) sections.push(append.slice(0, APPEND_MAX_CHARS));
+  return sections.join("\n\n");
+}

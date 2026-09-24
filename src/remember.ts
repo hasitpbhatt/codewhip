@@ -32,6 +32,13 @@ export const MEMORABLE_SINGLE_HEADS: string[] = [
  * channel the curation list must never store. */
 const UNMEMORABLE_RX = /[;&|<>]|`|\$\(|\n|\r|\$[A-Za-z_{]/;
 
+/** True when text carries a statement separator, redirect or expansion.
+ * One screen for every grant path: remembered-rule curation and the
+ * command-line tool filters must refuse the same inputs. */
+export function hasShellSeparators(raw: string): boolean {
+  return UNMEMORABLE_RX.test(raw);
+}
+
 /** Shape is `${head} *`; matching uses startsWith on the head prefix. */
 export type Shape = string;
 

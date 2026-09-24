@@ -83,6 +83,42 @@ parse time there rather than silently doing nothing.
     `tags`, `parent`. Old files read unchanged; sessions were never one of the
     frozen schemas (policy, audit and memory are — `docs/moat/00-convergence.md`).
 
+- **Run-scoped tool filters and prompt surface: `--allowed-tools`,
+  `--disallowed-tools`, `--append-system-prompt[-file]`,
+  `--exclude-dynamic-system-prompt-sections`.** Parity-matrix Wave 2b; closes
+  two GAP-2 rows.
+  - `--allowed-tools read,bash(git status *)` answers an *ask* without a prompt
+    for this run only. Nothing is written to disk — this is the rung between
+    `y` (once) and `a` (forever), and it is what makes a headless run able to
+    do targeted work without `--yolo`. It never outranks a policy deny, never
+    outranks `--plan`, and never covers a `.codewhip/` path, so it cannot widen
+    the denylist's reach. `--allowedTools` is accepted too, and an allow is
+    consulted before `--yolo` so the audit line names the flag that granted it.
+  - `--disallowed-tools webfetch,edit(src/a.ts)` refuses *above* the ladder: no
+    `--yolo`, remembered rule or human yes lets it through, and a bare tool name
+    is dropped from the advertised tool list so the model is never offered a
+    call this run refuses. Where the two lists overlap, the disallow wins.
+    Filtering out `read` or `search` also refuses `delegate` — a subagent's only
+    authority is reading, so delegation would be reading by proxy.
+  - The grammar is the one remembered rules already use (bash head plus
+    optional trailing ` *`, exact path, one https origin), and a pattern carrying
+    a shell separator is refused at parse time. What the command line adds is
+    authority, not syntax: a typed pattern may name any head, because `--yolo`
+    already proves the human can grant more broadly than the click-time
+    curation list.
+  - `--append-system-prompt <text>` / `--append-system-prompt-file <path>` put
+    the operator's own words last in the system message, capped at 8000 chars
+    because it re-pays on every turn; the file is read pre-flight, so a bad path
+    fails before a token is spent. `--exclude-dynamic-system-prompt-sections`
+    drops the per-run delegable-agent roster — advertising only; the plan-mode
+    and refusal notes are never dropped, because a prompt that hides a refusal
+    produces a model that retries it.
+  - Every flag is announced on stderr with an `!!` banner naming its scope, and
+    `--output-format stream-json`'s `init` line gains `allowed_tools`,
+    `disallowed_tools`, `appended_system_prompt_chars` and
+    `exclude_dynamic_system_prompt_sections`. Cost behaviour is unchanged:
+    receipts print exactly as before.
+
 ### Changed
 
 - **README cut from 734 lines to 162.** The per-feature essays and the

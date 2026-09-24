@@ -7,7 +7,9 @@ import { argsHash, sha256Hex } from "./hash.js";
 import { redactSecrets } from "./redact.js";
 import { appendOutcome, newRunId, promptHash, type FailoverRecord, type OutcomeToolCall, type UsageBucket } from "./outcomes.js";
 import { appendEntry, type AuditActor } from "./audit.js";
-import { SYSTEM_PROMPT } from "./system.js";
+import { composeSystemPrompt } from "./system.js";
+import { delegationBlind, describeToolFilter, matchToolFilter } from "./tool-filter.js";
+import type { ToolFilter } from "./tool-filter.js";
 import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
 import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
@@ -109,6 +111,23 @@ export type LoopArgs = {
    * allowed for research; the run's output is the plan.
    */
   planMode?: boolean;
+  /**
+   * `--allowed-tools`: shapes the human named on the command line for THIS run
+   * only. Consulted inside the ask branch, so it can pre-empt a prompt but
+   * never a policy deny, never plan mode, and never a self-protected path.
+   */
+  allowedTools?: ToolFilter[];
+  /**
+   * `--disallowed-tools`: shapes refused before the ladder, so no grant — not
+   * `--yolo`, not a remembered rule, not a human yes — can let them through.
+   * A bare tool name also removes its spec, so the model is never offered a
+   * call this run refuses.
+   */
+  disallowedTools?: ToolFilter[];
+  /** `--append-system-prompt[-file]` — the human's own text, appended last. */
+  appendSystemPrompt?: string;
+  /** `--exclude-dynamic-system-prompt-sections` — drop the agent roster. */
+  excludeDynamicSections?: boolean;
   /** Bootstrap list of remembered rules (index.ts loads once; loop appends on `a`). */
   remembered?: RememberedRule[];
   /**
@@ -289,16 +308,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const depth = args.depth ?? 0;
   const isChild = depth > 0;
   let agentFileErrors: string[] = [];
-  // Child runs get the agent's own body; plan mode appends the read-only
-  // note with wording that matches the audience (a child reports findings,
-  // a top-level --plan run's output IS the plan).
-  const baseSystem = args.systemPrompt ?? SYSTEM_PROMPT;
-  let systemContent =
-    args.planMode === true
-      ? isChild
-        ? `${baseSystem}\n\nREAD-ONLY SUBAGENT RUN: edit/write/bash/delegate/webfetch are refused by the harness (no mutations, no network). Investigate the workspace freely, then answer with your findings.`
-        : `${baseSystem}\n\nPLAN MODE: this run is read-only — edit/write/bash are refused by the harness. Investigate freely, then make your final answer the implementation plan.`
-      : baseSystem;
+  // Child runs get the agent's own body; composition lives in system.ts so the
+  // ordering rule (harness policy, then per-run advertising, then the human's
+  // appended text) is testable without a provider.
+  let roster = "";
   if (!isChild) {
     // Delegation roster rides the system message (dynamic per run — agent
     // files are user-authored), keeping the delegate tool spec static. A
@@ -307,11 +320,20 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     // a pile of agent files is a per-turn token cost compaction can't touch.
     const { agents, errors } = listAgentsWithErrors(args.cwd);
     agentFileErrors = errors;
-    const roster = agents.slice(0, MAX_ROSTER).map((a) => `- ${a.name}: ${a.description}`).join("\n");
-    if (roster.length > 0) {
-      systemContent += `\n\nDelegable subagents (delegate / delegate_many tools):\n${roster}`;
-    }
+    roster = agents.slice(0, MAX_ROSTER).map((a) => `- ${a.name}: ${a.description}`).join("\n");
   }
+  const systemContent = composeSystemPrompt({
+    ...(args.systemPrompt === undefined ? {} : { base: args.systemPrompt }),
+    ...(args.appendSystemPrompt === undefined ? {} : { append: args.appendSystemPrompt }),
+    planMode: args.planMode === true,
+    isChild,
+    roster,
+    excludeDynamicSections: args.excludeDynamicSections === true,
+  });
+  // Filtered once, not per turn: every provider call in a run must advertise
+  // exactly the same toolset, or a failover mid-run changes the contract the
+  // transcript was written against.
+  const specs = toolSpecs(depth, args.disallowedTools);
   const messages: LoopMsg[] = [
     { role: "system", content: systemContent },
     ...(args.history ?? []),
@@ -475,7 +497,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         attempt = await current.port({
           model: current.model,
           messages,
-          tools: toolSpecs(depth),
+          tools: specs,
           signal: args.signal,
         });
       } catch (err) {
@@ -685,6 +707,32 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       const subject = permissionSubject(def.name, parsed, preview);
       subjectVal = subject;
+      // `--disallowed-tools` is run-scoped refusal, so it sits with plan mode
+      // ABOVE the ladder: no denylist match, remembered rule, human yes or
+      // --yolo can grant what the operator filtered out. On a conflict
+      // between the two lists the disallow wins, because that is the safe
+      // reading of a mistyped flag.
+      const banned = matchToolFilter(args.disallowedTools, def.name, subject);
+      if (banned !== null) {
+        const out = `refused for this run (--disallowed-tools ${describeToolFilter(banned)})`;
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "cli:disallowed", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (cli:disallowed)`);
+        continue;
+      }
+      // A subagent's whole authority is read+search, so a run that filtered
+      // either out cannot delegate — that would be reading by proxy. Checked
+      // here rather than threaded into child runs.
+      if (
+        (def.name === "delegate" || def.name === "delegate_many") &&
+        delegationBlind(args.disallowedTools)
+      ) {
+        const out = "delegate refused for this run: read and/or search are disallowed, and a subagent's only authority is reading";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "cli:disallowed:delegate", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (cli:disallowed:delegate)`);
+        continue;
+      }
       const verdict = checkPermission(def.name, subject, promoted, {
         skipPolicyDenies: args.policySurface === "prompt",
       });
@@ -699,7 +747,27 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       let grantActor: AuditActor = "policy";
       let ruleId = verdict.ruleId;
       if (verdict.decision === "ask") {
-        if (args.yolo) {
+        // `--allowed-tools` is a human grant typed on the command line, so it
+        // is consulted before --yolo (whose audit line would be the less
+        // accurate story when both are present) and always after the deny
+        // verdict above. The self-protected guard still applies: naming a tool
+        // here buys no more authority over .codewhip/ than pressing `a` does.
+        const granted = matchToolFilter(args.allowedTools, def.name, subject);
+        const grantProtected =
+          granted !== null &&
+          (targetsSelfProtected(subject) ||
+            (granted.shape !== null && targetsSelfProtected(granted.shape)));
+        if (granted !== null && !grantProtected) {
+          proceed = true;
+          grantActor = "human";
+          ruleId = `${verdict.ruleId}+allowed-tools`;
+        } else if (granted !== null) {
+          const out = `--allowed-tools grant refused: ${preview} touches a self-protected path`;
+          messages.push({ role: "tool", toolCallId: call.id, content: out });
+          record("deny", `${verdict.ruleId}+allowed-tools-protected`, sha256Hex(out), "policy", out);
+          emit("tool", `deny ${call.name} ${preview} (allowed-tools-protected)`);
+          continue;
+        } else if (args.yolo) {
           proceed = true;
           grantActor = "yolo";
           ruleId = `${verdict.ruleId}+yolo`;

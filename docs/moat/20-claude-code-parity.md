@@ -66,8 +66,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--json-schema` validated result | **GAP-2** | absent |
 | `--max-budget-usd` | HAVE | `src/index.ts:546` parse, `:1065` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1021`) |
 | `--max-turns` | ALIAS | `--max-steps 25` |
-| `--allowedTools` / `--disallowedTools` | **GAP-2** | policy + `remembered.jsonl` are persistent, not session-scoped tool filters |
-| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | **GAP-2** | `src/system.ts` fixed prompt, no injection point |
+| `--allowedTools` / `--disallowedTools` | HAVE | `src/tool-filter.ts:46` parse, `:146` match; `src/loop.ts:755` grant inside ask, `:715` refuse above the ladder; `src/index.ts:585`/`:593` (both spellings + `=` form) |
+| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:325`; flags at `src/index.ts:601`/`:609`/`:615`, file read pre-flight at `:1098` |
 | `--model` / `--fallback-model` | HAVE | `--model`, `--models`, `--failover`, `--free` |
 | `--effort low…max` | **GAP-3** | no thinking-budget control |
 | `--permission-mode` 7 modes | PARTIAL → **GAP-2** | `--plan` + `--yolo` only; no `acceptEdits`, `dontAsk`, `manual` |
@@ -211,8 +211,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 ## Score
 
 Counted mechanically from the rows below, N/S excluded: **102 in-scope rows** —
-**HAVE/ALIAS/HAVE-plus 32**, **PARTIAL 16**, **GAP 54**, i.e. **31.4%** at parity
-or better. Remaining GAP rows by wave: 2 → 8, 3 → 24, 4 → 13, 5 → 9.
+**HAVE/ALIAS/HAVE-plus 34**, **PARTIAL 16**, **GAP 52**, i.e. **33.3%** at parity
+or better. Remaining GAP rows by wave: 2 → 6, 3 → 24, 4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
@@ -244,6 +244,34 @@ copy from Claude Code: names are one word with no spaces (a name is the handle
 resume), and a name collision is refused before the run starts rather than
 after it has spent a transcript nobody can find by name again.
 
+Wave 2b (request shaping) closed 2 rows: `--allowed-tools`/`--disallowed-tools`
+(and the camelCase spellings) and the system-prompt surface
+(`--append-system-prompt`, `-file`, `--exclude-dynamic-system-prompt-sections`).
+HAVE-or-better 32 → 34, GAP 54 → 52. Three rulings inside it:
+
+- **Filters reuse the remembered-rule shape grammar, not a new one.** One
+  language for shapes (`bash(git status *)`, exact path, one https origin) with
+  three consumers — persistent rules, promoted policy denies, session filters.
+  What differs is authority, not syntax: a stored shape is curated at keystroke
+  time because one `a` must not generalize freely, while a pattern typed on the
+  command line names any head. `--yolo` proves that authority class and is
+  broader than it.
+- **Position in the ladder is the whole feature.** `--disallowed-tools` refuses
+  *above* the ladder (with `--plan`), `--allowed-tools` answers an ask *inside*
+  it, so neither can touch a policy deny and the allow cannot touch plan mode.
+  An allow is consulted before `--yolo` so the audit line says which flag
+  granted it, and a grant never covers a self-protected path. On a conflict
+  between the two lists the disallow wins.
+- **`--exclude-dynamic-system-prompt-sections` drops advertising, never
+  refusals.** The delegable-agent roster is a per-run token cost; the plan-mode
+  note states what the harness will refuse, and a prompt that hides a refusal
+  produces a model that retries it.
+
+Also verified against the real binary rather than only in tests: with
+`--allowed-tools "write(notes.md)"` a headless run writes the file and prints
+`▸ ok write notes.md (default:write:ask+allowed-tools)`; without the flag the
+same call prints `▸ held write notes.md (default:write:ask)` and writes nothing.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -260,9 +288,12 @@ ruling that it is out of scope.
    can still read why a run refused.
 2. **Wave 2 — session and control surface.** `--name`/`/branch`/`--fork-session`
    **closed 2026-09-24** (`src/sessions.ts`, `src/index.ts` `-r`/`.rename`);
+   `--allowed-tools`/`--disallowed-tools` + `--append-system-prompt[-file]` +
+   `--exclude-dynamic-system-prompt-sections` **closed 2026-09-24**
+   (`src/tool-filter.ts`, `src/system.ts`);
    still open: `--permission-mode` ladder,
-   `--allowed-tools`/`--disallowed-tools`, `--add-dir`,
-   `--append-system-prompt`, `--input-format`/`--json-schema`, public
+   `--add-dir`,
+   `--input-format`/`--json-schema`, public
    programmatic entry, `permissions.defaultMode`.
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,

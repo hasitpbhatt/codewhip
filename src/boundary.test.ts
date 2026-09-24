@@ -106,6 +106,7 @@ const CORE_EXPECTED = new Set([
   "src/subagents.ts",
   "src/system.ts",
   "src/testkit/fakePort.ts",
+  "src/tool-filter.ts",
   "src/verdict.ts",
   "src/wire-util.ts",
   "src/tools/background-status.ts",
