@@ -77,6 +77,13 @@ export type LoopArgs = {
   maxSteps: number;
   yolo: boolean;
   stdinIsTTY: boolean;
+  /**
+   * The answerer is a host callback in this process (`canUseTool` in
+   * `src/sdk.ts`) rather than a terminal reading stdin, so the non-interactive
+   * rung does not apply: an in-process decider needs no TTY to answer. The CLI
+   * never sets it; an ask still goes nowhere without `askUser`.
+   */
+  askUserIsHost?: boolean;
   port: ChatPort;
   signal?: AbortSignal;
   askUser?: AskUser;
@@ -938,7 +945,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           record("deny", `${verdict.ruleId}+mode:dontAsk`, sha256Hex(out), "policy", out);
           emit("tool", `deny ${call.name} ${preview} (mode:dontAsk)`);
           continue;
-        } else if (!args.stdinIsTTY || args.askUser === undefined) {
+        } else if (args.askUser === undefined || (!args.stdinIsTTY && args.askUserIsHost !== true)) {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
           record("deny", `${verdict.ruleId}+held`, sha256Hex(out), "policy", out);

@@ -12,6 +12,11 @@
   },
   "homepage": "https://github.com/hasitpbhatt/codewhip#readme",
   "type": "module",
+  "main": "./dist/sdk.js",
+  "exports": {
+    ".": "./dist/sdk.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "codewhip": "dist/index.js"
   },
