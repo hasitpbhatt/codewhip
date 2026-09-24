@@ -7,6 +7,67 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+Cost behavior: `--max-budget-usd` is a new *stop* condition, not a new price
+source — it meters through the existing `estimateCost` table and refuses to
+guess. Any route that prints `cost untracked` also refuses the flag. The free
+chain (`--free`, `--auto-failover`) never bills, so the flag is rejected at
+parse time there rather than silently doing nothing.
+
+### Added
+
+- **Headless scripting: `run -p`, `--output-format text|json|stream-json`,
+  stdin piping and `--max-budget-usd`.** Parity-matrix Wave 1
+  (`docs/moat/20-claude-code-parity.md`); closes the four GAP-1 rows.
+  - `-p`/`--headless` makes stdout carry **only** the result: every banner,
+    receipt line and refusal cause moves to stderr, the REPL never opens, and
+    interactive approvals are suppressed (asks are held and denied, so pair it
+    with `--yolo` or a remembered rule). `--print` keeps its existing
+    share-markdown meaning; `run -p --tui` is a parse error, because two
+    writers cannot own stdout.
+  - `--output-format` implies `-p`. `json` prints one result document;
+    `stream-json` prints NDJSON — an `init` line, one line per loop event
+    (tool/retry/failover/policy/compact/hook), then the `result` line. The
+    result document carries the governance fields, not just the text:
+    `subtype` derived from a new `LoopResult.stopReason`, `usage` per model
+    with the `estimated` flag preserved, `total_cost_usd` **null** when any hop
+    is unpriced, `receipt`, `budget`, `failovers`, `waited_ms`, `compacted`,
+    `checkpointed_files`, `audit_entries_dropped`, `polish_gate`, `share` and
+    the full `trace`.
+  - Prompts and material now arrive from a pipe. With no argv prompt, stdin *is*
+    the prompt: `echo "fix the typo" | codewhip run -p`, or the explicit
+    `codewhip run -p -`. With an argv prompt, piped stdin is appended to it as
+    context — `cat diff.patch | codewhip run -p "review this"` — which is the
+    idiom that makes the flag worth having. A silent pipe cannot hang the run:
+    the context read is opportunistic (250 ms) and abandons the handle, while
+    the prompt read waits, since there is no run to continue without it. 1 MB
+    cap on both.
+  - `--max-budget-usd <n>` stops the run the moment metered cost crosses the
+    ceiling, mid-loop and after every hop's usage lands, with a partial
+    transcript and a receipt — the same discipline `--token-budget` already had.
+    If a failover hop turns out to be unpriced the run stops with `error`
+    rather than continuing past a ceiling it can no longer measure.
+  - Pre-loop refusals (bad keys, unpriced ceiling, policy denials, 13 sites)
+    emit the same envelope with `result: null` and a `reason`, so a script that
+    reads stdout always parses exactly one document, whatever happened.
+
+### Changed
+
+- **README cut from 734 lines to 162.** The per-feature essays and the
+  provider catalog moved to `docs/features.md` and `docs/providers.md`
+  (content preserved, not deleted); dev-environment walkthroughs folded into
+  `CONTRIBUTING.md`, which already owned `Setup`. The README keeps the wedge,
+  quickstart, design model, a one-line-per-feature tour and the roadmap. Fixed
+  the stale "Five tools" design claim — the loop ships twelve
+  (`read search edit write bash webfetch todo delegate delegate_many
+  run_in_background task_output task_stop`) — and stopped advertising
+  `npm install -g codewhip`, which cannot work: the package is unpublished.
+- **`docs/roadmap.md` 148 → 118 lines.** One H2 checkbox had accreted 39
+  lines of dated provider changelog (53 → 96 → 134 builtins, hop counts,
+  per-row join dates) and was left with a broken sentence in the middle of it.
+  Collapsed to a backlog item that points at `docs/providers.md`,
+  `docs/features.md` and this file; every fact removed from it is verifiably
+  preserved in one of those three.
+
 ## [0.4.0] — 2026-09-24
 
 Cost behavior: new builtins are unpriced (`cost untracked`, console
