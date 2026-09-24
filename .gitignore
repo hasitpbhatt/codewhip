@@ -4,6 +4,7 @@ dist/
 .opencode/
 .zcode/
 .workbuddy-ai/
+.qoder/
 *.log
 *.tgz
 .env
