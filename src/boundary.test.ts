@@ -33,6 +33,7 @@ const SURFACE = new Set([
   "src/models.ts",
   "src/onemin.ts",
   "src/router.ts",
+  "src/run-output.ts",
   "src/metrics.ts",
   "src/model-allowlist.ts",
 ]);

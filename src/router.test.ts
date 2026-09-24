@@ -3,7 +3,7 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, pickExplorePool, pickRandomHealthy, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
+import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, meteredCost, pickExplorePool, pickRandomHealthy, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
 import type { ModelHealth } from "./provider-stats.js";
 import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
 import { PROVIDERS } from "./provider.js";
@@ -155,6 +155,23 @@ describe("router", () => {
   it("prices the known-free route, null otherwise", () => {
     strictEqual(estimateCost("nvidia", "moonshotai/kimi-k3", 10000, 5000), 0);
     strictEqual(estimateCost("sensenova", "sensenova-6.8-flash-lite", 10000, 5000), null);
+  });
+  it("meteredCost sums a mix, and goes null when any hop is unpriced", () => {
+    strictEqual(meteredCost([]), 0);
+    strictEqual(meteredCost([{ label: "nvidia", model: "moonshotai/kimi-k3", prompt: 1000, completion: 500 }]), 0);
+    strictEqual(
+      meteredCost([
+        { label: "nvidia", model: "moonshotai/kimi-k3", prompt: 1000, completion: 500 },
+        { label: "groq", model: "openai/gpt-oss-120b", prompt: 1000, completion: 1000 },
+      ]),
+      (estimateCost("groq", "openai/gpt-oss-120b", 1000, 1000) ?? 0)
+    );
+    // One untracked row makes the whole run's cost unknown — never report 0.
+    strictEqual(meteredCost([{ label: "sensenova", model: "sensenova-6.8-flash-lite", prompt: 1, completion: 1 }]), null);
+    strictEqual(meteredCost([
+      { label: "nvidia", model: "moonshotai/kimi-k3", prompt: 1, completion: 1 },
+      { label: "sensenova", model: "sensenova-6.8-flash-lite", prompt: 1, completion: 1 },
+    ]), null);
   });
   it("stops pricing cerebras $0 once its free tier required a card (rot repair 2026-09-13)", () => {
     // Regression: the $0 sticker was a fiction after Cerebras moved to

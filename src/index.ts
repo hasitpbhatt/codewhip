@@ -22,7 +22,8 @@ import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { getTaskStatuses } from "./tools/background-status.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
-import { estimateCost, isPolishRun, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
+import { estimateCost, isPolishRun, meteredCost, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
+import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, outputFormat, parseOutputFormat, readStdin, say, setOutputFormat, STDIN_CONTEXT_WAIT_MS, writeResultText, type OutputFormat } from "./run-output.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
@@ -95,6 +96,21 @@ type RunOptions = {
   tui: boolean;
   /** Force 80-col screen-reader-safe output (overrides --tui). */
   noTui: boolean;
+  /**
+   * Headless (`-p`): stdout is reserved for data, so every human banner moves
+   * to stderr, the REPL never opens, and interactive approvals are suppressed
+   * (asks are held and denied, exactly as on a non-TTY run).
+   */
+  headless: boolean;
+  /** Shape of the headless payload; only meaningful with headless. */
+  outputFormat: OutputFormat;
+  /**
+   * Dollar ceiling, enforced mid-run on priced routes only. Refused up front
+   * on an untracked route rather than silently inert — the meter never lies.
+   */
+  maxBudgetUsd?: number;
+  /** Explicit stdin prompt (`run -`). */
+  stdinPrompt: boolean;
 };
 
 function printRunOptions(): void {
@@ -118,6 +134,10 @@ function printRunOptions(): void {
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
   console.log("  --tui                opt into the terminal UI (lazy-loads OpenTUI; headless stays default; may not be available in all environments)");
   console.log("  --no-tui             force 80-col screen-reader-safe output (overrides --tui)");
+  console.log("  -p, --headless       scriptable one-shot: stdout carries only the result, every banner moves to stderr, the REPL never opens and interactive approvals are suppressed (asks are held and denied — pair with --yolo or a remembered rule to let work through)");
+  console.log("  --output-format <f>  text|json|stream-json — implies -p: json prints one result document, stream-json prints NDJSON (init, one line per event, result)");
+  console.log("  run -                read the prompt from stdin. Piped stdin alongside a prompt is appended to it as context: cat diff.patch | codewhip run -p \"review this\"");
+  console.log("  --max-budget-usd <n> stop the run when metered cost crosses n on a priced route (refused on untracked routes rather than inert; not with --free/--auto-failover, which never bill)");
 }
 
 function printKeysHelp(): void {
@@ -338,8 +358,8 @@ function costNote(provider: string, model?: string): string {
 }
 
 function printReceipt(model: string, promptTokens: number, completionTokens: number, cost: string): void {
-  console.log("");
-  console.log(
+  say("");
+  say(
     `receipt: ${promptTokens} prompt + ${completionTokens} completion tokens / ${model} / ${cost}`
   );
 }
@@ -365,12 +385,23 @@ function mixReceiptString(buckets: UsageBucket[], provider: ProviderId, model: s
 }
 
 function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: string): void {
-  console.log("");
-  console.log(mixReceiptString(buckets, provider, model));
+  say("");
+  say(mixReceiptString(buckets, provider, model));
 }
 
 function printStubReceipt(model: string, provider: ProviderId): void {
-  printReceipt(model, 0, 0, costNote(provider, model));
+  const cost = costNote(provider, model);
+  // A scripted caller still gets a document on stdout: is_error true, zeros,
+  // and the human cause on stderr (every refusal path prints it before here).
+  if (headless()) {
+    emitResult(buildFailure({
+      provider,
+      model,
+      receipt: `receipt: 0 prompt + 0 completion tokens / ${provider}:${model} / ${cost}`,
+      reason: "run refused before the loop started — see stderr",
+    }));
+  }
+  printReceipt(model, 0, 0, cost);
 }
 
 function parseRunArgs(args: string[]): RunOptions | null {
@@ -396,6 +427,10 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let noTui = false;
   let cont = false;
   let continuePrefix: string | undefined;
+  let headlessFlag = false;
+  let formatArg: OutputFormat | null = null;
+  let maxBudgetUsd: number | undefined;
+  let stdinPrompt = false;
   const positional: string[] = [];
 
   const fail = (msg: string): null => {
@@ -497,6 +532,25 @@ function parseRunArgs(args: string[]): RunOptions | null {
           i++;
         }
       }
+    } else if (a === "-p" || a === "--headless") {
+      headlessFlag = true;
+    } else if (a === "--output-format" || a.startsWith("--output-format=")) {
+      const eq = a.indexOf("=");
+      const v = eq !== -1 ? a.slice(eq + 1) : args[i + 1];
+      if (v === undefined || (eq === -1 && v.startsWith("-"))) return fail("--output-format needs text|json|stream-json");
+      if (eq === -1) i++;
+      const f = parseOutputFormat(v);
+      if (f === null) return fail(`--output-format must be text|json|stream-json (got "${v}")`);
+      formatArg = f;
+      headlessFlag = true;
+    } else if (a === "--max-budget-usd") {
+      const v = args[i + 1];
+      if (v === undefined) return fail("--max-budget-usd needs a dollar amount");
+      const n = Number(args[++i]);
+      if (!Number.isFinite(n) || n <= 0 || n > 10000) return fail("--max-budget-usd must be a number > 0 and <= 10000");
+      maxBudgetUsd = n;
+    } else if (a === "-") {
+      stdinPrompt = true;
     } else if (!a.startsWith("-")) {
       positional.push(a);
     } else {
@@ -504,6 +558,12 @@ function parseRunArgs(args: string[]): RunOptions | null {
     }
   }
   if (sharePrint && !share) return fail("--print needs --share");
+  // `-p`/`--output-format` owns stdout, so the mode that grabs it for itself loses.
+  if (headlessFlag && tui) return fail("--output-format/-p cannot combine with --tui (stdout is reserved for data)");
+  if (maxBudgetUsd !== undefined && (free || autoFailover)) {
+    return fail("--max-budget-usd is meaningless on the free chain (it never bills pay-go) — cap tokens with --token-budget");
+  }
+  if (headlessFlag) setOutputFormat(formatArg ?? "text");
   return {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
@@ -514,6 +574,10 @@ function parseRunArgs(args: string[]): RunOptions | null {
     continue: cont,
     tui,
     noTui,
+    headless: headlessFlag,
+    outputFormat: formatArg ?? "text",
+    stdinPrompt,
+    ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     ...(continuePrefix === undefined ? {} : { continuePrefix }),
   };
 }
@@ -672,7 +736,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       return;
     }
     history = loaded.record.messages.filter((m) => m.role !== "system");
-    console.log(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+    say(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
   }
   // --free / --auto-failover arm the free chain: head = the explicit
   // --provider (must be a free-catalog id) or the first free candidate with
@@ -739,21 +803,21 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       ? { ...routed, note: "--auto-failover chain head (first free candidate with a usable key)" }
       : routed;
   opts = { ...opts, provider: route.provider, model: route.model };
-  console.log(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
+  say(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
   if (opts.plan) {
-    console.log("!! --plan armed: read-only run — edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan.");
+    say("!! --plan armed: read-only run — edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan.");
   }
   if (opts.noStream) {
     setStreamingEnabled(false);
-    console.log("!! --no-stream armed: whole-body responses (SSE off for this process).");
+    say("!! --no-stream armed: whole-body responses (SSE off for this process).");
   }
   if (opts.yolo) {
-    console.log("!! --yolo is explicit, logged, bannered. The denylist still applies (spelling-normalized) — and the ask ladder, worktree wall, and signed audit remain the enforcement boundary; no string screen is absolute.");
+    say("!! --yolo is explicit, logged, bannered. The denylist still applies (spelling-normalized) — and the ask ladder, worktree wall, and signed audit remain the enforcement boundary; no string screen is absolute.");
   }
   if (opts.retryWait) {
-    console.log("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
+    say("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
   }
-  console.log(`model: ${opts.provider}:${opts.model}`);
+  say(`model: ${opts.provider}:${opts.model}`);
   const runCfg = getProviderConfig(opts.provider);
   if (runCfg === null) {
     console.error(`codewhip: unknown provider "${opts.provider}" (see: codewhip provider list)`);
@@ -773,7 +837,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   if (opts.models.length > 1) {
     const kept = opts.models.filter((m) => isLoopbackBaseUrl(runCfg.baseUrl) || isModelAllowed(opts.provider, m));
     if (kept.length !== opts.models.length) {
-      console.log(`!! rotation pruned to enabled models: ${opts.models.join(" -> ")} → ${kept.join(" -> ") || "(none left)"} (enable with: codewhip provider enable ${opts.provider}:<model>)`);
+      say(`!! rotation pruned to enabled models: ${opts.models.join(" -> ")} → ${kept.join(" -> ") || "(none left)"} (enable with: codewhip provider enable ${opts.provider}:<model>)`);
     }
     if (kept.length === 0 && opts.models.length > kept.length) {
       console.error("codewhip: --models rotation has no enabled models left — enable them with: codewhip provider enable <provider>:<model>");
@@ -784,10 +848,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     opts = { ...opts, models: kept };
   }
   if (opts.models.length > 1) {
-    console.log(`!! rotation armed: on rate-limit/timeout/5xx walk ${opts.models.join(" -> ")} (each once per run)`);
+    say(`!! rotation armed: on rate-limit/timeout/5xx walk ${opts.models.join(" -> ")} (each once per run)`);
   }
   if (opts.timeoutMs !== undefined) {
-    console.log(`!! --timeout-ms armed: provider calls abort after ${opts.timeoutMs}ms (provider default ${runCfg.timeoutMs}ms overridden)`);
+    say(`!! --timeout-ms armed: provider calls abort after ${opts.timeoutMs}ms (provider default ${runCfg.timeoutMs}ms overridden)`);
   }
   // Compaction ceiling: model-aware when the provider row carries a VERIFIED
   // context window (0.7×), else the default. Fixed per run from the head
@@ -809,9 +873,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     // keyless free tier, but "rate-limited, log in for higher limits" is
     // simply false there — there is no quota and no key to log in with.
     if (isLoopbackBaseUrl(runCfg.baseUrl)) {
-      console.log(`auth: ${opts.provider} local runtime at ${runCfg.baseUrl} — no credential needed, nothing is billed`);
+      say(`auth: ${opts.provider} local runtime at ${runCfg.baseUrl} — no credential needed, nothing is billed`);
     } else {
-      console.log(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
+      say(`auth: ${opts.provider} anonymous (no key stored, rate-limited) — codewhip auth login ${opts.provider} for higher limits (${runCfg.keyUrl})`);
     }
   }
   let failoverTargets: FailoverTarget[] = [];
@@ -822,13 +886,13 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       // other providers would exceed it, so private runs stay head-only.
       // (Private without an explicit provider was already refused above.)
       failoverTargets = [];
-      console.log("!! private run: head provider only — no silent hops (consent covers one target)");
+      say("!! private run: head provider only — no silent hops (consent covers one target)");
     } else if (failoverTargets.length > 0) {
-      console.log(opts.autoFailover
+      say(opts.autoFailover
         ? `!! --auto-failover armed: ${failoverTargets.length} silent $0 fallback(s) — hops recorded in the outcome/audit, not printed (exhaustion still reports what was tried)`
         : `!! --free armed: on rate-limit/timeout/5xx walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
     } else {
-      console.log(opts.autoFailover
+      say(opts.autoFailover
         ? "!! --auto-failover armed: head only — no other free provider has a key yet (see: codewhip free)"
         : "!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
     }
@@ -857,7 +921,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       return;
     }
     const targetModel = nextCfg.defaultModel;
-    console.log(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout/5xx. May bill ${next} pay-go.`);
+    say(`!! --failover armed: one switch to ${next}:${targetModel} on rate-limit/timeout/5xx. May bill ${next} pay-go.`);
     const { key: failoverKey, source: failoverSource } = resolveKey(next);
     failoverTargets = [{
       label: next,
@@ -873,7 +937,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
 
   // TUI bridge: lazy-import on --tui; headless uses the existing readline
   // promptApproval + console.log onEvent. --no-tui forces headless.
-  let askUserFn: AskUser;
+  let askUserFn: AskUser | undefined;
   let onEventFn: (e: LoopEvent) => void;
   let tuiBridge: { stop: () => void } | null = null;
   let tuiModel: { setRunId: (id: string) => void } | null = null;
@@ -886,7 +950,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     return t;
   };
   if (opts.tui && !opts.noTui) {
-    console.log("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
+    say("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
     try {
       const tuiMod = await import("./tui/bridge.js");
       const { TuiModel } = await import("./tui/model.js");
@@ -927,18 +991,55 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       askUserFn = bridge.askUser;
       onEventFn = (e: LoopEvent) => bridge.onEvent(e);
     } catch {
-      console.log("!! --tui armed but OpenTUI unavailable — falling back to headless prompts.");
+      say("!! --tui armed but OpenTUI unavailable — falling back to headless prompts.");
       askUserFn = promptApproval;
-      onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+      onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
     }
   } else if (opts.noTui) {
-    console.log("!! --no-tui armed: forced 80-col screen-reader-safe output (no TUI).");
+    say("!! --no-tui armed: forced 80-col screen-reader-safe output (no TUI).");
     askUserFn = promptApproval;
-    onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+    onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
   } else {
     askUserFn = promptApproval;
-    onEventFn = (e) => console.log(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+    onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
   }
+  // Headless (`-p`): stdout is reserved for data, so run chatter becomes NDJSON
+  // events (stream-json) or stderr prose, and no interactive approval is ever
+  // offered — the loop then holds-and-denies every ask, the same safe default a
+  // non-TTY run already had. Let work through with --yolo or a remembered rule.
+  if (opts.headless) {
+    askUserFn = undefined;
+    onEventFn = (e) => {
+      if (outputFormat() === "stream-json") emitEvent(e);
+      else say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
+    };
+  }
+  // A dollar ceiling is only real where the meter can read: refuse up front on
+  // an untracked route instead of shipping an option that silently does nothing.
+  const usdCap = opts.maxBudgetUsd;
+  if (usdCap !== undefined && estimateCost(opts.provider, opts.model, 1000, 1000) === null) {
+    say(`!! --max-budget-usd refused: ${opts.provider}:${opts.model} is unpriced (cost untracked) — cap tokens with --token-budget`);
+    process.exitCode = 1;
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  const startedAt = Date.now();
+  emitInit({
+    version: pkg.version,
+    provider: opts.provider,
+    model: opts.model,
+    task_class: route.taskClass,
+    output_format: opts.outputFormat,
+    permission_mode: opts.plan ? "plan" : opts.yolo ? "yolo" : "ask",
+    max_steps: opts.maxSteps,
+    token_budget: opts.tokenBudget,
+    ...(opts.maxBudgetUsd === undefined ? {} : { max_budget_usd: opts.maxBudgetUsd }),
+    cwd: process.cwd(),
+  });
+  // Carried into the machine document so a scripted run reports the same
+  // gate/share facts a human sees on stderr.
+  let gateOut: { pass: boolean; reason: string } | undefined;
+  let shareOut: { path: string; sha256: string } | undefined;
 
   try {
     const result = await agentLoop({
@@ -949,7 +1050,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       cwd: process.cwd(),
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
-      stdinIsTTY: process.stdin.isTTY === true,
+      stdinIsTTY: process.stdin.isTTY === true && !opts.headless,
       port: makePortForConfig(runCfg, apiKey, opts.timeoutMs, keySource),
       signal: ctrl.signal,
       askUser: askUserFn,
@@ -961,6 +1062,27 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       models: opts.models,
       takePendingSwitch,
       tokenBudget: opts.tokenBudget,
+      costCheck: usdCap === undefined ? undefined : (buckets) => {
+        let metered = 0;
+        for (const b of buckets) {
+          const c = estimateCost(b.label, b.model, b.prompt, b.completion);
+          if (c === null) {
+            // The ceiling is a contract; an unpriced hop (failover, /model
+            // switch) breaks it, so stop rather than overspend unmeasured.
+            return {
+              stopReason: "error" as const,
+              message: `--max-budget-usd ${usdCap} cannot be metered: ${b.label}:${b.model} is unpriced (cost untracked) — partial transcript kept`,
+            };
+          }
+          metered += c;
+        }
+        return metered > usdCap
+          ? {
+            stopReason: "cost_budget" as const,
+            message: `cost budget exhausted ($${metered.toFixed(4)}/$${usdCap}) — partial transcript kept`,
+          }
+          : null;
+      },
       compactTokens: compactCeiling,
       history,
       onEvent: onEventFn,
@@ -981,41 +1103,48 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       replState.lastRunId = result.runId;
     }
     if (result.cancelled) {
-      console.log("cancelled — partial transcript kept.");
+      say("cancelled — partial transcript kept.");
     }
     if (result.error !== undefined) {
       console.error(`codewhip: ${result.error}`);
       process.exitCode = 1;
     } else if (result.text.length > 0) {
-      console.log("");
-      console.log(result.text);
+      if (!opts.headless) {
+        say("");
+        say(result.text);
+      } else if (opts.outputFormat === "text") {
+        // `-p` prints only the result on stdout; json/stream-json carry the
+        // same text inside the machine document below instead.
+        writeResultText(result.text);
+      }
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
     if (result.checkpoints > 0) {
-      console.log(`checkpoints: ${result.checkpoints} file(s) snapshotted — undo: codewhip rollback ${result.runId.slice(0, 8)}`);
+      say(`checkpoints: ${result.checkpoints} file(s) snapshotted — undo: codewhip rollback ${result.runId.slice(0, 8)}`);
     }
     if (result.compact.events > 0) {
-      console.log(`compacted: ${result.compact.truncated} old tool output(s) truncated, ${result.compact.dropped} exchange(s) elided across ${result.compact.events} compaction(s) — transcript kept under the context ceiling`);
+      say(`compacted: ${result.compact.truncated} old tool output(s) truncated, ${result.compact.dropped} exchange(s) elided across ${result.compact.events} compaction(s) — transcript kept under the context ceiling`);
     }
     if (result.repeatCalls > 0) {
-      console.log(`repeats: ${result.repeatCalls} identical idempotent tool call(s) served from the run memo instead of re-executing — a weak model wasting steps, not a harness fault`);
+      say(`repeats: ${result.repeatCalls} identical idempotent tool call(s) served from the run memo instead of re-executing — a weak model wasting steps, not a harness fault`);
     }
     if ((result.auditDropped ?? 0) > 0) {
-      console.log(`!! audit: ${result.auditDropped} entr(y|ies) NOT recorded this run (lock contention or disk failure) — the signed trail has holes for ${result.runId.slice(0, 8)}; investigate before trusting this run's history`);
+      say(`!! audit: ${result.auditDropped} entr(y|ies) NOT recorded this run (lock contention or disk failure) — the signed trail has holes for ${result.runId.slice(0, 8)}; investigate before trusting this run's history`);
     }
-    console.log(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
+    say(`runId: ${result.runId} — record judgment: codewhip verdict ${result.runId.slice(0, 8)} <accepted|edited|reverted|rejected>`);
     // Inline provider-health hint — only when this provider has recorded failures,
     // so healthy runs stay quiet. Full breakdown: codewhip stats <provider>.
     const healthRecs = readProviderCalls().filter((r) => r.provider === opts.provider);
     if (healthRecs.length > 0) {
       const ph = summarizeCalls(healthRecs).providers[0];
       if (ph !== undefined && ph.failed > 0) {
-        console.log(`health: ${opts.provider} ${Math.round(ph.successRate * 100)}% ok over ${ph.total} call(s), ${ph.failed} failed — detail: codewhip stats ${opts.provider}`);
+        say(`health: ${opts.provider} ${Math.round(ph.successRate * 100)}% ok over ${ph.total} call(s), ${ph.failed} failed — detail: codewhip stats ${opts.provider}`);
       }
     }
     if (route.taskClass === "polish") {
       const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
-      console.log(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
+      gateOut = gate;
+      say(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
     }
     if (opts.share) {
       const receipt = mixReceiptString(result.usageByModel, opts.provider, opts.model);
@@ -1035,10 +1164,11 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         console.error(`codewhip: ${shared.error}`);
         process.exitCode = 1;
       } else {
-        console.log(`share: ${shared.path} (sha256:${shared.hash.slice(0, 16)}…)`);
+        shareOut = { path: shared.path, sha256: shared.hash };
+        say(`share: ${shared.path} (sha256:${shared.hash.slice(0, 16)}…)`);
         if (opts.sharePrint) {
-          console.log("");
-          console.log(renderShareMarkdown(shared.bundle, shared.hash));
+          say("");
+          say(renderShareMarkdown(shared.bundle, shared.hash));
         }
       }
     }
@@ -1057,8 +1187,27 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       if (!ok) {
         console.error("codewhip: session save failed (disk write) — transcript kept in memory only");
       } else {
-        console.log(`session: ${result.runId} (${continued.length} messages) — continue: codewhip run "…" --continue ${result.runId.slice(0, 8)}`);
+        say(`session: ${result.runId} (${continued.length} messages) — continue: codewhip run "…" --continue ${result.runId.slice(0, 8)}`);
       }
+    }
+    if (opts.headless) {
+      const metered = meteredCost(result.usageByModel);
+      emitResult(buildResult(result, {
+        provider: opts.provider,
+        model: opts.model,
+        taskClass: route.taskClass,
+        durationMs: Date.now() - startedAt,
+        receipt: mixReceiptString(result.usageByModel, opts.provider, opts.model),
+        costUsd: metered,
+        costNote: (result.usageByModel.length > 0
+          ? result.usageByModel.map((b) => costNote(b.label, b.model))
+          : [costNote(opts.provider, opts.model)]).join(" + "),
+        tokenBudget: opts.tokenBudget,
+        ...(usdCap === undefined ? {} : { maxBudgetUsd: usdCap }),
+        ...(opts.continue ? { sessionId: result.runId } : {}),
+        ...(gateOut === undefined ? {} : { polishGate: gateOut }),
+        ...(shareOut === undefined ? {} : { share: shareOut }),
+      }));
     }
   } finally {
     tuiBridge?.stop();
@@ -2225,13 +2374,45 @@ async function main(): Promise<void> {
       return;
     }
     if (opts.prompt.length === 0) {
-      if (process.stdin.isTTY) {
+      if (process.stdin.isTTY === true && !opts.stdinPrompt) {
+        if (opts.headless) {
+          console.error('codewhip: -p needs a prompt — pass one, or pipe it (echo "…" | codewhip run -p -)');
+          process.exitCode = 1;
+          return;
+        }
         cmdRepl(opts);
         return;
       }
-      console.error('usage: codewhip run "<prompt>" [--model id] [--token-budget 250000] [--max-steps 25] (see: codewhip help run)');
+      // No positional prompt: stdin *is* the prompt, so wait for it.
+      const piped = await readStdin(process.stdin);
+      if (piped.error !== undefined) {
+        console.error(`codewhip: ${piped.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (piped.text === undefined) {
+        console.error('usage: codewhip run "<prompt>" [--model id] [--token-budget 250000] [--max-steps 25] (see: codewhip help run)');
+        process.exitCode = 1;
+        return;
+      }
+      opts.prompt = piped.text;
+    } else if (opts.stdinPrompt) {
+      console.error("codewhip: `-` (read the prompt from stdin) cannot combine with a positional prompt");
       process.exitCode = 1;
       return;
+    } else if (process.stdin.isTTY !== true) {
+      // `cat diff.patch | codewhip run -p "review this"` — Claude Code's
+      // idiom: the query is the argument, the pipe is the material.
+      const piped = await readStdin(process.stdin, STDIN_CONTEXT_WAIT_MS);
+      if (piped.error !== undefined) {
+        console.error(`codewhip: ${piped.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (piped.text !== undefined) {
+        opts.prompt = `${opts.prompt}\n\n${piped.text}`;
+        say(`stdin: ${piped.text.length} chars appended to the prompt as context`);
+      }
     }
     // One-shot lenient expansion: only an EXACT command-file match rewrites
     // the prompt — path-like prompts ("/api endpoint 500") run verbatim.
