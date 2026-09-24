@@ -10,8 +10,13 @@ npm run dev        # tsx src/index.ts (dev loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit (run before finishing any src/ change)
 npm run lint       # oxlint src --deny-warnings (TS-7-native; typescript-eslint can't run here)
+npm test           # tsx --test src/**/*.test.ts
 npm start          # node dist/index.js
 ```
+
+Optional runners: `npm run bench` (quality/cost benchmarks) and
+`npm run immunity` (the C3 escape suite and replay; see
+`docs/moat/18-verdict-privilege-experiments.md`).
 
 Node >= 20. TypeScript strict, ESM (`"type": "module"`).
 
@@ -19,9 +24,11 @@ Node >= 20. TypeScript strict, ESM (`"type": "module"`).
 
 - `src/` is the only source root (`rootDir: src`, `outDir: dist`).
 - Small modules, explicit types, no `any` without justification.
-- Every tool the agent loop exposes: <150 lines, JSON I/O, validated inputs,
+- Every tool the agent loop exposes: JSON I/O, validated inputs,
   timeout-bounded, failure returns a tool-result string — never throws
-  the loop over.
+  the loop over. The size bar is <150 lines, but `background`, `webfetch`,
+  `delegate_many` and `search` predate it: don't grow those, and split one
+  the next time you have reason to edit it.
 - No new runtime dependency without a one-paragraph justification in the PR:
   prefer Node builtins. (Kill-list rule: infra is earned by user pain.)
 - JSONL + flat markdown for state (`.codewhip/`); no DB clients in H1.
@@ -37,7 +44,7 @@ Node >= 20. TypeScript strict, ESM (`"type": "module"`).
 
 ## Definition of done
 
-1. `npm run lint` and `npm run typecheck` pass.
+1. `npm run lint`, `npm run typecheck` and `npm test` pass.
 2. `npm run build` passes.
 3. Every run-affecting change prints or preserves cost receipts
    (`tokens / model mix / $`).

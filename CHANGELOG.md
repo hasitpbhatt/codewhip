@@ -35,9 +35,79 @@ pointer) except where noted; the free chain is unchanged (43 hops).
   healthy target on rate-limit/timeout/5xx (≤3 upstream attempts, each
   failure server-logged, winner named in `serviced_by`). Pinned
   `provider:model` requests never hop.
+- **C3 research track — verdict-driven privilege (`npm run immunity`)** —
+  `src/immunity/` induces per-repo least-privilege tool permissions from
+  one-bit human verdicts plus near-miss co-signals: samples, rules, miner,
+  simuser, adversarial rows and an escape suite; `--sim --seeds N` runs the
+  robustness sweep (claim holds 16/16), `--export` writes the salted
+  labeled-events corpus artifact, `--replay` stacks the induced set on the
+  static policy through the escape suite (P3 PASS, regression-pinned). The
+  first run found and closed a real Windows force-flag escape. LLM-policy
+  and LLM-judge baselines run behind `ChatPort` (`llm-run`). Protocol and
+  results: `docs/moat/18-verdict-privilege-experiments.md`. Cost behavior:
+  research-only — no run-path change, and `--export` never leaves the repo.
+- **Deny-by-default per-model allowlist** — serve, CLI and the auth UI now
+  share one allowlist: a model is reachable only if explicitly enabled, so
+  an empty playground means nothing is reachable rather than everything is.
+  `/auth/_starter` additively enables the $0 anonymous-chain defaults (cap
+  6, idempotent) and `/auth/_models` carries a `recommended` flag derived
+  from tracked price + live + chat-capable, so an untracked price is never
+  dressed up as free. Cost behavior: routing can no longer fall through to
+  a billed model nobody enabled.
+- **Event hooks** — `PreToolUse`/`PostToolUse`/`Stop` from a self-protected
+  `hooks.json`; fail-open on infrastructure failure, redaction stays
+  downstream, `Stop` is observe-only. Ruling: `docs/moat/19-qol-parity.md`.
+- **Custom slash commands** — `.codewhip/commands/*.md` with `$ARGUMENTS`,
+  REPL `.help`, error on unknown, exact-match expansion in one-shot `run`.
+  Ruling: `docs/moat/19-qol-parity.md`.
+- **`todo` tool** — list/replace/update over `.codewhip/todos.json` as a
+  model-maintained checklist in harness state: allowed by default
+  (`default:todo:allow`), denied to children, redacted at save. Ruling:
+  `docs/moat/19-qol-parity.md`.
+- **Validator-style dark UI for the serve pages** — `/auth`, `/playground`
+  and `/stats` rebuilt on a hand-written GitHub-dark token sheet (no CDN,
+  works offline) with theme toggle, live status pill, sidebar playground
+  with typing dots and a request inspector, prefix-grouped model lists, and
+  a11y pass (disclosure state, `aria-describedby` badges, `role=status/log`,
+  in-place key save). Model saves send only ticked rows, so an unchecked
+  card can no longer be enabled by being visible.
+- **`provider:auto` resolves provider-scoped** — shipping the literal word
+  `auto` upstream caused opaque 500s (e.g. `kilo:auto` with no key). `auto`
+  is a routing word, never an upstream model id: bare `auto` health-weights
+  across every enabled model, `provider:auto` narrows that pick to the
+  provider, and an unhealthy provider answers 400 naming the remedy. The
+  not-enabled 403 names the exact panel to fix (`/auth#prov-<id>`).
+- **2 providers (134 → 136 builtins)** — `tokenrouter` and `darkbloom`
+  (PrismML Bonsai 2 27B ternary). Neither joins `--free`; chain hops
+  unchanged at 43.
+- **Permanent model blocklist on 410 + 24h `balance_low` cooling**, and
+  Orca-review hardening including a provider disable control in the auth UI.
+
+### Changed
+
+- **Core/surface split via provider-port + boundary guard** — `src/`
+  separates the agent core from product surface (registry, serve, TUI), with
+  `src/boundary.test.ts` enforcing the seam and no deletions.
+- **Optional TUI peer renamed `opentui` → `@opentui/core` (>=0.5.0)** and
+  `--tui` wired to its real API; every missing-TUI path degrades gracefully
+  instead of throwing.
 
 ### Fixed
 
+- **serve proxy sent an `Authorization` header to `anonymousKey` providers** —
+  a site key could reach a relay that never asked for it. The header is now
+  guarded at the proxy boundary.
+- **Published package shipped no packs** — `package.json` `files` listed
+  `dist` and `tasks` but not `packs`, while `defaultPacksDir()` resolves
+  `dist/../packs`. An npm-installed `codewhip pack list` came up empty and
+  `pack pull starter` could not work; `packs` is now packed.
+- **Provider stats and blocklist files raced** — owner-only locking plus a
+  read-retry, so concurrent serve writers stop truncating each other.
+- **`empero` 400s on an empty `tools` array** — the key is now omitted
+  entirely when no tools are offered.
+- **Tool-call shape parsing tolerates `tool: name` spacing**, and the
+  escape suite gained never-deny / deny-all reference rows so a reported
+  coverage number has a floor to compare against.
 - **Test suite 133s → ~20s** — `background.test.ts` started an immortal
   `ping` and never stopped it, pinning the runner until the 120s default
   timeout killed the child. Tests now stop what they start, with an
