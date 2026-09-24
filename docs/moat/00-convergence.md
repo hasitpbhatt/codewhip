@@ -246,3 +246,17 @@ P1 — trust that spreads:
   outside the jail by design; containment is the self-protected config
   paths + load-once-at-run-start. Full reasoning:
   `docs/moat/19-qol-parity.md`.
+
+- 2026-09-24 — **Session record gains labels (additive, `v` stays 1).**
+  `src/sessions.ts` now carries optional `lastRunId`, `name`, `tags` and
+  `parent` alongside the frozen-v1 fields; a session file *is* its id, so
+  `-r <name>` accumulates into one growing transcript while
+  `--fork-session`/`.branch` write a new file that records where it came
+  from. Sessions are not one of the frozen schemas (policy, audit and memory
+  are — see the 2026-09-14 entry), and old files read unchanged. Two rules
+  recorded with it: a name is one word and unique, because it is the handle
+  `-r` looks up and a two-word name prints a resume command that does not
+  resume; and `--name`/`--tag` **arm** persistence rather than being silently
+  dropped, keeping "nothing touches disk unless you arm it" true while making
+  the arming visible. `outcomes.jsonl` and `audit.log` are untouched — the
+  audit chain still keys on run ids, which is why `lastRunId` exists.
