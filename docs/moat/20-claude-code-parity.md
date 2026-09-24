@@ -210,9 +210,11 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## Score
 
-Counted mechanically from the rows below, N/S excluded: **102 in-scope rows** —
-**HAVE/ALIAS/HAVE-plus 37**, **PARTIAL 16**, **GAP 49**, i.e. **36.3%** at parity
-or better. Remaining GAP rows by wave: 2 → 3, 3 → 24, 4 → 13, 5 → 9.
+Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
+column of every row above and fails if this section no longer matches them:
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 37**, **PARTIAL 16**, **GAP 49**,
+i.e. **36.3%** at parity or better. Remaining GAP rows by wave: 2 → 3, 3 → 24,
+4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
@@ -340,7 +342,8 @@ Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
 the GAP count in this file is zero or each remaining row carries a recorded
-ruling that it is out of scope.
+ruling that it is out of scope, and only with `npm run parity` exiting 0 — the
+count is the instrument, not the memory of it.
 
 ## Build queue
 

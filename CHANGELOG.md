@@ -168,6 +168,18 @@ parse time there rather than silently doing nothing.
     `permissions.defaultMode`), and the `stream-json` `init` line gains
     `permission_mode` and `additional_directories`. Cost behaviour is
     unchanged; a mode changes who approves, not what a run pays.
+- **`npm run parity`: the parity matrix now counts itself.**
+  `scripts/parity.mjs` parses the status column of every row in
+  `docs/moat/20-claude-code-parity.md`, recomputes the percentage and the
+  per-wave totals, and exits non-zero if the Score section no longer matches
+  its own rows or if any row carries a status word the parser does not know.
+  Both failure modes are historical, not hypothetical: the first Score line was
+  hand-counted 13 points too high because it counted table separators as
+  capability rows, and this wave a `PARTIAL → HAVE` cell silently counted as
+  `PARTIAL` because the counter read the first word of the cell — an arrow in a
+  status column now reads left-to-right, final state wins. An invented status
+  is now an error rather than a dropped row, so the instrument cannot be
+  quietly flattered. `npm run parity` is the gate on claiming completion.
 
 ### Changed
 
