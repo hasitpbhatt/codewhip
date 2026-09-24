@@ -27,7 +27,7 @@ import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
 import { getTaskStatuses } from "./tools/background-status.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
-import { estimateCost, isPolishRun, meteredCost, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
+import { costNote, estimateCost, isPolishRun, meteredCost, mixReceiptString, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
 import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, outputFormat, parseOutputFormat, readStdin, say, setOutputFormat, STDIN_CONTEXT_WAIT_MS, writeResultText, type OutputFormat, type RunFacts } from "./run-output.js";
 import { inboundMessages, MAX_MESSAGES, parseInputFormat, type InboundMessage, type InputFormat } from "./stream-input.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
@@ -399,68 +399,11 @@ function printHelp(): void {
   console.log(`Model: agentLoop() live (read/search/edit/write/bash/webfetch + read-only subagents) — policy-checked, metered.`);
 }
 
-function costNote(provider: string, model?: string): string {
-  // Honest meter: only known-$0 routes print $0 — nvidia's free tier and
-  // the free-chain providers verified 2026-09-11 (kilo/openrouter/opencode
-  // are $0 only on their free-suffixed models; empero's endpoint is openly
-  // free but logs prompts). Everything else bills or caps in provider-
-  // specific ways — point at their console, not fiction.
-  // cerebras was removed here 2026-09-13: its grant needs a verified card and
-  // expires in 30 days, so "$0 (cerebras free tier)" became a fiction.
-  if (provider === "nvidia" || provider === "groq" || provider === "gemini" || provider === "zai") {
-    return `$0.0000 (${provider} free tier)`;
-  }
-  if (provider === "empero") {
-    return "$0.0000 (empero free endpoint)";
-  }
-  const m = model ?? "";
-  if (provider === "kilo" || provider === "openrouter") {
-    if (m.endsWith(":free")) {
-      return "$0.0000 (:free model)";
-    }
-  } else if (provider === "opencode" && m.endsWith("-free")) {
-    return "$0.0000 (free model)";
-  }
-  // A loopback local runtime is genuinely $0 marginal and has NO console to
-  // check, so "cost untracked (see provider console)" there sends the user
-  // looking for a bill that cannot exist. Keep this branch in step with
-  // `estimateCost()` in router.ts — the receipt and the polish gate read the
-  // same route through two different functions, so they can silently disagree.
-  const cfg = getProviderConfig(provider);
-  if (cfg !== null && isLoopbackBaseUrl(cfg.baseUrl)) {
-    return "$0.0000 (local runtime — your own machine)";
-  }
-  const keyUrl = cfg?.keyUrl;
-  return keyUrl !== undefined && keyUrl.length > 0
-    ? `cost untracked (see ${keyUrl})`
-    : "cost untracked (see provider console)";
-}
-
 function printReceipt(model: string, promptTokens: number, completionTokens: number, cost: string): void {
   say("");
   say(
     `receipt: ${promptTokens} prompt + ${completionTokens} completion tokens / ${model} / ${cost}`
   );
-}
-
-function mixReceiptString(buckets: UsageBucket[], provider: ProviderId, model: string): string {
-  const list = buckets.length > 0
-    ? buckets
-    : [{ label: provider, model, prompt: 0, completion: 0 }];
-  let p = 0;
-  let c = 0;
-  const parts: string[] = [];
-  const costs: string[] = [];
-  for (const b of list) {
-    p += b.prompt;
-    c += b.completion;
-    // "est." is the honest marker for streams that ended without a usage
-    // block — never present a chars/4 estimate as a meter reading.
-    const est = b.estimated === true ? "est. " : "";
-    parts.push(`${b.label}:${b.model} ${est}${b.prompt}+${b.completion}`);
-    costs.push(costNote(b.label, b.model));
-  }
-  return `receipt: ${p} prompt + ${c} completion tokens / ${parts.join(" + ")} / ${costs.join(" + ")}`;
 }
 
 function printMixReceipt(buckets: UsageBucket[], provider: ProviderId, model: string): void {
