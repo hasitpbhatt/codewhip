@@ -19,6 +19,10 @@ import path from "node:path";
 
 const SURFACE = new Set([
   "src/index.ts",
+  // The other mouth of the same engine: a programmatic entry (query/tool/
+  // canUseTool) that resolves providers, keys and the consent gate — all
+  // surface-side — and then calls into core. Core never imports it.
+  "src/sdk.ts",
   "src/serve.ts",
   "src/auth.ts",
   "src/demo.ts",
