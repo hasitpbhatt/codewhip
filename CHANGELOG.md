@@ -197,6 +197,37 @@ parse time there rather than silently doing nothing.
     stderr so stdout remains one machine document.
   - `--plan` plus `--json-schema` is refused: a plan is prose, and arming both
     would pay for a document the run has already decided not to act on.
+- **`--input-format stream-json`: stdin becomes a conversation.**
+  Parity-matrix Wave 2e; closes one GAP-2 row.
+  - `printf '%s\n' '{"type":"user","message":{"role":"user","content":"…"}}' |
+    codewhip run --input-format stream-json --output-format stream-json` drives
+    several turns in one process against one session — the scripted idiom the
+    REPL was standing in for. Each line is an ordinary run whose transcript is
+    fed back as history, so `agentLoop`, the policy ladder, step budgets and
+    per-run audit records are unchanged by it.
+  - One accepted shape, and every other line is refused **by name**
+    (`src/stream-input.ts:47`): a bad JSON line, a non-text content block, an
+    unknown `type`, a `role` that is not `user`. Skipping what it could not
+    parse was the alternative, and it drops an instruction without saying so.
+    A `role:"assistant"` line is refused specifically because it would assert
+    what the agent already said — history is the loop's to write.
+  - The limit is stated rather than faked: input is read at the **turn
+    boundary**, never inside a running step, so `tool_result` and
+    `control_response` have no inbound path and no pipe line can answer a
+    permission prompt (asks stay held and denied, as under any `-p` run).
+    Capped at 64 messages per process.
+  - **Cost behaviour:** both ceilings move to process scope.
+    `--max-budget-usd` is metered against what the earlier turns already spent
+    and `--token-budget` is handed to each turn as what remains, so N turns
+    cannot spend N times the cap; the `result` envelope keeps reporting the
+    configured ceiling. Every finished turn emits its own `result` line with
+    its own `run_id`, usage and receipt, and `runId`/`checkpoints` still refer
+    to the **last** turn (each turn's undo line is printed as it completes).
+  - The session file is pinned to the first turn, so a stream accumulates into
+    one transcript instead of one file per message. `--input-format` requires
+    `--output-format stream-json` and refuses a positional prompt or `-`,
+    because one `json` document for N turns would have to drop N-1 receipts and
+    stdin has exactly one meaning per run.
 - **`npm run parity`: the parity matrix now counts itself.**
   `scripts/parity.mjs` parses the status column of every row in
   `docs/moat/20-claude-code-parity.md`, recomputes the percentage and the

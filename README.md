@@ -101,6 +101,7 @@ One line each; the full contract for every item is in
 | | |
 |---|---|
 | `-p` / `--output-format` | scriptable one-shot: `text`, one `json` document, or `stream-json` NDJSON of every tool call, retry and policy verdict |
+| `--json-schema` / `--input-format` | the answer must validate (one billed repair round, then a real failure rather than a near-miss) · NDJSON on stdin drives several turns of one session in one process |
 | `rollback` | every `edit`/`write` is snapshotted first; one command undoes a run, hash-verified |
 | `--plan` | run-scoped read-only mode: above `ask`, above `--yolo`, above memory — nothing can grant a mutation |
 | `delegate` | read-only, depth-capped subagents on the same audit chain, folded into the parent receipt |

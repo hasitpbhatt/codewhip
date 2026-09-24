@@ -399,6 +399,9 @@ echo "fix the typo in README" | codewhip run -p              # prompt from stdin
 git diff HEAD~1 | codewhip run -p "review this diff"         # argv prompt, piped material
 codewhip run -p --output-format json "…" > result.json       # one machine document
 codewhip run -p --output-format stream-json "…" | while read -r line; do …; done   # NDJSON
+codewhip run -p --json-schema-file shape.json "…"           # the answer must validate
+printf '{"type":"user","message":{"role":"user","content":"…"}}\n' |
+  codewhip run --input-format stream-json --output-format stream-json   # N turns, one process
 ```
 
 `-p` (long form `--headless`) installs one rule: **stdout is data, stderr is
@@ -429,6 +432,31 @@ Interactive approvals are off under `-p`: an `ask` is held and denied, so
 `--yolo`, a remembered rule or `--plan` has to carry the run. This is the
 CI-safe default — a headless agent that invents its own permission is the bug
 the audit chain exists to catch.
+
+`--json-schema` (or `--json-schema-file`) makes the answer a machine-checked
+artifact instead of a hopeful paragraph: the run must produce exactly one JSON
+document satisfying the schema, and the result gains `structured_output` beside
+the prose. A miss costs one repair round (`structured_repairs: 1`) — the
+validator's own errors are fed back and the model tries again — and an answer
+that still fails ends the run as `error` rather than returning an unvalidated
+document. The flag enforces a documented subset (`type`, `properties`,
+`required`, `additionalProperties`, `items`, `enum`, `const`, length/number/
+item bounds, `pattern`) and refuses at parse time a schema naming anything
+outside it, so a gate that cannot fire never looks armed. It conflicts with
+`--plan`: a plan is prose.
+
+`--input-format stream-json` is the inbound twin: stdin becomes NDJSON
+`{"type":"user","message":{…}}` lines and one process runs them as several
+turns of one session — each turn's transcript handed to the next, so turn two
+remembers turn one. It implies `-p`, requires `--output-format stream-json`
+(each turn emits its own `result` line with its own `run_id`; a single json
+document would drop the earlier receipts) and reads prompts from stdin only.
+Every other line shape is refused by name, including `tool_result` and a forged
+`role:"assistant"`, and input is read at turn boundaries — nothing is injected
+into a step already running, no line answers a permission prompt, and a turn
+that ends badly stops the stream rather than continuing on poisoned history.
+`--max-budget-usd` and `--token-budget` move to process scope across the turns,
+and the session file is pinned to the first turn: a stream is one transcript.
 
 ## Team packs + CI
 
