@@ -1,5 +1,6 @@
 import type { ToolContext, ToolName, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
+import { filtersToolEntirely, type ToolFilter } from "../tool-filter.js";
 import { isReadArgs, readTool } from "./read.js";
 import { isSearchArgs, searchTool } from "./search.js";
 import { isEditArgs, editTool } from "./edit.js";
@@ -212,10 +213,17 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
  * the parent fetches and passes content). Advertising tools we refuse would
  * burn child tokens on refused calls. Filter at construction, not per call,
  * so the transcript and failover paths keep their same-specs assumption.
+ *
+ * `--disallowed-tools` applies the same principle to a single run: a tool the
+ * human filtered out is not advertised, so the model is never tempted into a
+ * call the harness already refuses. Shape-scoped entries (one path, one host,
+ * one command head) keep the spec advertised — the tool is in play, a slice of
+ * it is not, and that slice is enforced where the call is graded.
  */
-export function toolSpecs(depth = 0): ToolSpec[] {
+export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[]): ToolSpec[] {
+  const visible = (name: ToolName): boolean => !filtersToolEntirely(disallowed, name);
   if (depth > 0) {
-    return [TOOLS.read.spec, TOOLS.search.spec];
+    return [TOOLS.read.spec, TOOLS.search.spec].filter((s) => visible(s.name));
   }
   return [
     TOOLS.read.spec,
@@ -230,5 +238,5 @@ export function toolSpecs(depth = 0): ToolSpec[] {
     TOOLS.task_output.spec,
     TOOLS.task_stop.spec,
     TOOLS.todo.spec,
-  ];
+  ].filter((s) => visible(s.name));
 }

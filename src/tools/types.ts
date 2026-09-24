@@ -1,19 +1,28 @@
 import type { ChatPort } from "../provider-port.js";
 import type { UsageBucket } from "../outcomes.js";
 
-export type ToolName =
-  | "read"
-  | "search"
-  | "edit"
-  | "write"
-  | "bash"
-  | "webfetch"
-  | "delegate"
-  | "delegate_many"
-  | "run_in_background"
-  | "task_output"
-  | "task_stop"
-  | "todo";
+/**
+ * Every tool name, as data — the union is derived from this list, so a new
+ * tool has one place to be declared. Registry-ordered consumers (`toolSpecs`,
+ * `lookupTool`) and the CLI filter parser check against it;
+ * `tool-filter.test.ts` pins it to the keys of `TOOLS`.
+ */
+export const TOOL_NAMES = [
+  "read",
+  "search",
+  "edit",
+  "write",
+  "bash",
+  "webfetch",
+  "delegate",
+  "delegate_many",
+  "run_in_background",
+  "task_output",
+  "task_stop",
+  "todo",
+] as const;
+
+export type ToolName = (typeof TOOL_NAMES)[number];
 
 export type ToolResult = {
   ok: boolean;

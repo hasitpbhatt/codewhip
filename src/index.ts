@@ -16,6 +16,8 @@ import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
 import { labelSession, listSessions, loadSession, nameTaken, sanitizeSessionLabel, sanitizeSessionName, saveSession, sessionIdentity, sessionRecord, SESSION_NAME_RULE, SESSION_TAG_RULE, type SessionLabels } from "./sessions.js";
+import { describeToolFilter, parseToolFilterList, TOOL_FILTER_RULE, type ToolFilter } from "./tool-filter.js";
+import { APPEND_MAX_CHARS } from "./system.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
@@ -73,6 +75,20 @@ type RunOptions = {
   autoFailover: boolean;
   /** Run-scoped read-only: edit/write/bash denied, output is the plan. */
   plan: boolean;
+  /**
+   * `--allowed-tools`: shapes this run may pass an ask without a prompt.
+   * Session-scoped by construction — it is an argument, never a file, so the
+   * next run asks again.
+   */
+  allowedTools: ToolFilter[];
+  /** `--disallowed-tools`: shapes refused above the ladder, for this run only. */
+  disallowedTools: ToolFilter[];
+  /** `--append-system-prompt` text, plus whatever `-file` read (see cmdRun). */
+  appendSystemPrompt?: string;
+  /** `--append-system-prompt-file`: path read at run time, not parse time. */
+  appendSystemPromptFile?: string;
+  /** `--exclude-dynamic-system-prompt-sections`: drop the agent roster. */
+  excludeDynamicSections: boolean;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
   /** With --share: also print a pasteable Markdown receipt block to stdout. */
@@ -147,6 +163,10 @@ function printRunOptions(): void {
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --auto-failover      like --free but silent: backend hops are recorded in the outcome/audit, not printed (private runs stay head-only; not with --free/--failover)");
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
+  console.log(`  --allowed-tools <f>  session rung of the ladder: these shapes pass an ask with no prompt, this run only — nothing is written to disk. ${TOOL_FILTER_RULE}. Never a policy deny, --plan, or a .codewhip path (also --allowedTools)`);
+  console.log("  --disallowed-tools <f>  refused above the ladder: no --yolo, remembered rule or human yes grants these, and a bare tool name is not even advertised to the model (also --disallowedTools)");
+  console.log(`  --append-system-prompt <text>  your own last line of the system prompt (<=${APPEND_MAX_CHARS} chars, re-pays every turn); --append-system-prompt-file <path> reads it from a file`);
+  console.log("  --exclude-dynamic-system-prompt-sections   drop the per-run delegable-agent roster from the system prompt (refusal notes are never dropped)");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
   console.log("  --continue [ref]     -r/--resume: resume a prior session by name, bare (most recent) or id prefix >=4 chars, and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
@@ -446,6 +466,10 @@ function takeValue(flag: string, args: string[], i: number, needs: string): Flag
   return { ok: true, value: v, next: i + 1 };
 }
 
+/** Entries a single run's tool filters may carry — a wall of patterns is a
+ * review surface nobody reviewed, and the flags are meant to be readable. */
+const MAX_TOOL_FILTERS = 64;
+
 function parseRunArgs(args: string[]): RunOptions | null {
   let model = PROVIDERS.nvidia.defaultModel;
   let modelExplicit = false;
@@ -462,6 +486,11 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let free = false;
   let autoFailover = false;
   let plan = false;
+  const allowedTools: ToolFilter[] = [];
+  const disallowedTools: ToolFilter[] = [];
+  let appendSystemPrompt: string | undefined;
+  let appendSystemPromptFile: string | undefined;
+  let excludeDynamicSections = false;
   let share = false;
   let sharePrint = false;
   let noStream = false;
@@ -553,6 +582,37 @@ function parseRunArgs(args: string[]): RunOptions | null {
       autoFailover = true;
     } else if (a === "--plan") {
       plan = true;
+    } else if (a === "--allowed-tools" || a === "--allowedTools" || a.startsWith("--allowed-tools=") || a.startsWith("--allowedTools=")) {
+      const v = takeValue(a, args, i, "--allowed-tools needs a filter list");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const parsed = parseToolFilterList(v.value);
+      if (parsed.ok === false) return fail(`--allowed-tools: ${parsed.error}`);
+      allowedTools.push(...parsed.filters);
+      if (allowedTools.length > MAX_TOOL_FILTERS) return fail(`--allowed-tools is capped at ${MAX_TOOL_FILTERS} entries`);
+    } else if (a === "--disallowed-tools" || a === "--disallowedTools" || a.startsWith("--disallowed-tools=") || a.startsWith("--disallowedTools=")) {
+      const v = takeValue(a, args, i, "--disallowed-tools needs a filter list");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const parsed = parseToolFilterList(v.value);
+      if (parsed.ok === false) return fail(`--disallowed-tools: ${parsed.error}`);
+      disallowedTools.push(...parsed.filters);
+      if (disallowedTools.length > MAX_TOOL_FILTERS) return fail(`--disallowed-tools is capped at ${MAX_TOOL_FILTERS} entries`);
+    } else if (a === "--append-system-prompt" || a.startsWith("--append-system-prompt=")) {
+      const v = takeValue(a, args, i, "--append-system-prompt needs text");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      if (v.value.length > APPEND_MAX_CHARS) {
+        return fail(`--append-system-prompt is capped at ${APPEND_MAX_CHARS} characters — it re-pays on every turn of the run`);
+      }
+      appendSystemPrompt = v.value;
+    } else if (a === "--append-system-prompt-file" || a.startsWith("--append-system-prompt-file=")) {
+      const v = takeValue(a, args, i, "--append-system-prompt-file needs a path");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      appendSystemPromptFile = v.value;
+    } else if (a === "--exclude-dynamic-system-prompt-sections") {
+      excludeDynamicSections = true;
     } else if (a === "--no-stream") {
       noStream = true;
     } else if (a === "--share") {
@@ -632,6 +692,9 @@ function parseRunArgs(args: string[]): RunOptions | null {
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, autoFailover, plan, share, sharePrint,
+    allowedTools, disallowedTools, excludeDynamicSections,
+    ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt }),
+    ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
@@ -1030,6 +1093,46 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       port: makePortForConfig(nextCfg, failoverKey, undefined, failoverSource),
     }];
   }
+  // Run-scoped request shaping, resolved pre-flight (before a token is spent)
+  // so an unreadable --append-system-prompt-file fails like every other guard.
+  let runAppend = opts.appendSystemPrompt ?? "";
+  if (opts.appendSystemPromptFile !== undefined) {
+    const appendPath = path.resolve(process.cwd(), opts.appendSystemPromptFile);
+    let size = -1;
+    try {
+      size = fs.statSync(appendPath).size;
+    } catch {
+      size = -1;
+    }
+    if (size < 0 || size > APPEND_MAX_CHARS) {
+      console.error(
+        `codewhip: --append-system-prompt-file "${opts.appendSystemPromptFile}" ${size < 0 ? "is unreadable" : `is ${size} bytes, over the ${APPEND_MAX_CHARS} cap`}`
+      );
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const text = fs.readFileSync(appendPath, "utf8");
+    runAppend = runAppend.length > 0 ? `${runAppend}\n${text}` : text;
+  }
+  if (runAppend.length > APPEND_MAX_CHARS) {
+    console.error(`codewhip: --append-system-prompt and -file together are ${runAppend.length} chars, over the ${APPEND_MAX_CHARS} cap (it re-pays on every turn)`);
+    process.exitCode = 1;
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  if (opts.allowedTools.length > 0) {
+    say(`!! --allowed-tools armed: ${opts.allowedTools.map(describeToolFilter).join(", ")} — these asks pass without a prompt, this run only (nothing written to .codewhip/remembered.jsonl)`);
+  }
+  if (opts.disallowedTools.length > 0) {
+    say(`!! --disallowed-tools armed: ${opts.disallowedTools.map(describeToolFilter).join(", ")} — refused above --yolo and remembered rules${opts.disallowedTools.some((f) => (f.tool === "read" || f.tool === "search") && f.shape === null) ? "; delegate is refused too (a subagent reads by proxy)" : ""}`);
+  }
+  if (runAppend.length > 0) {
+    say(`!! system prompt appended: ${runAppend.length} chars, re-sent on every turn of the run`);
+  }
+  if (opts.excludeDynamicSections) {
+    say("!! --exclude-dynamic-system-prompt-sections armed: the delegable-agent roster is left out of the system prompt (refusal notes are never left out — a prompt that hides a refusal produces a model that retries it).");
+  }
   const ctrl = new AbortController();
   const onSigint = (): void => {
     ctrl.abort();
@@ -1132,6 +1235,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     task_class: route.taskClass,
     output_format: opts.outputFormat,
     permission_mode: opts.plan ? "plan" : opts.yolo ? "yolo" : "ask",
+    ...(opts.allowedTools.length > 0 ? { allowed_tools: opts.allowedTools.map(describeToolFilter) } : {}),
+    ...(opts.disallowedTools.length > 0 ? { disallowed_tools: opts.disallowedTools.map(describeToolFilter) } : {}),
+    ...(runAppend.length > 0 ? { appended_system_prompt_chars: runAppend.length } : {}),
+    ...(opts.excludeDynamicSections ? { exclude_dynamic_system_prompt_sections: true } : {}),
     max_steps: opts.maxSteps,
     token_budget: opts.tokenBudget,
     ...(opts.maxBudgetUsd === undefined ? {} : { max_budget_usd: opts.maxBudgetUsd }),
@@ -1157,6 +1264,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       askUser: askUserFn,
       remembered: listRules(process.cwd()),
       planMode: opts.plan,
+      allowedTools: opts.allowedTools,
+      disallowedTools: opts.disallowedTools,
+      ...(runAppend.length > 0 ? { appendSystemPrompt: runAppend } : {}),
+      excludeDynamicSections: opts.excludeDynamicSections,
       retryWait: opts.retryWait,
       failovers: failoverTargets,
       quietFailover: opts.autoFailover,
