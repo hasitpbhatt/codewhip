@@ -135,7 +135,7 @@ receipt anyway.
 
 ## Roadmap (abridged)
 
-- **H1 (parity + trust):** `agentLoop()` → five tools → 134 providers + custom registration + meter →
+- **H1 (parity + trust):** `agentLoop()` → twelve tools → 136 providers + custom registration + meter →
   policy jail + denylist + chaining-deny → curated remembered-shape memory
   (provenanced) → hash-chained audit → `init`/`run`/`--share` (local redacted
   bundles; hosted links need a server) →
@@ -519,7 +519,7 @@ Responses are non-streaming, because a `<tool_call>` block can be split across
 SSE deltas and whole bodies keep the parse reliable. It is also credit-metered
 from the first call (see the out-of-chain table below).
 
-Beyond the chain, the registry holds **134 builtins** (`codewhip provider
+Beyond the chain, the registry holds **136 builtins** (`codewhip provider
 list`; keys via `codewhip auth login <id>`): first-party labs and clouds
 plus keyed aggregators, all reachable via `--provider`. The ones below stay
 **out of the free chain** — each for a stated money reason, since `--free`
@@ -683,7 +683,8 @@ and the non-overridable denylist still wins over it.
 `codewhip pack list` shows packs shipped with the install;
 `pack pull starter` copies the starter `policy.md` (publishing / infra /
 secret-file denies) into your repo. Local-file v1 — no registry, no network.
-`.github/workflows/ci.yml` pins lint (node 22) + typecheck + tests + build on Node 22/24;
+`.github/workflows/ci.yml` runs typecheck + lint + tests + build in one Node 22
+job, with separate license, OpenSSF-scorecard and dependency-audit checks;
 `actions/run/action.yml` runs the agent headless in CI (ask⇒deny by
 construction, never `--yolo`) and uploads `.codewhip/` as the audit artifact.
 PR commenting is deliberately unwired in v1 — review the trail first.

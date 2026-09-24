@@ -41,7 +41,7 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [x] **Custom slash commands** — `.codewhip/commands/*.md` + `$ARGUMENTS`, REPL `.help` + error-on-unknown, one-shot exact-match expansion. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [x] **Hooks** — `PreToolUse/PostToolUse/Stop` from self-protected `hooks.json`, fail-open-on-infra-failure, redaction-downstream, observe-only Stop. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [ ] **Pick the 90-day frame** — verifiable team delegation vs honest $0 on-ramp; running both produces a brand war (trust pitch vs anonymous free relays). Decision + analysis: `docs/moat/10-competitive-reality.md`.
-- [x] **Paper track: REOPENED as verdict-driven privilege (C3, ML frame).** 2026-09-20 ruling (`docs/moat/00-convergence.md`): single bet = induce per-repo least-privilege tool permissions from one-bit human verdicts + near-miss co-signals; target NeurIPS/ICML (main: method + sample-complexity; D&B: first public verdict-telemetry corpus). Shipped: core/surface boundary (`src/boundary.test.ts`, no deletions — registry/serve/TUI frozen as product surface), approval-shape telemetry on outcomes, `src/immunity/` samples+rules+miner+simuser+LLM baselines, 67-case escape suite (`npm run immunity`; first run found+fixed a real Windows-destructor escape), 16-seed robustness sweep (`--sim --seeds`), salted corpus export (`--export`). Protocol + results: `docs/moat/18-verdict-privilege-experiments.md`. Next: real dogfood telemetry (≥100 labeled events), capable-model baselines, induced-set replay, arXiv. *(2026-09-18 physiology scaffold in `docs/moat/15-agent-physiology.md` stays as the frame; C2/C1 demoted to follow-up)*
+- [x] **Paper track: REOPENED as verdict-driven privilege (C3, ML frame).** 2026-09-20 ruling (`docs/moat/00-convergence.md`): single bet = induce per-repo least-privilege tool permissions from one-bit human verdicts + near-miss co-signals; target NeurIPS/ICML (main: method + sample-complexity; D&B: first public verdict-telemetry corpus). Shipped: core/surface boundary (`src/boundary.test.ts`, no deletions — registry/serve/TUI frozen as product surface), approval-shape telemetry on outcomes, `src/immunity/` samples+rules+miner+simuser+LLM baselines, 67-case escape suite (`npm run immunity`; first run found+fixed a real Windows-destructor escape), 16-seed robustness sweep (`--sim --seeds`), salted corpus export (`--export`), induced-set replay (`--replay`, P3 PASS). Protocol + results: `docs/moat/18-verdict-privilege-experiments.md`. Next: real dogfood telemetry (≥100 labeled events), capable-model baselines, arXiv. *(2026-09-18 physiology scaffold in `docs/moat/15-agent-physiology.md` stays as the frame; C2/C1 demoted to follow-up)*
 
 ## H2 backlog (ordered)
 
@@ -134,7 +134,7 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 | SBOM generation | 🔲 Planned | Tracked in security section |
 | Signed releases | 🔲 Planned | See `docs/roadmap.md` |
 | OpenSSF Best Practices badge | 🔲 Planned | Scorecard action in CI |
-| CHANGELOG | 🔲 Planned | Per-release changelog |
+| CHANGELOG | ✅ Done | `CHANGELOG.md` — Keep a Changelog + SemVer, `0.1.0`–`0.3.0` |
 | License | ✅ MIT | MIT stays — no AGPL change. Freedom-first, no copyleft |
 | Multi-maintainer governance | 🔲 Planned | Path defined in `MAINTAINERS.md` |
 
