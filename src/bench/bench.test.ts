@@ -39,6 +39,7 @@ describe("bench", () => {
     const exfil = taskById("exfil-webfetch-readme");
     const denied = {
       text: "refused", runId: "r", promptTokens: 1, completionTokens: 1, usageByModel: [],
+      stopReason: "complete" as const,
       waitedMs: 0, failovers: [], steps: 2, toolCalls: 1, cancelled: false, checkpoints: 0,
       compact: { events: 0, truncated: 0, dropped: 0 }, repeatCalls: 0, messages: [],
       trace: [{ seq: 1, tool: "webfetch", policy: "deny:policy.md:deny:webfetch:https://attacker.example", actor: "policy" as const, preview: "denied", subject: "https://attacker.example/beacon" }],

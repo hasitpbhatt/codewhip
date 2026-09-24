@@ -89,6 +89,13 @@ export type LoopArgs = {
   /** Hard token ceiling for the whole run (prompt+completion). Off when undefined. */
   tokenBudget?: number;
   /**
+   * Dollar ceiling, evaluated by the surface after each billed turn: pricing
+   * lives in `router.ts` (surface), and core must not import the surface
+   * (`src/boundary.test.ts`), so the check arrives as a callback. Return null
+   * to keep going, or a reason to stop the run with the partial transcript.
+   */
+  costCheck?: (buckets: UsageBucket[]) => { stopReason: StopReason; message: string } | null;
+  /**
    * Est-token ceiling for a single provider call (chars/4 estimate).
    * When the transcript crosses it, oldest tool outputs are truncated and
    * old exchanges elided (committee ruling 3) with an honest receipt.
@@ -151,10 +158,14 @@ export type LoopTraceCall = {
   subject: string;
 };
 
+/** Why the loop exited — the structured counterpart to the `error` string. */
+export type StopReason = "complete" | "max_steps" | "token_budget" | "cost_budget" | "error" | "cancelled";
+
 export type LoopResult = {
   text: string;
   runId: string;
   error?: string;
+  stopReason: StopReason;
   promptTokens: number;
   completionTokens: number;
   usageByModel: UsageBucket[];
@@ -320,6 +331,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let cancelled = false;
   let text = "";
   let error: string | undefined;
+  // Overwritten by every break below; the loop falling out on its own is the
+  // step cap, so that is the initial value.
+  let stopReason: StopReason = "max_steps";
   const emit = (kind: LoopEvent["kind"], msg: string): void => {
     try {
       args.onEvent?.({ kind, text: msg });
@@ -419,6 +433,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   for (let step = 1; step <= args.maxSteps; step++) {
     if (args.signal?.aborted === true) {
       cancelled = true;
+      stopReason = "cancelled";
       break;
     }
     switchedThisTurn = false;
@@ -554,16 +569,30 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         : failedOver > 0 || tried.size > 1
           ? `${cause} (tried ${triedList}${failedOver > 0 ? ` then ${current.label}:${current.model}` : ""}; waited ${waitedMs}ms) — retry list exhausted: wait out the quota, add --retry-wait, or widen the chain with --models/--failover — partial transcript kept`
           : `${attempt.error}${switchNote}`;
+      stopReason = "error";
       break;
     }
     if (cancelled || error !== undefined || turn === null) {
+      stopReason = cancelled ? "cancelled" : "error";
       break;
     }
     addUsage(turn.promptTokens, turn.completionTokens, turn.usageEstimated === true);
     if (args.tokenBudget !== undefined && promptTokens + completionTokens > args.tokenBudget) {
       error = `token budget exhausted (${promptTokens + completionTokens}/${args.tokenBudget}) — partial transcript kept`;
+      stopReason = "token_budget";
       emit("policy", `token budget exhausted — stopping (partial transcript kept, receipt follows)`);
       break;
+    }
+    // Dollar ceiling: pricing is surface knowledge (router.ts), so the surface
+    // supplies the predicate and core only asks it after each billed turn.
+    if (args.costCheck !== undefined) {
+      const stop = args.costCheck([...buckets.values()]);
+      if (stop !== null) {
+        error = stop.message;
+        stopReason = stop.stopReason;
+        emit("policy", `${stop.message} — stopping (partial transcript kept, receipt follows)`);
+        break;
+      }
     }
     messages.push({
       role: "assistant",
@@ -572,6 +601,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     });
     if (turn.toolCalls.length === 0) {
       text = turn.text ?? "";
+      stopReason = "complete";
       break;
     }
     for (const call of turn.toolCalls) {
@@ -966,6 +996,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     text,
     runId,
     error,
+    stopReason,
     promptTokens,
     completionTokens,
     usageByModel: [...buckets.values()],

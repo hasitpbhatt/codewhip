@@ -4,7 +4,7 @@ import { resolveKey } from "./auth.js";
 import { readProviderCalls, summarizeCalls, type ModelHealth } from "./provider-stats.js";
 import { isBlocked } from "./provider-blocklist.js";
 import { isModelAllowed } from "./model-allowlist.js";
-import type { OutcomeRecord } from "./outcomes.js";
+import type { OutcomeRecord, UsageBucket } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
 
@@ -341,8 +341,22 @@ export function estimateCost(provider: ProviderId, model: string, prompt: number
   return (prompt / 1000) * p.input + (completion / 1000) * p.output;
 }
 
-/** Launch gate: a polish receipt proves <$0.05 only when priced, not untracked. */
-export function polishGate(cost: number | null): { pass: boolean; reason: string } {
+/**
+ * Run-total metered cost, or null when any route in the mix is unpriced.
+ * `null` is a fact about the meter, not a zero: a caller must not report an
+ * untracked run as free.
+ */
+export function meteredCost(rows: readonly UsageBucket[]): number | null {
+  let total = 0;
+  for (const r of rows) {
+    const c = estimateCost(r.label, r.model, r.prompt, r.completion);
+    if (c === null) return null;
+    total += c;
+  }
+  return total;
+}
+
+/** Launch gate: a polish receipt proves <$0.05 only when priced, not untracked. */export function polishGate(cost: number | null): { pass: boolean; reason: string } {
   if (cost === null) {
     return { pass: false, reason: "cost untracked for this provider:model — gate needs a priced route" };
   }

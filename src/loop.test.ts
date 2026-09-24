@@ -699,6 +699,69 @@ describe("loop", () => {
     ok(r.error !== undefined && r.error.includes("token budget exhausted"));
     ok(ev.some((t) => t.includes("budget")));
   });
+  it("stopReason distinguishes complete, max_steps and token_budget", async () => {
+    const done = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port: makeFakePort([textTurn("all done")]).port,
+      onEvent: () => undefined, remembered: listRules(cwd),
+    });
+    strictEqual(done.stopReason, "complete");
+    strictEqual(done.error, undefined);
+
+    // A model that keeps asking for work never settles: the step cap ends it.
+    const spinning = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 2, yolo: true,
+      stdinIsTTY: true,
+      port: makeFakePort([
+        toolTurn("read", '{"path":"package.json"}'),
+        toolTurn("read", '{"path":"package.json"}'),
+        toolTurn("read", '{"path":"package.json"}'),
+      ]).port,
+      onEvent: () => undefined, remembered: listRules(cwd),
+    });
+    strictEqual(spinning.stopReason, "max_steps");
+    strictEqual(spinning.steps, 2);
+
+    const capped = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true,
+      port: makeFakePort([textTurn("one", { prompt: 300000, completion: 0 })]).port,
+      onEvent: () => undefined, remembered: listRules(cwd),
+      tokenBudget: 250000,
+    });
+    strictEqual(capped.stopReason, "token_budget");
+  });
+  it("costCheck stops the run on a dollar ceiling the surface computes", async () => {
+    const ev: string[] = [];
+    const turns = [textTurn("one", { prompt: 1000, completion: 500 }), textTurn("two")];
+    const r = await agentLoop({
+      prompt: "hi", model: "paid", label: "nvidia", cwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port: makeFakePort(turns).port,
+      onEvent: (e) => ev.push(e.text), remembered: listRules(cwd),
+      costCheck: (buckets) => {
+        const tokens = buckets.reduce((s, b) => s + b.prompt + b.completion, 0);
+        return tokens > 100
+          ? { stopReason: "cost_budget" as const, message: "cost budget exhausted ($0.02/$0.01) — partial transcript kept" }
+          : null;
+      },
+    });
+    strictEqual(r.stopReason, "cost_budget");
+    ok(r.error !== undefined && r.error.includes("cost budget exhausted"));
+    ok(ev.some((t) => t.includes("cost budget exhausted")));
+    // The ceiling is checked after each billed turn, so the run stopped before
+    // the second turn could run — the transcript is partial, not empty.
+    strictEqual(r.steps, 1);
+  });
+  it("costCheck returning null lets the run finish normally", async () => {
+    const r = await agentLoop({
+      prompt: "hi", model: "m", label: "nvidia", cwd, maxSteps: 5, yolo: true,
+      stdinIsTTY: true, port: makeFakePort([textTurn("done")]).port,
+      onEvent: () => undefined, remembered: listRules(cwd),
+      costCheck: () => null,
+    });
+    strictEqual(r.stopReason, "complete");
+    strictEqual(r.error, undefined);
+  });
   it("chain hops in order: primary → target1 → target2, one failover event per hop", async () => {
     const ev: LoopEvent[] = [];
     const primary = makeFakePort([rateLimited()]);
