@@ -7,6 +7,8 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-24
+
 Cost behavior: new builtins are unpriced (`cost untracked`, console
 pointer) except where noted; the free chain is unchanged (43 hops).
 
