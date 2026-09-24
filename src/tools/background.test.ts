@@ -3,7 +3,8 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runInBackground, taskOutput, taskStop, isRunInBackgroundArgs, isTaskOutputArgs, isTaskStopArgs } from "./background.js";
+import { runInBackground, taskOutput, taskStop } from "./background.js";
+import { isRunInBackgroundArgs, isTaskOutputArgs, isTaskStopArgs } from "./background-tools.js";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-bg-"));
 const ctx = { cwd } as Parameters<typeof runInBackground>[0];

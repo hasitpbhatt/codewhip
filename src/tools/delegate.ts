@@ -1,8 +1,9 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
-import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
+import { canDelegate, findAgent } from "../subagents.js";
 import { allocateChildBudgets } from "../budget.js";
+import { MAX_TASK_CHARS, loopContextReady, runChild } from "./child-run.js";
 
 /**
  * The `delegate` tool: spawn one read-only subagent with a fresh context and
@@ -16,8 +17,6 @@ import { allocateChildBudgets } from "../budget.js";
  */
 
 export const DELEGATE_TIMEOUT_MS = 600_000;
-/** Keep the child's seed prompt sane. */
-const MAX_TASK_CHARS = 8000;
 
 function delegateSpec(): ToolSpec {
   return {
@@ -42,10 +41,6 @@ function isDelegateArgs(args: unknown): args is { agent: string; task: string } 
   if (typeof args !== "object" || args === null) return false;
   const r = args as Record<string, unknown>;
   return typeof r["agent"] === "string" && r["agent"].length > 0 && typeof r["task"] === "string" && r["task"].length > 0;
-}
-
-function loopContextReady(ctx: ToolContext): ctx is ToolContext & { port: NonNullable<ToolContext["port"]>; model: string; label: string; depth: number } {
-  return ctx.port !== undefined && typeof ctx.model === "string" && typeof ctx.label === "string" && typeof ctx.depth === "number";
 }
 
 export async function runDelegate(ctx: ToolContext, args: { agent: string; task: string }, signal?: AbortSignal): Promise<ToolResult> {
@@ -75,22 +70,12 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
     );
   }
   ctx.onChildEvent?.(`[${agent.name}] started: ${args.task.slice(0, 120)}`);
-  const r = await runChildAgent({
-    cwd: ctx.cwd,
+  const r = await runChild(ctx, {
     agent,
     task: args.task,
-    port: ctx.port,
-    model: ctx.model,
-    label: ctx.label,
-    depth: ctx.depth,
     signal,
     tokenBudget: budget?.children[0]?.allocated,
-    compactTokens: ctx.compactTokens,
-    models: ctx.rotationModels,
-    retryWait: ctx.retryWait,
-    parentRunId: ctx.parentRunId,
     deadlineMs: DELEGATE_TIMEOUT_MS,
-    ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
   });
   ctx.onChildUsage?.(r.usageByModel);
   if (!r.ok) {

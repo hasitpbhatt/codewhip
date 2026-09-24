@@ -1,9 +1,10 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import type { ToolDef } from "./registry.js";
-import { canDelegate, findAgent, runChildAgent } from "../subagents.js";
+import { canDelegate, findAgent } from "../subagents.js";
 import { DELEGATE_TIMEOUT_MS } from "./delegate.js";
 import { allocateChildBudgets } from "../budget.js";
+import { MAX_TASK_CHARS, loopContextReady, runChild } from "./child-run.js";
 
 /**
  * The `delegate_many` tool: fan one task out to several read-only subagents
@@ -17,7 +18,6 @@ import { allocateChildBudgets } from "../budget.js";
  */
 
 export const MAX_FANOUT = 4;
-const MAX_TASK_CHARS = 8000;
 
 type Entry = { agent: string; task: string };
 
@@ -63,10 +63,6 @@ function isEntries(args: unknown): args is { entries: Entry[] } {
   });
 }
 
-function loopContextReady(ctx: ToolContext): ctx is ToolContext & { port: NonNullable<ToolContext["port"]>; model: string; label: string; depth: number } {
-  return ctx.port !== undefined && typeof ctx.model === "string" && typeof ctx.label === "string" && typeof ctx.depth === "number";
-}
-
 export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[] }, signal?: AbortSignal): Promise<ToolResult> {
   if (!loopContextReady(ctx)) {
     return { ok: false, output: "delegate_many: only available inside an agent run (no provider context)" };
@@ -106,22 +102,12 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
   }
   const runs = await Promise.all(
     agents.map((agentEntry, i) =>
-      runChildAgent({
-        cwd: ctx.cwd,
+      runChild(ctx, {
         agent: agentEntry.def,
         task: agentEntry.task,
-        port: ctx.port,
-        model: ctx.model,
-        label: ctx.label,
-        depth: ctx.depth,
         signal,
         tokenBudget: budget?.children[i]?.allocated,
-        compactTokens: ctx.compactTokens,
-        models: ctx.rotationModels,
-        retryWait: ctx.retryWait,
-        parentRunId: ctx.parentRunId,
         deadlineMs: DELEGATE_TIMEOUT_MS,
-        ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
       })
     )
   );
