@@ -62,7 +62,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `-p/--print` headless one-shot | HAVE | `-p`/`--headless` (`src/index.ts:535`); `src/run-output.ts` owns stdout, prose moves to stderr. `--print` keeps its older share-markdown meaning — the long name diverges, the short flag does not |
 | `cat file \| codewhip -p "query"` stdin piping | HAVE | `readStdin` (`src/run-output.ts:92`): stdin is the prompt when there is no argv prompt (`src/index.ts:2387`), and is appended as context when there is one (`src/index.ts:2406`) |
 | `--output-format text\|json\|stream-json` | HAVE | `src/run-output.ts:22` parse, `:161` result document, `:208` emit; NDJSON init/event/result on stream-json |
-| `--input-format stream-json` | **GAP-2** | absent |
+| `--input-format stream-json` | **HAVE** | `src/stream-input.ts` — `parseUserMessage:47` (one accepted shape; every refusal names what it saw), `inboundMessages:102` (lazy NDJSON generator, 64-message cap); flag at `src/index.ts:743` with the two conflicts at `:770`/`:775`, first message resolved pre-flight at `:1063`, the turn driver at `:1537` (`runTurn:1477`, session pin `:1536`, process-scoped budgets `:1457`) |
 | `--json-schema` validated result | **HAVE** | `src/structured.ts` — `parseSchema:34` (subset enforced at the door, names the offending keyword and its path), `validateJson:100`, `extractJson:223`; the gate is in the loop at `src/loop.ts:672` (one billed repair round, then `stopReason: "error"`); flags at `src/index.ts:666`/`:677`, resolved pre-flight at `:1236`; `structured_output` beside the prose at `src/run-output.ts:208` |
 | `--max-budget-usd` | HAVE | `src/index.ts:546` parse, `:1065` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1021`) |
 | `--max-turns` | ALIAS | `--max-steps 25` |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 38**, **PARTIAL 16**, **GAP 48**,
-i.e. **37.3%** at parity or better. Remaining GAP rows by wave: 2 → 2, 3 → 24,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 39**, **PARTIAL 16**, **GAP 47**,
+i.e. **38.2%** at parity or better. Remaining GAP rows by wave: 2 → 1, 3 → 24,
 4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -339,7 +339,7 @@ process sees them: the same absolute target reads `1: content from the extra
 dir` with the root and `read: path escapes workspace jail` without it.
 
 Wave 2d (validated output) closed 1 row: `--json-schema`. HAVE-or-better
-37 → 38, GAP 49 → 48; the wave-2 remainder is now 2 rows (`--input-format
+37 → 38, GAP 49 → 48; the wave-2 remainder at that point was 2 rows (`--input-format
 stream-json`, programmatic entry). 41 new tests in `src/structured.test.ts`,
 all 697 pre-existing tests untouched. Five rulings inside it:
 
@@ -389,6 +389,59 @@ requiring a `pattern` on `name` printed `!! --json-schema armed:…`, then
 `receipt: 4494 prompt + 48 completion tokens / llm7:default` — two turns,
 charged as two turns.
 
+Wave 2e (inbound scripting) closed 1 row: `--input-format stream-json`.
+HAVE-or-better 38 → 39, GAP 48 → 47, and one row is left in wave 2 (the Agent
+SDK). 33 new tests in `src/stream-input.test.ts`, all 738 pre-existing tests
+untouched. Five rulings inside it:
+
+- **One shape is accepted and everything else is refused by name.** A line must
+  be `{"type":"user","message":{"role":"user","content": … }}`; a non-text block
+  (`image`), an empty content, a bad JSON line each report what they saw
+  (`src/stream-input.ts:47`). Skipping an unparseable line is the alternative,
+  and it loses an instruction without saying so.
+- **A forged model turn is refused because it rewrites history.**
+  `role:"assistant"` on the pipe would assert what the agent already said — the
+  one input that is not operator material (`parseUserMessage` refuses it for
+  exactly that reason). `type:"assistant"` at the envelope is refused the same
+  way.
+- **Laziness is the feature, and so is its limit.** `inboundMessages` is an
+  async generator (`src/stream-input.ts:102`), so a message written while the
+  model is working is picked up when the turn ends — 64 messages per process,
+  and a refusal ends the input rather than killing the turn in hand. What that
+  deliberately is not: mid-step steering. `tool_result` and
+  `control_response` have no inbound path, so the flag says so at the door
+  instead of advertising the control protocol; no line answers a permission
+  prompt either, and asks stay held and denied as under any `-p` run.
+- **N turns cannot spend N times the cap.** `agentLoop` is untouched — each
+  turn is an ordinary run whose transcript is fed back as `history`
+  (`src/index.ts:1572`), which keeps step budgets, the policy ladder and
+  per-run audit records meaningful. What moves to process scope is the metering
+  (`src/index.ts:1457`): `--max-budget-usd` is checked against the turns
+  already spent, and each turn's `--token-budget` is what remains — while the
+  `result` envelope keeps reporting the configured ceiling, not the residual.
+- **One session, one result line per turn.** A turn is not merged into a bigger
+  document: each finished turn emits its own `result` with its own `run_id`
+  and receipt, and the session file is pinned to the first turn
+  (`src/index.ts:1536`) so a stream accumulates into one transcript instead of
+  one file per message. Requiring `--output-format stream-json` is the same
+  claim from the other side — one `json` document for N turns would have to
+  drop N-1 receipts.
+
+Also verified against the real binary (`pollinations:openai-fast`, three
+messages pushed seconds apart, `--max-steps 2`): three `result` lines with
+three distinct `run_id`s answering `four`, `six`, `eight` — the third arrived
+as a content-block array — with per-turn receipts `1494+45`, `1518+31`,
+`1543+33` and `turns: 3 user message(s) ran as one session (61acfb9c) — 4664
+tokens total`. Memory across the boundary was checked directly rather than
+assumed: *remember the word mango* then *what word did I ask you to remember?*
+answered `mango`, both lines carried the same `session_id` while `run_id`
+differed, and the saved file holds four messages, `user,assistant,user,assistant`.
+Two negative paths, same run: a forged `{"type":"assistant",…}` printed
+`… type "assistant" is not accepted … — queued input dropped` and the turn in
+hand still reported normally; a provider 502 on turn 1 printed
+`codewhip: turn 1 ended as error — the rest of stdin is not read` instead of
+billing the rest of the queue.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -414,8 +467,9 @@ count is the instrument, not the memory of it.
    `src/loop.ts`, `src/checkpoints.ts`);
    `--json-schema` **closed 2026-09-24** (`src/structured.ts`,
    `src/loop.ts:672`, `src/run-output.ts`);
-   still open: `--input-format`/stream-json input, public
-   programmatic entry.
+   `--input-format stream-json` **closed 2026-09-24** (`src/stream-input.ts`,
+   `src/index.ts:1537`);
+   still open: public programmatic entry (the Agent SDK row).
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
    subagent frontmatter, task-list tool, `AskUserQuestion`, web search tool,
