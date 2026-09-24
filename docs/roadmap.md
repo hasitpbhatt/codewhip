@@ -52,45 +52,15 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [ ] Graph memory **only on proven pain** (>500 outcomes + weekly multi-hop
   queries): edges derived from `outcomes.jsonl`; Mem0/Zep/Letta evaluated
   then; flat files never replaced.
-- [ ] Full provider matrix + auto-fallback + latency optimization; local-model
-  parity path (free-tier slice shipped 2026-09-11: 8 free gateways — 4 keyless
-  (kilo/opencode/empero/llm7) — plus `codewhip free` and the `--free` chain;
-  SSE streaming + first-byte/idle timeouts + timeout-classification fix shipped
-  2026-09-12; +18 free-key tiers and the lepton/chutes/cerebras rot repair
-     shipped 2026-09-13 — 53 builtins, 44 free-chain hops at the time; 2026-09-18
-   trial-credit repair + completeness batch — 96 builtins, 43 free-chain hops:
-   one-time signup grants are not free, so xai/novita/qianfan/deepseek/ppio/
-   scaleway/friendli/nscale/nebius/ai21 left the chain but stay reachable via
-   `--provider`; 15 providers added (githubmodels, aihubmix, fastrouter,
-   vercel, zenmux, llmgateway, suyu, voapi, nio join the chain; together,
-   deepinfra, fireworks, cometapi, mkeai, apiyi stay out as trial/paid). Same
-   day: `codiv` (api.codiv.ai — OpenAI-compatible diffusion-LM host, free
-   per-account grant while the experiment runs) joins builtin-only, out of the
-   chain like the one-time grants. 2026-09-19 cross-harvest (OmniRoute
-   registry + awesome-freellm/awesome-free-llm-apis/cool-ai-stuff, deduped):
-   96 → 134 builtins (incl. user-sourced `wrouter`/`arouter`, docs-verified),
-   all builtin-only via `--provider` (quotas unverified);
-   same day: `run --auto-failover` (the $0 chain with a quiet terminal —
-   hops recorded, not printed; private stays head-only) and silent serve
-   retry on `auto` (≤3 upstream attempts, winner in `serviced_by`; pinned
-   models never hop). Also
-   added 2026-09-13:
-  adapter: flattened prompt, prompt-injected tool calls, estimated usage) and
-  `codewhip serve`, an OpenAI-compatible HTTP front end over the whole registry
-  — which is what lets a client that cannot speak 1min's schema still use it.
-  `hcnsec` (api.hcnsec.cn, a keyed New API relay) joined 2026-09-14, outside
-  the free chain — as did `hashneuron` (hashneuron.space, the RouteOpen gateway;
-  default model id `default`, which its own console labels "Auto"). Both stay
-  out of the chain because their free grants are quota/prepaid-metered rather
-  than a fixed non-billing tier.
-  The local-model parity path landed 2026-09-14: `custom-providers.ts` now
-  accepts `http://` on loopback only, and `routeFor("private")` routes to a
-  registered loopback provider — still refusing when none is registered, or when
-  several make the choice ambiguous.
-  2026-09-16 ruling: serve regains a `GET /stats` page — aggregated
-  provider/model health only (the same summarizeCalls view auto-routing
-  reads). Per-request history stays unserved, as removed in d8f784f; the
-  bearer gate covers `/stats` like `/playground`.
+- [ ] Full provider matrix + latency optimization. The rest of what this line
+  once claimed to cover is already spent — auto-fallback (`--failover`,
+  `--free`, `--auto-failover`), the free-tier chain, the loopback local-model
+  parity path, and `serve` (all 2026-09-11→16). Contracts:
+  [`features.md`](features.md). Per-provider tables, why rows sit outside the
+  free chain, and the corrections/removals: [`providers.md`](providers.md).
+  Dated registry growth (53 → 96 → 134 builtins, 43 free-chain hops) is
+  `CHANGELOG.md`'s job, not this file's. What remains — breadth for its own
+  sake — is a kill-list item, so it stays unprioritized until a user asks.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.

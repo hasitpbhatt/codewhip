@@ -14,11 +14,39 @@ npm test           # $0-quota suite: tsx --test, no API key needed
 npm run build      # tsc -> dist/
 ```
 
-Requires Node >= 22. TypeScript strict, ESM (`"type": "module"`).
+Requires Node >= 22 for development (`npm test` needs the Node 21+ test-runner
+globs; CI pins 22/24). The built CLI (`node dist/index.js`) runs on the
+`engines` floor of Node >= 20. TypeScript strict, ESM (`"type": "module"`).
 
 Tests never touch the network: model calls go through the `$0` fake ChatPort
 in `src/testkit/`. If your change needs a provider key to verify, say so in
 the PR — reviewers run what they can without one.
+
+### Run the build from any path
+
+`npm link` points global `codewhip` at this repo's `dist/`:
+
+```sh
+npm install && npm run build && npm link
+codewhip help                    # from any directory, in a NEW terminal
+npm unlink -g codewhip           # undo
+```
+
+`npm link` needs a writable global bin and does not survive ephemeral
+filesystems — on Replit, CI, or any machine where `-g` fails, skip it and run
+`node dist/index.js …` from the repo root instead (same binary, no link). On
+Replit specifically the key file (`~/.config/codewhip`) is also ephemeral: set
+provider keys as Replit Secrets, since env vars win over stored keys, or stay
+on `--free`.
+
+Since the link resolves through `dist/`, rebuild after each `src/` change —
+easiest is one watcher terminal:
+
+```sh
+npm run build -- --watch   # terminal A: rebuilds dist/ on save, link stays valid
+```
+
+Or skip the build loop entirely with `npm run dev -- run "fix the failing test"`.
 
 ## Repo map
 
