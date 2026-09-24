@@ -91,9 +91,9 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
 | `-c/--continue` most-recent | HAVE | `--continue` |
-| `-r <id-or-name>` resume by name | PARTIAL → **GAP-2** | `--continue <prefix>` only; `src/sessions.ts:16-23` has no name field |
-| `--name` / `--fork-session` / `/branch` | **GAP-2** | no fork or label |
-| `/rename`, `/tag`, `tagSession()` | **GAP-2** | absent |
+| `-r <id-or-name>` resume by name | HAVE | `-r`/`--resume`/`--continue` all take a name or a ≥4-char id prefix — `src/sessions.ts:199` (`resolveSession`), `src/sessions.ts:217` (`loadSession`) |
+| `--name` / `--fork-session` / `/branch` | HAVE | `--name` + `--fork-session` at `src/index.ts:580`/`src/index.ts:595`, identity decided by `sessionIdentity` (`src/sessions.ts:187`); `.branch` in the REPL at `src/index.ts:1415` |
+| `/rename`, `/tag`, `tagSession()` | HAVE | `codewhip sessions rename\|tag` (`src/index.ts:1329`) over `labelSession` (`src/sessions.ts:263`); REPL `.rename`/`.tag` at `src/index.ts:1393` |
 | `/clear [name]`, `/compact [instructions]` | PARTIAL | compaction is automatic and model-aware (`src/compact.ts`); no manual `/compact`, no instructions arg |
 | `--autocompact auto\|tokens` | ALIAS | `compactTokens: 0` to disable |
 | `/context`, `/usage`, `/cost` | PARTIAL | receipts print tokens/model/`$`; no context grid |
@@ -211,8 +211,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 ## Score
 
 Counted mechanically from the rows below, N/S excluded: **102 in-scope rows** —
-**HAVE/ALIAS/HAVE-plus 29**, **PARTIAL 16**, **GAP 57**, i.e. **28.4%** at parity
-or better. Remaining GAP rows by wave: 2 → 11, 3 → 24, 4 → 13, 5 → 9.
+**HAVE/ALIAS/HAVE-plus 32**, **PARTIAL 16**, **GAP 54**, i.e. **31.4%** at parity
+or better. Remaining GAP rows by wave: 2 → 8, 3 → 24, 4 → 13, 5 → 9.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
@@ -236,6 +236,14 @@ close):
 Wave 1 (headless scripting) closed 4 rows: `-p/--print`, stdin piping,
 `--output-format`, `--max-budget-usd`. HAVE-or-better went 25 → 29, GAP 61 → 57.
 
+Wave 2a (session naming) closed 3 rows: resume by name, `--name`/
+`--fork-session`/`.branch`, `sessions rename|tag` + REPL `.rename`/`.tag`.
+HAVE-or-better 29 → 32, GAP 57 → 54. Two things this deliberately did *not*
+copy from Claude Code: names are one word with no spaces (a name is the handle
+`-r` looks up, and a two-word name prints a resume command that does not
+resume), and a name collision is refused before the run starts rather than
+after it has spent a transcript nobody can find by name again.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -250,10 +258,12 @@ ruling that it is out of scope.
    The stdout/stderr split is the durable decision: in headless mode stdout is
    data and prose belongs on stderr, so a script can pipe the result and a human
    can still read why a run refused.
-2. **Wave 2 — session and control surface.** `--name`/`/branch`/`--fork-session`,
-   `--permission-mode` ladder, `--allowed-tools`/`--disallowed-tools`,
-   `--add-dir`, `--append-system-prompt`, `--input-format`/`--json-schema`,
-   public programmatic entry, `permissions.defaultMode`.
+2. **Wave 2 — session and control surface.** `--name`/`/branch`/`--fork-session`
+   **closed 2026-09-24** (`src/sessions.ts`, `src/index.ts` `-r`/`.rename`);
+   still open: `--permission-mode` ladder,
+   `--allowed-tools`/`--disallowed-tools`, `--add-dir`,
+   `--append-system-prompt`, `--input-format`/`--json-schema`, public
+   programmatic entry, `permissions.defaultMode`.
 3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
    caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
    subagent frontmatter, task-list tool, `AskUserQuestion`, web search tool,

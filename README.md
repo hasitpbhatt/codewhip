@@ -108,7 +108,7 @@ One line each; the full contract for every item is in
 | `/commands` | `.codewhip/commands/*.md` prompt templates, expanded before the model sees them |
 | hooks | `PreToolUse` can veto; `PostToolUse`/`Stop` observe. Only an assertion denies — a crash warns and proceeds |
 | compaction | long runs prune their own oldest tail instead of dying on the context ceiling, with a printed receipt |
-| `--continue` | opt-in transcript resume; nothing touches disk unless you arm it |
+| `--continue` / `-r` | opt-in transcript resume, by name or id prefix; `--name`/`--tag`/`--fork-session` label and branch the file; nothing touches disk unless you arm it |
 | `serve` | the whole registry behind an OpenAI-compatible HTTP endpoint. It is a proxy: no tools, no policy, no audit |
 | `eval` / `metrics` / `verdict` | 12 machine-graded fixture tasks and the bars they feed, so success is measured not claimed |
 

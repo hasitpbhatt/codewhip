@@ -232,19 +232,37 @@ On by default; the API takes `compactTokens: 0` to disable.
 
 ```sh
 codewhip run "add retries" --continue            # resume the most recent session
-codewhip run "add retries" --continue 37b0       # resume one session (prefix >=4 chars, unique)
+codewhip run "add retries" -r 37b0               # resume by unique id prefix (>=4 chars)
+codewhip run "add retries" -r auth               # resume by name
+codewhip run "one more thing" -r auth --fork-session --name auth-v2   # branch the file
 codewhip sessions                                # saved transcripts, newest first
+codewhip sessions rename 37b0 auth               # name an existing session
+codewhip sessions tag auth wip                   # tag it (repeatable, max 8)
 ```
 
 `outcomes.jsonl` stores `prompt_hash`, never the raw prompt — so a saved
-transcript is **opt-in only**: nothing is written unless `--continue` is armed
+transcript is **opt-in only**: nothing is written unless `-r`/`--continue` (or
+`--name`/`--tag`, which arm it explicitly) is armed
 (the banner says `transcript saved on exit (raw prompts on disk)`). Each run
-writes one `.codewhip/sessions/<runId>.json`
-(`{ v: 1, ts, runId, provider, model, messages }`, `0600`, secrets redacted at
-write time, system message stripped and rebuilt fresh on resume). The saved
-transcript is the post-compaction one — exactly what the last provider call
-saw — and lands on every exit path (success, error, cancel). The REPL threads
-one in-memory transcript across lines and saves once on `.exit`.
+writes one `.codewhip/sessions/<sessionId>.json`
+(`{ v: 1, ts, runId, provider, model, messages }` plus optional `lastRunId`,
+`name`, `tags`, `parent`; `0600`, secrets redacted at write time, system message
+stripped and rebuilt fresh on resume). The saved transcript is the
+post-compaction one — exactly what the last provider call saw — and lands on
+every exit path (success, error, cancel). The REPL threads one in-memory
+transcript across lines and saves once on `.exit`.
+
+**The file name is the session id**, so resuming grows one transcript instead of
+chaining files; `--fork-session` is how you start a new file that still says
+where it came from. In the REPL the same moves are `.rename`, `.tag`, `.branch`
+and `.sessions`.
+
+A name is a lookup key, so it is one word (≤64 chars, not starting with
+`-`/`/`/`!`/`.`) and unique — `-r <name>` is meant to be copy-pasted off the
+hint line, and `sessions rename` prints that hint with whatever it just named.
+Two sessions answering to one name would make `-r auth` a coin flip, so a
+collision is refused before the run starts, not after it has spent a transcript
+nobody can find again. Tags are looser on purpose: they are only ever displayed.
 
 ## Serve every provider as an OpenAI endpoint
 
