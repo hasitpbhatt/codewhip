@@ -11,7 +11,7 @@ import { allowedModelsFor, disableEntries, enableEntries, isModelAllowed, loadAl
 import { freeChainCandidates, freeChainIds, listFreeProviders } from "./free-providers.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
-import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type FailoverTarget } from "./loop.js";
+import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type LoopResult, type FailoverTarget } from "./loop.js";
 import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
@@ -28,7 +28,8 @@ import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpr
 import { getTaskStatuses } from "./tools/background-status.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
 import { estimateCost, isPolishRun, meteredCost, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
-import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, outputFormat, parseOutputFormat, readStdin, say, setOutputFormat, STDIN_CONTEXT_WAIT_MS, writeResultText, type OutputFormat } from "./run-output.js";
+import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, outputFormat, parseOutputFormat, readStdin, say, setOutputFormat, STDIN_CONTEXT_WAIT_MS, writeResultText, type OutputFormat, type RunFacts } from "./run-output.js";
+import { inboundMessages, MAX_MESSAGES, parseInputFormat, type InboundMessage, type InputFormat } from "./stream-input.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
@@ -165,6 +166,12 @@ type RunOptions = {
   /** Shape of the headless payload; only meaningful with headless. */
   outputFormat: OutputFormat;
   /**
+   * Shape of stdin: `text` is today's behaviour (the pipe is one prompt, or
+   * one blob of context), `stream-json` makes it a stream of NDJSON user
+   * messages so one process can drive several turns of one session.
+   */
+  inputFormat: InputFormat;
+  /**
    * Dollar ceiling, enforced mid-run on priced routes only. Refused up front
    * on an untracked route rather than silently inert — the meter never lies.
    */
@@ -206,6 +213,7 @@ function printRunOptions(): void {
   console.log("  --no-tui             force 80-col screen-reader-safe output (overrides --tui)");
   console.log("  -p, --headless       scriptable one-shot: stdout carries only the result, every banner moves to stderr, the REPL never opens and interactive approvals are suppressed (asks are held and denied — pair with --yolo or a remembered rule to let work through)");
   console.log("  --output-format <f>  text|json|stream-json — implies -p: json prints one result document, stream-json prints NDJSON (init, one line per event, result)");
+  console.log("  --input-format <f>   text|stream-json — stream-json makes stdin a stream of {\"type\":\"user\",\"message\":{…}} lines and drives several turns of one session in one process; needs --output-format stream-json (one result line per turn) and takes the prompts from stdin, so no positional prompt. Follow-ups land at the next turn boundary: nothing is injected into a step already running, and no line answers a permission prompt (asks stay held and denied, as under any -p run)");
   console.log("  run -                read the prompt from stdin. Piped stdin alongside a prompt is appended to it as context: cat diff.patch | codewhip run -p \"review this\"");
   console.log("  --max-budget-usd <n> stop the run when metered cost crosses n on a priced route (refused on untracked routes rather than inert; not with --free/--auto-failover, which never bill)");
 }
@@ -535,6 +543,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let forkSession = false;
   let headlessFlag = false;
   let formatArg: OutputFormat | null = null;
+  let inputFormatArg: InputFormat = "text";
   let maxBudgetUsd: number | undefined;
   let stdinPrompt = false;
   const positional: string[] = [];
@@ -731,6 +740,14 @@ function parseRunArgs(args: string[]): RunOptions | null {
       if (f === null) return fail(`--output-format must be text|json|stream-json (got "${v.value}")`);
       formatArg = f;
       headlessFlag = true;
+    } else if (a === "--input-format" || a.startsWith("--input-format=")) {
+      const v = takeValue(a, args, i, "--input-format needs text|stream-json");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const f = parseInputFormat(v.value);
+      if (f === null) return fail(`--input-format must be text|stream-json (got "${v.value}")`);
+      inputFormatArg = f;
+      if (f === "stream-json") headlessFlag = true;
     } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
       const v = takeValue(a, args, i, "--max-budget-usd needs a dollar amount");
       if (!v.ok) return fail(v.error);
@@ -747,6 +764,17 @@ function parseRunArgs(args: string[]): RunOptions | null {
     }
   }
   if (sharePrint && !share) return fail("--print needs --share");
+  if (inputFormatArg === "stream-json") {
+    // Three conflicts, one reason: stdin has exactly one meaning per run.
+    if (positional.length > 0 || stdinPrompt) {
+      return fail("--input-format stream-json reads the prompts from stdin — remove the positional prompt and `-`");
+    }
+    // One document per run cannot carry N turns' receipts, so the pair is the
+    // only honest combination: every turn emits its own `result` line.
+    if ((formatArg ?? "text") !== "stream-json") {
+      return fail(`--input-format stream-json needs --output-format stream-json (got "${formatArg ?? "text"}") — each turn emits its own result line, one json document would drop the earlier receipts`);
+    }
+  }
   if (forkSession && !cont) return fail("--fork-session needs -r/--continue <session> to fork from");
   // `-p`/`--output-format` owns stdout, so the mode that grabs it for itself loses.
   if (headlessFlag && tui) return fail("--output-format/-p cannot combine with --tui (stdout is reserved for data)");
@@ -784,6 +812,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     noTui,
     headless: headlessFlag,
     outputFormat: formatArg ?? "text",
+    inputFormat: inputFormatArg,
     stdinPrompt,
     sessionTags,
     forkSession,
@@ -1026,6 +1055,30 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         return [{ label: cfg.id, model: cfg.defaultModel, port: makePortForConfig(cfg, key, undefined, source) }];
       });
     opts = { ...opts, provider: head, model: headModel };
+  }
+  // `--input-format stream-json`: the first user message on stdin *is* the
+  // prompt, so it is read before routing (which classifies prompt text) and
+  // before a token is spent. The generator stays open for the follow-ups.
+  let inbound: AsyncGenerator<InboundMessage> | undefined;
+  if (opts.inputFormat === "stream-json") {
+    const stream = inboundMessages(process.stdin);
+    const first = await stream.next();
+    if (first.done === true) {
+      console.error('codewhip: --input-format stream-json: stdin carried no {"type":"user",…} message');
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    if (!first.value.ok) {
+      console.error(`codewhip: --input-format stream-json: ${first.value.error}`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      await stream.return(undefined);
+      return;
+    }
+    inbound = stream;
+    opts = { ...opts, prompt: first.value.text };
+    say(`!! --input-format stream-json armed: stdin is NDJSON user messages (max ${MAX_MESSAGES}) — every turn emits its own result line, and a follow-up is picked up at the next turn boundary, never inside a step already running`);
   }
   const routed = resolveRoute({
     prompt: opts.prompt,
@@ -1374,6 +1427,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     model: opts.model,
     task_class: route.taskClass,
     output_format: opts.outputFormat,
+    ...(opts.inputFormat === "text" ? {} : { input_format: opts.inputFormat }),
     // The mode is the truth about who answers an ask; "yolo"/"ask" are kept as
     // the historical spellings of the two modes a flag can still spell.
     permission_mode: mode === "default" ? (opts.yolo ? "yolo" : "ask") : mode,
@@ -1394,8 +1448,34 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   let shareOut: { path: string; sha256: string } | undefined;
 
   try {
-    const result = await agentLoop({
-      prompt: opts.prompt,
+    // One `--input-format stream-json` process drives several turns of one
+    // session. `agentLoop` is untouched by this: each turn is an ordinary run
+    // whose transcript is fed back as `history`, so step budgets, the policy
+    // ladder and per-run audit records keep their meaning. What moves to
+    // process scope is the money — both ceilings meter what the earlier turns
+    // already spent, so N turns cannot spend N times the cap.
+    let spentCost = 0;
+    let spentTokens = 0;
+    const fold = (r: LoopResult): void => {
+      spentCost += meteredCost(r.usageByModel) ?? 0;
+      spentTokens += r.promptTokens + r.completionTokens;
+    };
+    const factsFor = (r: LoopResult, durationMs: number, sessionId?: string): RunFacts => ({
+      provider: opts.provider,
+      model: opts.model,
+      taskClass: route.taskClass,
+      durationMs,
+      receipt: mixReceiptString(r.usageByModel, opts.provider, opts.model),
+      costUsd: meteredCost(r.usageByModel),
+      costNote: (r.usageByModel.length > 0
+        ? r.usageByModel.map((b) => costNote(b.label, b.model))
+        : [costNote(opts.provider, opts.model)]).join(" + "),
+      tokenBudget: opts.tokenBudget,
+      ...(usdCap === undefined ? {} : { maxBudgetUsd: usdCap }),
+      ...(sessionId === undefined ? {} : { sessionId }),
+    });
+    const runTurn = (prompt: string, prior: LoopMsg[], tokenBudget: number): Promise<LoopResult> => agentLoop({
+      prompt,
       model: opts.model,
       label: opts.provider,
       taskClass: route.taskClass,
@@ -1420,9 +1500,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       quietFailover: opts.autoFailover,
       models: opts.models,
       takePendingSwitch,
-      tokenBudget: opts.tokenBudget,
+      tokenBudget,
       costCheck: usdCap === undefined ? undefined : (buckets) => {
-        let metered = 0;
+        let metered = spentCost;
         for (const b of buckets) {
           const c = estimateCost(b.label, b.model, b.prompt, b.completion);
           if (c === null) {
@@ -1443,12 +1523,60 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
           : null;
       },
       compactTokens: compactCeiling,
-      history,
+      history: prior,
       onEvent: onEventFn,
       // Loaded ONCE here, before the run exists: the model can never
       // register or edit a hook mid-run (docs/moat/19-qol-parity.md).
       hooks: loadHooks(process.cwd()),
     });
+    let result = await runTurn(opts.prompt, history, opts.tokenBudget);
+    fold(result);
+    // Which session the whole process writes is pinned to the first turn, so a
+    // multi-turn stream accumulates into one file rather than one per turn.
+    let pinnedSession: string | undefined;
+    if (inbound !== undefined) {
+      pinnedSession = sessionIdentity({ currentRunId: result.runId, resumedFrom, fork: opts.forkSession }).sessionId;
+      let turnNo = 1;
+      let turnStartedAt = startedAt;
+      for (;;) {
+        const ended = result.cancelled ? "cancelled" : result.stopReason;
+        if (ended !== "complete") {
+          console.error(`codewhip: turn ${turnNo} ended as ${ended} — the rest of stdin is not read`);
+          break;
+        }
+        const next = await inbound.next();
+        if (next.done === true) break;
+        const msg = next.value;
+        if (!msg.ok) {
+          console.error(`codewhip: --input-format stream-json: ${msg.error} — queued input dropped`);
+          process.exitCode = 1;
+          break;
+        }
+        // The turn in hand is now known not to be the last, so report it on its
+        // own terms: its run id, its usage, its receipt. Nothing about the
+        // envelope changes — one result line per turn is what stream-json means.
+        emitResult(buildResult(result, factsFor(result, Date.now() - turnStartedAt, opts.persist ? pinnedSession : undefined)));
+        // Each turn is a run with its own id, so each gets its own undo line —
+        // `codewhip rollback` below covers only the turn it names.
+        say(`turn ${turnNo}: ${result.runId.slice(0, 8)} — ${mixReceiptString(result.usageByModel, opts.provider, opts.model)}${result.checkpoints > 0 ? ` (undo: codewhip rollback ${result.runId.slice(0, 8)})` : ""}`);
+        turnStartedAt = Date.now();
+        if (usdCap !== undefined && spentCost >= usdCap) {
+          say(`!! --max-budget-usd ${usdCap} reached after ${turnNo} turn(s) ($${spentCost.toFixed(4)} metered) — remaining input not read`);
+          break;
+        }
+        if (spentTokens >= opts.tokenBudget) {
+          say(`!! --token-budget ${opts.tokenBudget} reached after ${turnNo} turn(s) (${spentTokens} tokens) — remaining input not read`);
+          break;
+        }
+        turnNo += 1;
+        result = await runTurn(msg.text, result.messages.slice(1), opts.tokenBudget - spentTokens);
+        fold(result);
+      }
+      await inbound.return(undefined);
+      if (turnNo > 1) {
+        say(`turns: ${turnNo} user message(s) ran as one session (${pinnedSession.slice(0, 8)}) — ${spentTokens} tokens total${usdCap === undefined ? "" : `, $${spentCost.toFixed(4)} metered`}`);
+      }
+    }
     // Set runId on the TUI model for the rollback footer.
     tuiModel?.setRunId(result.runId);
     // Thread the transcript forward: single-shot saves below; REPL feeds it
@@ -1457,7 +1585,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     // Which file this run writes: a fresh run owns a new id, a resumed run
     // accumulates into the session it resumed, a fork starts a new file that
     // records its parent (docs/moat/20-claude-code-parity.md wave 2).
-    const ident = sessionIdentity({ currentRunId: result.runId, resumedFrom, fork: opts.forkSession });
+    const ident = sessionIdentity({ currentRunId: pinnedSession ?? result.runId, resumedFrom, fork: opts.forkSession });
     const sessionLabels: SessionLabels = { ...labels, ...(ident.parent === undefined ? {} : { parent: ident.parent }) };
     if (replMode && replState !== undefined) {
       replState.history.length = 0;
@@ -1565,20 +1693,8 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       }
     }
     if (opts.headless) {
-      const metered = meteredCost(result.usageByModel);
       emitResult(buildResult(result, {
-        provider: opts.provider,
-        model: opts.model,
-        taskClass: route.taskClass,
-        durationMs: Date.now() - startedAt,
-        receipt: mixReceiptString(result.usageByModel, opts.provider, opts.model),
-        costUsd: metered,
-        costNote: (result.usageByModel.length > 0
-          ? result.usageByModel.map((b) => costNote(b.label, b.model))
-          : [costNote(opts.provider, opts.model)]).join(" + "),
-        tokenBudget: opts.tokenBudget,
-        ...(usdCap === undefined ? {} : { maxBudgetUsd: usdCap }),
-        ...(opts.persist ? { sessionId: ident.sessionId } : {}),
+        ...factsFor(result, Date.now() - startedAt, opts.persist ? ident.sessionId : undefined),
         ...(gateOut === undefined ? {} : { polishGate: gateOut }),
         ...(shareOut === undefined ? {} : { share: shareOut }),
       }));
@@ -2866,6 +2982,17 @@ async function main(): Promise<void> {
   if (command === "run") {
     const opts = parseRunArgs(args.slice(1));
     if (opts === null) {
+      return;
+    }
+    if (opts.inputFormat === "stream-json") {
+      // stdin is the control channel, so none of the text-mode pipe idioms
+      // apply — and reading it here would consume the stream cmdRun drives.
+      if (process.stdin.isTTY === true) {
+        console.error('codewhip: --input-format stream-json needs piped NDJSON on stdin: printf \'{"type":"user","message":{"role":"user","content":"…"}}\\n\' | codewhip run --input-format stream-json --output-format stream-json');
+        process.exitCode = 1;
+        return;
+      }
+      await cmdRun(opts);
       return;
     }
     if (opts.prompt.length === 0) {

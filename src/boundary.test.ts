@@ -34,6 +34,9 @@ const SURFACE = new Set([
   "src/onemin.ts",
   "src/router.ts",
   "src/run-output.ts",
+  // The inbound twin of run-output: a CLI I/O boundary, not loop substrate —
+  // the loop never reads stdin, cmdRun feeds it messages.
+  "src/stream-input.ts",
   "src/metrics.ts",
   "src/model-allowlist.ts",
 ]);
