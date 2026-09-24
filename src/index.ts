@@ -18,6 +18,7 @@ import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpo
 import { labelSession, listSessions, loadSession, nameTaken, sanitizeSessionLabel, sanitizeSessionName, saveSession, sessionIdentity, sessionRecord, SESSION_NAME_RULE, SESSION_TAG_RULE, type SessionLabels } from "./sessions.js";
 import { describeToolFilter, parseToolFilterList, TOOL_FILTER_RULE, type ToolFilter } from "./tool-filter.js";
 import { loadSettings, parsePermissionMode, PERMISSION_MODES, type PermissionMode } from "./settings.js";
+import { MAX_REPAIRS, parseSchema } from "./structured.js";
 import { MAX_ROOTS, resolveRoots } from "./tools/jail.js";
 import { APPEND_MAX_CHARS } from "./system.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
@@ -104,6 +105,15 @@ type RunOptions = {
   appendSystemPromptFile?: string;
   /** `--exclude-dynamic-system-prompt-sections`: drop the agent roster. */
   excludeDynamicSections: boolean;
+  /**
+   * `--json-schema`: the schema text, validated at parse time. The parsed
+   * schema is what reaches the loop — `src/structured.ts` enforces a
+   * documented subset and refuses the rest, so an unenforceable schema never
+   * reaches a model as a promise.
+   */
+  jsonSchema?: string;
+  /** `--json-schema-file`: path read at run time, not parse time. */
+  jsonSchemaFile?: string;
   /** Write a redacted share bundle (.codewhip/share-<runId>.json) after the run. */
   share: boolean;
   /** With --share: also print a pasteable Markdown receipt block to stdout. */
@@ -184,6 +194,7 @@ function printRunOptions(): void {
   console.log(`  --add-dir <dir>  widen the file jail to another directory (repeatable, max ${MAX_ROOTS}; also permissions.additionalDirectories in settings.json). Containment only: secret files and .codewhip/ state stay refused inside it`);
   console.log(`  --append-system-prompt <text>  your own last line of the system prompt (<=${APPEND_MAX_CHARS} chars, re-pays every turn); --append-system-prompt-file <path> reads it from a file`);
   console.log("  --exclude-dynamic-system-prompt-sections   drop the per-run delegable-agent roster from the system prompt (refusal notes are never dropped)");
+  console.log(`  --json-schema <json> | --json-schema-file <path>  the answer must be one JSON document satisfying this schema — a miss costs ${MAX_REPAIRS} repair round, then the run fails rather than return an unvalidated document. Enforces a documented subset (type, properties, required, additionalProperties, items, enum, const, min/maxLength, pattern, min/max(Exclusive)imum, min/maxItems) and refuses a schema naming anything else, so a gate that cannot fire never looks armed. Conflicts with --plan`);
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
   console.log("  --continue [ref]     -r/--resume: resume a prior session by name, bare (most recent) or id prefix >=4 chars, and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
@@ -509,6 +520,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   const addDirs: string[] = [];
   let appendSystemPrompt: string | undefined;
   let appendSystemPromptFile: string | undefined;
+  let jsonSchema: string | undefined;
+  let jsonSchemaFile: string | undefined;
   let excludeDynamicSections = false;
   let share = false;
   let sharePrint = false;
@@ -650,6 +663,23 @@ function parseRunArgs(args: string[]): RunOptions | null {
       appendSystemPromptFile = v.value;
     } else if (a === "--exclude-dynamic-system-prompt-sections") {
       excludeDynamicSections = true;
+    } else if (a === "--json-schema" || a.startsWith("--json-schema=")) {
+      const v = takeValue(a, args, i, "--json-schema needs a JSON Schema document");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      if (jsonSchemaFile !== undefined) return fail("use --json-schema or --json-schema-file, not both");
+      // Validated here, not at first use: a schema that names a keyword this
+      // harness cannot enforce must stop the run before it spends a token, or
+      // the caller believes a gate exists that never fires.
+      const parsed = parseSchema(v.value);
+      if (!parsed.ok) return fail(parsed.error);
+      jsonSchema = v.value;
+    } else if (a === "--json-schema-file" || a.startsWith("--json-schema-file=")) {
+      const v = takeValue(a, args, i, "--json-schema-file needs a path");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      if (jsonSchema !== undefined) return fail("use --json-schema or --json-schema-file, not both");
+      jsonSchemaFile = v.value;
     } else if (a === "--no-stream") {
       noStream = true;
     } else if (a === "--share") {
@@ -744,6 +774,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt }),
     ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
+    ...(jsonSchema === undefined ? {} : { jsonSchema }),
+    ...(jsonSchemaFile === undefined ? {} : { jsonSchemaFile }),
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
@@ -1196,6 +1228,39 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
+  // --json-schema is resolved the same way, before any token is spent. Plan
+  // mode is refused alongside it: the plan is prose by contract, and a schema
+  // that demanded JSON would be a promise the run cannot keep twice over.
+  let structuredSchema: unknown;
+  let structuredSchemaChars = 0;
+  if (opts.jsonSchema !== undefined || opts.jsonSchemaFile !== undefined) {
+    const bail = (why: string): void => {
+      console.error(`codewhip: ${why}`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+    };
+    if (opts.plan) {
+      bail("--plan and --json-schema conflict — a plan is prose; drop one of them");
+      return;
+    }
+    let schemaText = opts.jsonSchema ?? "";
+    if (opts.jsonSchemaFile !== undefined) {
+      try {
+        schemaText = fs.readFileSync(path.resolve(process.cwd(), opts.jsonSchemaFile), "utf8");
+      } catch {
+        bail(`--json-schema-file "${opts.jsonSchemaFile}" is unreadable`);
+        return;
+      }
+    }
+    const parsed = parseSchema(schemaText);
+    if (!parsed.ok) {
+      bail(parsed.error);
+      return;
+    }
+    structuredSchema = parsed.schema;
+    structuredSchemaChars = schemaText.length;
+    say(`!! --json-schema armed: the answer must be one JSON document satisfying it; ${MAX_REPAIRS} repair round${MAX_REPAIRS === 1 ? "" : "s"} if it is not (an answer that still fails ends the run as an error, not as a result)`);
+  }
   if (opts.allowedTools.length > 0) {
     say(`!! --allowed-tools armed: ${opts.allowedTools.map(describeToolFilter).join(", ")} — these asks pass without a prompt, this run only (nothing written to .codewhip/remembered.jsonl)`);
   }
@@ -1313,6 +1378,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     // the historical spellings of the two modes a flag can still spell.
     permission_mode: mode === "default" ? (opts.yolo ? "yolo" : "ask") : mode,
     ...(roots.length > 0 ? { additional_directories: roots } : {}),
+    ...(structuredSchemaChars === 0 ? {} : { json_schema_chars: structuredSchemaChars }),
     ...(opts.allowedTools.length > 0 ? { allowed_tools: opts.allowedTools.map(describeToolFilter) } : {}),
     ...(opts.disallowedTools.length > 0 ? { disallowed_tools: opts.disallowedTools.map(describeToolFilter) } : {}),
     ...(runAppend.length > 0 ? { appended_system_prompt_chars: runAppend.length } : {}),
@@ -1344,6 +1410,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       planMode: mode === "plan",
       permissionMode: mode,
       roots,
+      ...(structuredSchema === undefined ? {} : { structuredSchema }),
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
       ...(runAppend.length > 0 ? { appendSystemPrompt: runAppend } : {}),
@@ -1413,8 +1480,13 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         say(result.text);
       } else if (opts.outputFormat === "text") {
         // `-p` prints only the result on stdout; json/stream-json carry the
-        // same text inside the machine document below instead.
-        writeResultText(result.text);
+        // same text inside the machine document below instead. With a schema
+        // satisfied, the validated document *is* the payload a pipe wants —
+        // `codewhip run -p --json-schema … | jq .field` would otherwise choke
+        // on the model's wrapper text, which passed validation and so is noise.
+        writeResultText(
+          result.structured?.ok === true ? JSON.stringify(result.structured.value) : result.text,
+        );
       }
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);

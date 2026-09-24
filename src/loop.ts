@@ -18,6 +18,7 @@ import { jailPath } from "./tools/jail.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { listAgentsWithErrors } from "./subagents.js";
+import { MAX_REPAIRS, repairNote, structuredInstruction, structuredTurn } from "./structured.js";
 import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
 import type { ProviderId } from "./provider-port.js";
 
@@ -146,6 +147,13 @@ export type LoopArgs = {
   appendSystemPrompt?: string;
   /** `--exclude-dynamic-system-prompt-sections` — drop the agent roster. */
   excludeDynamicSections?: boolean;
+  /**
+   * `--json-schema` — a parsed schema the final answer must satisfy. The
+   * instruction to answer in JSON is appended to the system prompt by the
+   * loop (not the caller: it is a harness note, not operator text), and one
+   * repair round is spent asking for it before the run reports failure.
+   */
+  structuredSchema?: unknown;
   /** Bootstrap list of remembered rules (index.ts loads once; loop appends on `a`). */
   remembered?: RememberedRule[];
   /**
@@ -218,6 +226,10 @@ export type LoopResult = {
   compact: { events: number; truncated: number; dropped: number };
   /** Identical idempotent calls served from the run memo instead of re-executing. */
   repeatCalls: number;
+  /** `--json-schema`: verdict on the final answer, absent when no schema was set. */
+  structured?: { ok: true; value: unknown } | { ok: false; errors: string[] };
+  /** Repair rounds spent on the structured answer (absent unless one was used). */
+  structuredRepairs?: number;
   /** Audit entries this run failed to record (lock contention / disk) — nonzero means history has holes. */
   auditDropped?: number;
   /**
@@ -349,9 +361,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     agentFileErrors = errors;
     roster = agents.slice(0, MAX_ROSTER).map((a) => `- ${a.name}: ${a.description}`).join("\n");
   }
+  const appendParts = [
+    args.appendSystemPrompt ?? "",
+    args.structuredSchema === undefined ? "" : structuredInstruction(args.structuredSchema),
+  ].filter((p) => p.length > 0);
   const systemContent = composeSystemPrompt({
     ...(args.systemPrompt === undefined ? {} : { base: args.systemPrompt }),
-    ...(args.appendSystemPrompt === undefined ? {} : { append: args.appendSystemPrompt }),
+    ...(appendParts.length === 0 ? {} : { append: appendParts.join("\n\n") }),
     planMode,
     isChild,
     roster,
@@ -383,6 +399,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   // Overwritten by every break below; the loop falling out on its own is the
   // step cap, so that is the initial value.
   let stopReason: StopReason = "max_steps";
+  /** `--json-schema`: verdict on the final answer, and repairs spent on it. */
+  let structured: LoopResult["structured"];
+  let repairsUsed = 0;
   const emit = (kind: LoopEvent["kind"], msg: string): void => {
     try {
       args.onEvent?.({ kind, text: msg });
@@ -650,6 +669,27 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     });
     if (turn.toolCalls.length === 0) {
       text = turn.text ?? "";
+      if (args.structuredSchema !== undefined) {
+        // The answer is a gate, not a preference: a run that produced prose
+        // where JSON was demanded has not finished, whatever it says. One
+        // repair round is spent on it — a real turn, billed and counted in
+        // num_turns, so the receipt shows the extra spend.
+        const verdict = structuredTurn(text, args.structuredSchema);
+        if (verdict.ok) {
+          structured = verdict;
+        } else if (repairsUsed < MAX_REPAIRS) {
+          repairsUsed += 1;
+          emit("policy", `structured answer rejected (${verdict.errors.length} problem(s)) — asking for a repair, attempt ${repairsUsed}/${MAX_REPAIRS}`);
+          messages.push({ role: "user", content: repairNote(verdict.errors) });
+          continue;
+        } else {
+          structured = verdict;
+          error = `answer does not satisfy --json-schema: ${verdict.errors.slice(0, 3).join("; ")}${verdict.errors.length > 3 ? ` (+${verdict.errors.length - 3} more)` : ""}`;
+          stopReason = "error";
+          emit("policy", `${error} — failing rather than returning an unvalidated document`);
+          break;
+        }
+      }
       stopReason = "complete";
       break;
     }
@@ -1129,6 +1169,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     compact: { events: compactEvents, truncated: compactTruncated, dropped: compactDropped },
     auditDropped,
     repeatCalls,
+    ...(structured === undefined ? {} : { structured }),
+    ...(repairsUsed === 0 ? {} : { structuredRepairs: repairsUsed }),
     trace,
     cancelled,
     messages: [...messages],

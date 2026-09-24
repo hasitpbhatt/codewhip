@@ -102,6 +102,7 @@ const CORE_EXPECTED = new Set([
   "src/remember.ts",
   "src/secure-file.ts",
   "src/settings.ts",
+  "src/structured.ts",
   "src/sessions.ts",
   "src/share.ts",
   "src/subagents.ts",

@@ -200,6 +200,15 @@ export function buildResult(result: LoopResult, f: RunFacts): Record<string, unk
     audit_entries_dropped: result.auditDropped ?? 0,
     ...(f.polishGate === undefined ? {} : { polish_gate: f.polishGate }),
     ...(f.share === undefined ? {} : { share: f.share }),
+    // `--json-schema`: the validated document sits beside the prose, never in
+    // place of it — the raw answer is still evidence of what the model said.
+    ...(result.structured === undefined
+      ? {}
+      : {
+          structured_output: result.structured.ok ? result.structured.value : null,
+          ...(result.structured.ok ? {} : { structured_errors: result.structured.errors }),
+        }),
+    ...(result.structuredRepairs === undefined ? {} : { structured_repairs: result.structuredRepairs }),
     trace: result.trace,
   };
 }
