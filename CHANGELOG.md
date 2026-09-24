@@ -49,6 +49,39 @@ parse time there rather than silently doing nothing.
   - Pre-loop refusals (bad keys, unpriced ceiling, policy denials, 13 sites)
     emit the same envelope with `result: null` and a `reason`, so a script that
     reads stdout always parses exactly one document, whatever happened.
+- **Sessions get names, tags and lineage: `-r <name>`, `--name`, `--tag`,
+  `--fork-session`, `codewhip sessions rename|tag`, REPL `.rename`/`.tag`/
+  `.branch`.** Parity-matrix Wave 2a; closes three GAP-2 rows.
+  - `-r` and `--resume` are now spellings of `--continue`, and the reference
+    resolves **by name first, then by ≥4-char id prefix** — so
+    `codewhip run "one more thing" -r auth` keeps accumulating into the session
+    named `auth`. An ambiguous reference is an error naming both candidates,
+    never a coin flip.
+  - A session file still *is* its id, so a resume writes one growing transcript
+    rather than a chain of files. `--fork-session` takes that transcript and
+    starts a **new** file that records `parent`, which is what `--name auth-v2
+    --fork-session -r auth` is for: keep the history, branch the file. In the
+    REPL, `.branch [name]` does the same from wherever the conversation stands.
+  - `--name`/`--tag` **arm persistence** without resuming anything: a name
+    nobody saved would be a silent no-op, so naming a session writes it. The run
+    says so before it starts (`… arms session saving: this transcript will be
+    written on exit`), because "nothing touches disk unless you arm it" is only
+    honest if arming is visible.
+  - Names are one word, ≤64 chars, cannot start with `-`/`/`/`!`/`.`, and are
+    unique. That strictness exists for one reason: `-r <name>` is copy-pasted
+    off a hint line, and a name with a space in it prints a command that does
+    not resume. Tags accept phrases — they are only displayed. A collision is
+    refused **before the run** rather than after it has spent a transcript
+    nobody can find again.
+  - `codewhip sessions` gained the name, tags (`#wip`) and parent (`←a1b2c3d4`)
+    columns, and two subcommands that edit a session on disk:
+    `sessions rename <session> <name>` and `sessions tag <session> <tag>`. Both
+    redact through the ordinary write path, so a rename cannot smuggle a secret
+    back into a file that had none.
+  - The stored record keeps `v: 1` and gains four optional fields — `lastRunId`
+    (the run that wrote it, which is the id the audit chain knows), `name`,
+    `tags`, `parent`. Old files read unchanged; sessions were never one of the
+    frozen schemas (policy, audit and memory are — `docs/moat/00-convergence.md`).
 
 ### Changed
 

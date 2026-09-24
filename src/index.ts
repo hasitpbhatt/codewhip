@@ -15,7 +15,7 @@ import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type Fail
 import type { LoopMsg } from "./provider-port.js";
 import { listRules } from "./remember-store.js";
 import { listCheckpointRuns, resolveCheckpointRun, rollbackRun } from "./checkpoints.js";
-import { listSessions, loadSession, saveSession } from "./sessions.js";
+import { labelSession, listSessions, loadSession, nameTaken, sanitizeSessionLabel, sanitizeSessionName, saveSession, sessionIdentity, sessionRecord, SESSION_NAME_RULE, SESSION_TAG_RULE, type SessionLabels } from "./sessions.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
@@ -83,8 +83,27 @@ type RunOptions = {
    * persistence — raw prompts land on disk (secrets redacted).
    */
   continue: boolean;
-  /** Prefix for --continue (undefined = most recent). */
+  /** Prefix or session name for --continue/-r (undefined = most recent). */
   continuePrefix?: string;
+  /**
+   * Write a session file on exit without resuming anything: `-r` implies it,
+   * and so does naming a session at all. A `--name` nobody persisted would be
+   * a silent no-op, so the intent arms the opt-in rather than being dropped.
+   */
+  persist: boolean;
+  /**
+   * Label for the session this run writes (`--name`), and `-r <name>` is how
+   * one is read back. Validation lives in `sanitizeSessionName`, the single
+   * rule both the CLI and the store apply.
+   */
+  sessionName?: string;
+  /** `--tag` (repeatable) — free-form markers, listed by `codewhip sessions`. */
+  sessionTags: string[];
+  /**
+   * `--fork-session`: resume another session's transcript but write a **new**
+   * session file that names its parent, instead of accumulating in place.
+   */
+  forkSession: boolean;
   /** Explicit per-call provider budget override (undefined = provider default, 120s builtin). */
   timeoutMs?: number;
   /** Disable SSE streaming (whole-body responses) — escape hatch per run. */
@@ -130,7 +149,10 @@ function printRunOptions(): void {
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
-  console.log("  --continue [prefix]  resume a prior session (bare = most recent, prefix >=4 chars) and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
+  console.log("  --continue [ref]     -r/--resume: resume a prior session by name, bare (most recent) or id prefix >=4 chars, and save this run's transcript on exit (raw prompts on disk, secrets redacted; see: codewhip sessions)");
+  console.log("  --name <name>        label the session so -r <name> finds it again (one word, <=64 chars, unique across sessions)");
+  console.log("  --tag <tag>          tag the session; repeatable up to 8, listed by codewhip sessions");
+  console.log("  --fork-session       with -r: start a new session file from that transcript and record its parent, instead of accumulating into it");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
   console.log("  --tui                opt into the terminal UI (lazy-loads OpenTUI; headless stays default; may not be available in all environments)");
   console.log("  --no-tui             force 80-col screen-reader-safe output (overrides --tui)");
@@ -270,8 +292,9 @@ function printCommandHelp(topic: string): boolean {
       return true;
     case "sessions":
       console.log("codewhip sessions — list saved conversation transcripts (newest first; opt-in via --continue only).");
-      console.log('  Resume: codewhip run "<prompt>" --continue [prefix] (bare = most recent, prefix >=4 chars, unique).');
-      console.log("  Each row: prefix, timestamp, provider:model, message count, first-prompt preview (redacted, 60 chars).");
+      console.log('  Resume: codewhip run "<prompt>" -r <name|prefix> (bare -r = most recent, prefix >=4 chars, unique).');
+      console.log("  codewhip sessions rename <session> <name>  ·  codewhip sessions tag <session> <tag>");
+      console.log("  Each row: id prefix, name, timestamp, provider:model, message count, tags, parent, preview (redacted, 60 chars).");
       return true;
     default:
       return false;
@@ -404,6 +427,25 @@ function printStubReceipt(model: string, provider: ProviderId): void {
   printReceipt(model, 0, 0, cost);
 }
 
+/**
+ * A flag's value from either shape — `--flag value` or `--flag=value` — plus
+ * where the loop should continue. One helper because the two shapes have to
+ * fail identically: silently accepting `--name` with no value, or swallowing
+ * the next flag as its value, is the bug class this removes.
+ */
+type FlagValue = { ok: true; value: string; next: number } | { ok: false; error: string };
+
+function takeValue(flag: string, args: string[], i: number, needs: string): FlagValue {
+  const eq = flag.indexOf("=");
+  if (eq !== -1) {
+    const v = flag.slice(eq + 1);
+    return v.length === 0 ? { ok: false, error: needs } : { ok: true, value: v, next: i };
+  }
+  const v = args[i + 1];
+  if (v === undefined || v.startsWith("-")) return { ok: false, error: needs };
+  return { ok: true, value: v, next: i + 1 };
+}
+
 function parseRunArgs(args: string[]): RunOptions | null {
   let model = PROVIDERS.nvidia.defaultModel;
   let modelExplicit = false;
@@ -427,6 +469,9 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let noTui = false;
   let cont = false;
   let continuePrefix: string | undefined;
+  let sessionName: string | undefined;
+  const sessionTags: string[] = [];
+  let forkSession = false;
   let headlessFlag = false;
   let formatArg: OutputFormat | null = null;
   let maxBudgetUsd: number | undefined;
@@ -518,12 +563,12 @@ function parseRunArgs(args: string[]): RunOptions | null {
       tui = true;
     } else if (a === "--no-tui") {
       noTui = true;
-    } else if (a === "--continue" || a.startsWith("--continue=")) {
+    } else if (a === "--continue" || a === "-r" || a === "--resume" || a.startsWith("--continue=") || a.startsWith("--resume=") || a.startsWith("-r=")) {
       cont = true;
       const eq = a.indexOf("=");
       if (eq !== -1) {
         const v = a.slice(eq + 1);
-        if (v.length === 0) return fail("--continue needs a prefix >=4 chars or nothing (bare = most recent)");
+        if (v.length === 0) return fail("-r/--continue needs a session name or an id prefix >=4 chars, or nothing (bare = most recent)");
         continuePrefix = v;
       } else {
         const v = args[i + 1];
@@ -532,21 +577,38 @@ function parseRunArgs(args: string[]): RunOptions | null {
           i++;
         }
       }
+    } else if (a === "--name" || a.startsWith("--name=")) {
+      const v = takeValue(a, args, i, "--name needs a session label");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const clean = sanitizeSessionName(v.value);
+      if (clean === null) return fail(`--name "${v.value}" — ${SESSION_NAME_RULE}`);
+      sessionName = clean;
+    } else if (a === "--tag" || a.startsWith("--tag=")) {
+      const v = takeValue(a, args, i, "--tag needs a label");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const clean = sanitizeSessionLabel(v.value);
+      if (clean === null) return fail(`--tag "${v.value}" — ${SESSION_TAG_RULE}`);
+      if (!sessionTags.includes(clean)) sessionTags.push(clean);
+      if (sessionTags.length > 8) return fail("--tag is capped at 8 per session");
+    } else if (a === "--fork-session") {
+      forkSession = true;
     } else if (a === "-p" || a === "--headless") {
       headlessFlag = true;
     } else if (a === "--output-format" || a.startsWith("--output-format=")) {
-      const eq = a.indexOf("=");
-      const v = eq !== -1 ? a.slice(eq + 1) : args[i + 1];
-      if (v === undefined || (eq === -1 && v.startsWith("-"))) return fail("--output-format needs text|json|stream-json");
-      if (eq === -1) i++;
-      const f = parseOutputFormat(v);
-      if (f === null) return fail(`--output-format must be text|json|stream-json (got "${v}")`);
+      const v = takeValue(a, args, i, "--output-format needs text|json|stream-json");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const f = parseOutputFormat(v.value);
+      if (f === null) return fail(`--output-format must be text|json|stream-json (got "${v.value}")`);
       formatArg = f;
       headlessFlag = true;
-    } else if (a === "--max-budget-usd") {
-      const v = args[i + 1];
-      if (v === undefined) return fail("--max-budget-usd needs a dollar amount");
-      const n = Number(args[++i]);
+    } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
+      const v = takeValue(a, args, i, "--max-budget-usd needs a dollar amount");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      const n = Number(v.value);
       if (!Number.isFinite(n) || n <= 0 || n > 10000) return fail("--max-budget-usd must be a number > 0 and <= 10000");
       maxBudgetUsd = n;
     } else if (a === "-") {
@@ -558,6 +620,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     }
   }
   if (sharePrint && !share) return fail("--print needs --share");
+  if (forkSession && !cont) return fail("--fork-session needs -r/--continue <session> to fork from");
   // `-p`/`--output-format` owns stdout, so the mode that grabs it for itself loses.
   if (headlessFlag && tui) return fail("--output-format/-p cannot combine with --tui (stdout is reserved for data)");
   if (maxBudgetUsd !== undefined && (free || autoFailover)) {
@@ -572,13 +635,17 @@ function parseRunArgs(args: string[]): RunOptions | null {
     taskClass, timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
+    persist: cont || sessionName !== undefined || sessionTags.length > 0,
     tui,
     noTui,
     headless: headlessFlag,
     outputFormat: formatArg ?? "text",
     stdinPrompt,
+    sessionTags,
+    forkSession,
     ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     ...(continuePrefix === undefined ? {} : { continuePrefix }),
+    ...(sessionName === undefined ? {} : { sessionName }),
   };
 }
 
@@ -715,6 +782,10 @@ type ReplState = {
   provider: ProviderId;
   model: string;
   lastRunId: string | null;
+  /** Session this REPL writes on .exit; null until the first run gives it an id. */
+  sessionId: string | null;
+  /** Name/tags/lineage — what `/rename`, `/tag` and `/branch` mutate. */
+  labels: SessionLabels;
 };
 
 async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
@@ -724,9 +795,19 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   // .exit so one REPL session writes one file, not one per line).
   let history: LoopMsg[] = [];
   let replMode = false;
+  // Which session this run writes, and what it is called. `--name`/`--tag` win
+  // over the resumed session's own labels; otherwise a resume keeps them, so
+  // `-r auth` keeps landing on the session named auth.
+  let resumedFrom: string | undefined;
+  let labels: SessionLabels = {
+    ...(opts.sessionName === undefined ? {} : { name: opts.sessionName }),
+    tags: opts.sessionTags,
+  };
   if (replState !== undefined) {
     replMode = true;
     history = replState.history;
+    labels = replState.labels;
+    resumedFrom = replState.sessionId ?? undefined;
   } else if (opts.continue) {
     const loaded = loadSession(cwd, opts.continuePrefix);
     if (!loaded.ok) {
@@ -736,7 +817,27 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       return;
     }
     history = loaded.record.messages.filter((m) => m.role !== "system");
-    say(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+    resumedFrom = loaded.record.runId;
+    labels = {
+      ...(opts.sessionName === undefined && loaded.record.name !== undefined ? { name: loaded.record.name } : {}),
+      tags: opts.sessionTags.length > 0 ? opts.sessionTags : (loaded.record.tags ?? []),
+    };
+    const asWhat = loaded.record.name === undefined
+      ? loaded.record.runId.slice(0, 8)
+      : `${loaded.record.runId.slice(0, 8)} ("${loaded.record.name}")`;
+    say(`!! --continue armed: resuming ${asWhat} (${history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+  } else if (opts.persist) {
+    say(`!! ${opts.sessionName === undefined ? "--tag" : `--name "${opts.sessionName}"`} arms session saving: this transcript will be written on exit (raw prompts on disk, secrets redacted)`);
+  }
+  // A name is how `-r` finds a session, so two sessions cannot share one. Fail
+  // before spending a token: a collision discovered after the run has burned a
+  // whole transcript nobody can resume by name. A fork owns nothing yet, so it
+  // collides with any existing holder of the name.
+  if (opts.persist && labels.name !== undefined && nameTaken(cwd, labels.name, opts.forkSession ? "" : resumedFrom ?? "")) {
+    console.error(`codewhip: another session is already named "${labels.name}" — names resume by -r <name>, so they stay unique (see: codewhip sessions)`);
+    process.exitCode = 1;
+    printStubReceipt(opts.model, opts.provider);
+    return;
   }
   // --free / --auto-failover arm the free chain: head = the explicit
   // --provider (must be a free-catalog id) or the first free candidate with
@@ -1095,12 +1196,19 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     // Thread the transcript forward: single-shot saves below; REPL feeds it
     // back in-memory and saves once on .exit (no per-line files).
     const continued = result.messages.slice(1);
+    // Which file this run writes: a fresh run owns a new id, a resumed run
+    // accumulates into the session it resumed, a fork starts a new file that
+    // records its parent (docs/moat/20-claude-code-parity.md wave 2).
+    const ident = sessionIdentity({ currentRunId: result.runId, resumedFrom, fork: opts.forkSession });
+    const sessionLabels: SessionLabels = { ...labels, ...(ident.parent === undefined ? {} : { parent: ident.parent }) };
     if (replMode && replState !== undefined) {
       replState.history.length = 0;
       replState.history.push(...continued);
       replState.provider = opts.provider;
       replState.model = opts.model;
       replState.lastRunId = result.runId;
+      replState.sessionId = ident.sessionId;
+      replState.labels = sessionLabels;
     }
     if (result.cancelled) {
       say("cancelled — partial transcript kept.");
@@ -1175,19 +1283,22 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     // Opt-in persistence lands on every loop exit path (success/error/cancel):
     // the saved transcript is the post-compaction one — honest. System is
     // stripped (rebuilt fresh on resume); secrets redacted at write time.
-    if (opts.continue && !replMode) {
-      const ok = saveSession(process.cwd(), {
-        v: 1,
-        ts: new Date().toISOString(),
+    if (opts.persist && !replMode) {
+      const ok = saveSession(process.cwd(), sessionRecord({
+        sessionId: ident.sessionId,
         runId: result.runId,
         provider: opts.provider,
         model: opts.model,
         messages: continued,
-      });
+        labels: sessionLabels,
+      }));
       if (!ok) {
         console.error("codewhip: session save failed (disk write) — transcript kept in memory only");
       } else {
-        say(`session: ${result.runId} (${continued.length} messages) — continue: codewhip run "…" --continue ${result.runId.slice(0, 8)}`);
+        const asWhat = sessionLabels.name === undefined
+          ? ident.sessionId.slice(0, 8)
+          : `${ident.sessionId.slice(0, 8)} ("${sessionLabels.name}")`;
+        say(`session: ${asWhat} (${continued.length} messages) — continue: codewhip run "…" -r ${ident.sessionId.slice(0, 8)}`);
       }
     }
     if (opts.headless) {
@@ -1204,7 +1315,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
           : [costNote(opts.provider, opts.model)]).join(" + "),
         tokenBudget: opts.tokenBudget,
         ...(usdCap === undefined ? {} : { maxBudgetUsd: usdCap }),
-        ...(opts.continue ? { sessionId: result.runId } : {}),
+        ...(opts.persist ? { sessionId: ident.sessionId } : {}),
         ...(gateOut === undefined ? {} : { polishGate: gateOut }),
         ...(shareOut === undefined ? {} : { share: shareOut }),
       }));
@@ -1215,23 +1326,125 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   }
 }
 
-function cmdSessions(): void {
-  const rows = listSessions(process.cwd());
+function cmdSessions(args: string[]): void {
+  const cwd = process.cwd();
+  const sub = args[0];
+  if (sub === "rename" || sub === "tag") {
+    const ref = args[1] ?? "";
+    const rest = args.slice(2).join(" ");
+    if (ref.length === 0 || rest.length === 0) {
+      console.error(`usage: codewhip sessions ${sub} <session> <${sub === "rename" ? "new name" : "tag"}>`);
+      console.error("       (a <session> is its name, or any unique id prefix of >=4 chars — see: codewhip sessions)");
+      process.exitCode = 1;
+      return;
+    }
+    const out = labelSession(cwd, ref, sub === "rename" ? { name: rest } : { addTag: rest });
+    if (!out.ok) {
+      console.error(`codewhip: ${out.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    const as = out.name ?? out.runId.slice(0, 8);
+    const what = sub === "tag" ? `tagged #${sanitizeSessionLabel(rest) ?? rest}` : `named "${as}"`;
+    console.log(`sessions ${sub}: ${out.runId.slice(0, 8)} ${what} — resume: codewhip run "…" -r ${as}`);
+    return;
+  }
+  if (sub !== undefined) {
+    console.error("usage: codewhip sessions [rename <session> <name> | tag <session> <tag>]");
+    process.exitCode = 1;
+    return;
+  }
+  const rows = listSessions(cwd);
   if (rows.length === 0) {
     console.log("sessions: no saved sessions yet (run once with --continue to save one).");
     return;
   }
-  console.log(`sessions: ${rows.length} saved (newest first; resume: codewhip run "…" --continue [prefix]):`);
+  console.log(`sessions: ${rows.length} saved (newest first; resume: codewhip run "…" -r <name|prefix>):`);
   for (const r of rows) {
     const who = r.provider.length > 0 && r.model.length > 0 ? `${r.provider}:${r.model}` : r.model || r.provider || "unknown";
-    console.log(`  ${r.runId.slice(0, 8)}  ${r.ts.slice(0, 19)}  ${who}  ${r.messages} msgs  ${r.preview}`);
+    const label = (r.name ?? "").padEnd(12).slice(0, 12);
+    const tags = r.tags === undefined || r.tags.length === 0 ? "" : ` #${r.tags.join(" #")}`;
+    const from = r.parent === undefined ? "" : ` ←${r.parent.slice(0, 8)}`;
+    console.log(`  ${r.runId.slice(0, 8)}  ${label}  ${r.ts.slice(0, 19)}  ${who}  ${r.messages} msgs${tags}${from}  ${r.preview}`);
   }
 }
+
+/** How a session gets announced: `1a2b3c4d ("auth")` when it has a name. */
+function replSessionLabel(state: ReplState, id: string): string {
+  const name = state.labels.name;
+  return name === undefined ? id.slice(0, 8) : `${id.slice(0, 8)} ("${name}")`;
+}
+
+const MAX_SESSION_TAGS = 8;
+
+/**
+ * REPL session commands — `.rename`, `.tag`, `.branch`, `.sessions`. They mutate
+ * only in-memory state; the one file write happens on `.exit`, same as the
+ * transcript. Returns the lines to print, or null when this is not a session
+ * command (so `/foo` still reaches custom commands).
+ */
+function replSessionCommand(cwd: string, state: ReplState, line: string): string[] | null {
+  const m = /^(?:[/.])(rename|tag|branch|sessions)\b\s*(.*)$/u.exec(line);
+  if (m === null) return null;
+  const verb = m[1] ?? "";
+  const arg = (m[2] ?? "").trim();
+  const id = state.sessionId ?? state.lastRunId;
+  switch (verb) {
+    case "rename": {
+      if (arg.length === 0) return [`usage: .rename <name>   (${SESSION_NAME_RULE}; -r <name> resumes it)`];
+      const clean = sanitizeSessionName(arg);
+      if (clean === null) return [`!! rejected: "${arg}" — ${SESSION_NAME_RULE}`];
+      const taken = nameTaken(cwd, clean, id ?? "");
+      if (taken) return [`!! another session is already named "${clean}" — names stay unique so -r <name> is unambiguous`];
+      state.labels.name = clean;
+      return [`.rename: this session is now "${clean}" (applies when the transcript saves)`];
+    }
+    case "tag": {
+      if (arg.length === 0) {
+        const tags = state.labels.tags;
+        return [tags === undefined || tags.length === 0 ? ".tag: no tags yet" : `.tag: #${tags.join(" #")}`];
+      }
+      const clean = sanitizeSessionLabel(arg);
+      if (clean === null) return [`!! rejected: "${arg}" — ${SESSION_TAG_RULE}`];
+      const tags = state.labels.tags ?? [];
+      if (tags.includes(clean)) return [`.tag: #${clean} already set`];
+      if (tags.length >= MAX_SESSION_TAGS) return [`.tag: capped at ${MAX_SESSION_TAGS} tags — drop one by editing .codewhip/sessions/`];
+      state.labels.tags = [...tags, clean];
+      return [`.tag: #${clean} set (${state.labels.tags.length} tag${state.labels.tags.length === 1 ? "" : "s"})`];
+    }
+    case "branch": {
+      if (id === null) return [".branch: nothing to fork yet — run a prompt first, then .branch"];
+      const named = arg.length === 0 ? null : sanitizeSessionName(arg);
+      if (arg.length > 0 && named === null) return [`!! rejected: "${arg}" — ${SESSION_NAME_RULE}`];
+      const from = id;
+      const carried = state.labels.name;
+      const nextName = named ?? (carried === undefined ? undefined : `${carried}-branch`);
+      // A fork writes a new file, so it owns no name yet — any holder blocks it.
+      if (nextName !== undefined && nameTaken(cwd, nextName, "")) {
+        return [`!! another session is already named "${nextName}" — .branch <name> with a free one`];
+      }
+      state.sessionId = null;
+      state.labels = {
+        tags: [...(state.labels.tags ?? [])],
+        parent: from,
+        ...(nextName === undefined ? {} : { name: nextName }),
+      };
+      return [`.branch: the next save forks ${from.slice(0, 8)} into a new session${state.labels.name === undefined ? "" : ` ("${state.labels.name}")`} — history kept, parent recorded`];
+    }
+    default: {
+      const rows = listSessions(cwd);
+      if (rows.length === 0) return ["sessions: none saved yet (run once with --continue)"];
+      return rows.map((r) => `  ${r.runId.slice(0, 8)}  ${r.name ?? "-"}  ${r.messages} msgs  ${(r.tags ?? []).join(",")}`);
+    }
+  }
+}
+
 
 /** REPL-local help: tips plus the custom-command table with parse errors. */
 function printReplHelp(cwd: string): void {
   console.log("codewhip repl — type a prompt to run it; .exit/.quit to leave; .help for this list.");
   console.log("  /<name> [args] expands .codewhip/commands/<name>.md ($ARGUMENTS substituted) before the run.");
+  console.log("  .sessions list · .rename <name> · .tag <tag> · .branch [name] fork this transcript");
   const { commands, errors } = listCommandsWithErrors(cwd);
   if (commands.length === 0) {
     console.log("  no custom commands yet — add .codewhip/commands/<name>.md (body = prompt template).");
@@ -1245,7 +1458,15 @@ function printReplHelp(cwd: string): void {
 
 function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
   const cwd = process.cwd();
-  const shared: ReplState = { history: [], provider: defaults.provider, model: defaults.model, lastRunId: null };
+  const shared: ReplState = {
+    history: [],
+    provider: defaults.provider,
+    model: defaults.model,
+    lastRunId: null,
+    sessionId: null,
+    labels: { tags: [...defaults.sessionTags] },
+  };
+  if (defaults.sessionName !== undefined) shared.labels.name = defaults.sessionName;
   if (defaults.continue) {
     const loaded = loadSession(cwd, defaults.continuePrefix);
     if (!loaded.ok) {
@@ -1257,7 +1478,13 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
     shared.history.push(...loaded.record.messages.filter((m) => m.role !== "system"));
     if (loaded.record.provider.length > 0) shared.provider = loaded.record.provider as ProviderId;
     if (loaded.record.model.length > 0) shared.model = loaded.record.model;
-    console.log(`!! --continue armed: resuming ${loaded.record.runId.slice(0, 8)} (${shared.history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+    shared.sessionId = loaded.record.runId;
+    if (defaults.sessionName === undefined && loaded.record.name !== undefined) shared.labels.name = loaded.record.name;
+    if (defaults.sessionTags.length === 0 && loaded.record.tags !== undefined) shared.labels.tags = [...loaded.record.tags];
+    if (loaded.record.parent !== undefined) shared.labels.parent = loaded.record.parent;
+    console.log(`!! --continue armed: resuming ${replSessionLabel(shared, loaded.record.runId)} (${shared.history.length} prior messages) — transcript saved on exit (raw prompts on disk)`);
+  } else if (defaults.persist) {
+    console.log(`!! ${defaults.sessionName === undefined ? "--tag" : `--name "${defaults.sessionName}"`} arms session saving: this transcript will be written on .exit (raw prompts on disk, secrets redacted)`);
   }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   console.log("codewhip repl (preview) — type a prompt, .exit to quit.");
@@ -1265,21 +1492,20 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
   rl.prompt();
   let saved = false;
   const saveOnExit = (): void => {
-    if (saved || !defaults.continue) return;
+    if (saved || !defaults.persist) return;
     saved = true;
     // Nothing new this REPL session: no file, no noise.
     if (shared.lastRunId === null) return;
-    const runId = shared.lastRunId;
-    const ok = saveSession(cwd, {
-      v: 1,
-      ts: new Date().toISOString(),
-      runId,
+    const ok = saveSession(cwd, sessionRecord({
+      sessionId: shared.sessionId ?? shared.lastRunId,
+      runId: shared.lastRunId,
       provider: shared.provider,
       model: shared.model,
       messages: [...shared.history],
-    });
+      labels: shared.labels,
+    }));
     if (ok) {
-      console.log(`session: ${runId} (${shared.history.length} messages) — continue: codewhip run "…" --continue ${runId.slice(0, 8)}`);
+      console.log(`session: ${shared.sessionId ?? shared.lastRunId} (${shared.history.length} messages) — continue: codewhip run "…" -r ${(shared.sessionId ?? shared.lastRunId).slice(0, 8)}`);
     }
   };
   rl.on("line", (line: string) => {
@@ -1294,6 +1520,12 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
       return;
     }
     if (trimmed.length > 0) {
+      const builtIn = replSessionCommand(cwd, shared, trimmed);
+      if (builtIn !== null) {
+        for (const out of builtIn) console.log(out);
+        rl.prompt();
+        return;
+      }
       // In the REPL a leading "/" is unambiguous intent: unknown commands
       // error to the user instead of being sent blind to the model.
       const expanded = trimmed.startsWith("/") ? expandCommand(cwd, trimmed) : null;
@@ -2467,7 +2699,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "sessions") {
-    cmdSessions();
+    cmdSessions(args.slice(1));
     return;
   }
   if (command === "demo") {
@@ -2516,7 +2748,7 @@ async function main(): Promise<void> {
 
 // Exported for unit tests (sessions --continue parsing). Guarded so importing
 // this module never runs the CLI as a side effect.
-export { parseRunArgs, cmdRun, cmdSessions, cmdRepl };
+export { parseRunArgs, cmdRun, cmdSessions, cmdRepl, replSessionCommand, type ReplState };
 
 const entry = process.argv[1] ?? "";
 if (entry.endsWith("index.ts") || entry.endsWith("index.js")) {
