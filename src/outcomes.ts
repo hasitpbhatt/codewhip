@@ -54,6 +54,11 @@ export type OutcomeRecord = {
    * loop ran under. Absent on older records and non-CLI runs — readers must
    * fall back to model-substring markers, never assume it. */
   task_class?: string;
+  /** Optional since 2026-09-24: the permission mode the run's asks terminated
+   * on. The `yolo` bit says whether permissions were bypassed, which is now
+   * reachable by --permission-mode as well as --yolo; this says which. Absent
+   * on older records — readers must treat it as unknown, never default. */
+  permission_mode?: string;
   /** Optional since v1-freeze: retry/failover trail. Old readers ignore it. */
   failovers?: FailoverRecord[];
   /** Optional since subagents: set on child runs — spend is already folded

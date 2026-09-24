@@ -13,6 +13,8 @@ import type { ToolFilter } from "./tool-filter.js";
 import { shapeOf, declineShape, targetsSelfProtected } from "./remember.js";
 import { webfetchOrigin } from "./tools/webfetch.js";
 import { persistRule, type RememberedRule } from "./remember-store.js";
+import type { PermissionMode } from "./settings.js";
+import { jailPath } from "./tools/jail.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { listAgentsWithErrors } from "./subagents.js";
@@ -111,6 +113,22 @@ export type LoopArgs = {
    * allowed for research; the run's output is the plan.
    */
   planMode?: boolean;
+  /**
+   * `--permission-mode` (and `permissions.defaultMode` in settings): which rung
+   * an ASK terminates on. It outranks `--yolo` when both are given — the
+   * explicit mode is the more specific instruction, and every mode that
+   * outranks yolo here is the less permissive reading. Nothing in this field
+   * reaches above the ladder: the denylist, `--disallowed-tools` and the
+   * self-protected guard all still refuse.
+   */
+  permissionMode?: PermissionMode;
+  /**
+   * Extra jail roots for this run (`--add-dir`, settings
+   * `permissions.additionalDirectories`). Realpath'd directories the file
+   * tools may also reach; containment only — secret-file and self-protected
+   * checks apply inside them.
+   */
+  roots?: readonly string[];
   /**
    * `--allowed-tools`: shapes the human named on the command line for THIS run
    * only. Consulted inside the ask branch, so it can pre-empt a prompt but
@@ -307,6 +325,15 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const runId = newRunId();
   const depth = args.depth ?? 0;
   const isChild = depth > 0;
+  // One value decides the ask branch. `--yolo` and `--plan` are shorthands for
+  // two of the modes, so the ladder has a single source of truth; plan keeps
+  // outranking yolo exactly as it did when they were two booleans.
+  const mode: PermissionMode =
+    args.permissionMode ?? (args.planMode === true ? "plan" : args.yolo ? "bypassPermissions" : "default");
+  // Plan is structural, not a rung: a caller that says planMode (the CLI, and
+  // every child run) stays read-only whatever the mode field says.
+  const planMode = args.planMode === true || mode === "plan";
+  const manual = mode === "manual";
   let agentFileErrors: string[] = [];
   // Child runs get the agent's own body; composition lives in system.ts so the
   // ordering rule (harness policy, then per-run advertising, then the human's
@@ -325,7 +352,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   const systemContent = composeSystemPrompt({
     ...(args.systemPrompt === undefined ? {} : { base: args.systemPrompt }),
     ...(args.appendSystemPrompt === undefined ? {} : { append: args.appendSystemPrompt }),
-    planMode: args.planMode === true,
+    planMode,
     isChild,
     roster,
     excludeDynamicSections: args.excludeDynamicSections === true,
@@ -696,7 +723,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // before the permission ladder, so ask/yolo/remembered can never grant
       // them — a read-only plan run spawns no children.
       if (
-        args.planMode === true &&
+        planMode &&
         (def.name === "edit" || def.name === "write" || def.name === "bash" || def.name === "delegate" || def.name === "delegate_many")
       ) {
         const out = `plan mode: run is read-only — ${call.name} refused; produce a plan instead`;
@@ -748,15 +775,26 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       let ruleId = verdict.ruleId;
       if (verdict.decision === "ask") {
         // `--allowed-tools` is a human grant typed on the command line, so it
-        // is consulted before --yolo (whose audit line would be the less
-        // accurate story when both are present) and always after the deny
+        // is consulted before the mode rungs (whose audit line would be the
+        // less accurate story when both are present) and always after the deny
         // verdict above. The self-protected guard still applies: naming a tool
         // here buys no more authority over .codewhip/ than pressing `a` does.
-        const granted = matchToolFilter(args.allowedTools, def.name, subject);
+        // Manual mode ignores the flag by design — there the operator's standing
+        // instruction is that a human answers every ask.
+        const granted = manual ? null : matchToolFilter(args.allowedTools, def.name, subject);
         const grantProtected =
           granted !== null &&
           (targetsSelfProtected(subject) ||
             (granted.shape !== null && targetsSelfProtected(granted.shape)));
+        // acceptEdits answers the ask for the tools whose entire blast radius is
+        // one file: the path must resolve inside a jail root (the same
+        // containment the exec enforces) and must not be harness state. Shell
+        // and network keep asking, because a yes there is not scoped to a file.
+        const editSelfAnswers =
+          mode === "acceptEdits" &&
+          (def.name === "edit" || def.name === "write") &&
+          !targetsSelfProtected(subject) &&
+          jailPath(args.cwd, subject, args.roots) !== null;
         if (granted !== null && !grantProtected) {
           proceed = true;
           grantActor = "human";
@@ -767,10 +805,23 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           record("deny", `${verdict.ruleId}+allowed-tools-protected`, sha256Hex(out), "policy", out);
           emit("tool", `deny ${call.name} ${preview} (allowed-tools-protected)`);
           continue;
-        } else if (args.yolo) {
+        } else if (mode === "bypassPermissions") {
           proceed = true;
           grantActor = "yolo";
-          ruleId = `${verdict.ruleId}+yolo`;
+          // The ruleId names where the grant actually came from, so a
+          // transcript can tell --yolo from --permission-mode
+          // bypassPermissions even though both are the yolo actor.
+          ruleId = args.yolo ? `${verdict.ruleId}+yolo` : `${verdict.ruleId}+mode:bypassPermissions`;
+        } else if (editSelfAnswers) {
+          proceed = true;
+          grantActor = "human";
+          ruleId = `${verdict.ruleId}+mode:acceptEdits`;
+        } else if (mode === "dontAsk") {
+          const out = `refused (--permission-mode dontAsk): ${verdict.ruleId} was not granted by policy or --allowed-tools`;
+          messages.push({ role: "tool", toolCallId: call.id, content: out });
+          record("deny", `${verdict.ruleId}+mode:dontAsk`, sha256Hex(out), "policy", out);
+          emit("tool", `deny ${call.name} ${preview} (mode:dontAsk)`);
+          continue;
         } else if (!args.stdinIsTTY || args.askUser === undefined) {
           const out = `held for approval (${verdict.ruleId}) — non-interactive, denied`;
           messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -792,7 +843,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           // case/trailing dots) instead of slicing strings, so sibling-host
           // prefix games can't match and odd spellings fail closed to ask.
           const hit =
-            shape === null
+            manual || shape === null
               ? undefined
               : rules.find((r) => {
                   if (r.tool !== def.name || r.shape !== shape) return false;
@@ -945,7 +996,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // failed calls leave no checkpoint trail. Self-protected paths return
       // null and are never snapshotted.
       const beforeImage =
-        def.name === "edit" || def.name === "write" ? captureBefore(args.cwd, parsed) : null;
+        def.name === "edit" || def.name === "write" ? captureBefore(args.cwd, parsed, args.roots) : null;
       let result: ToolResult;
       try {
         result = await withTimeout(
@@ -953,6 +1004,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             def.exec(
               {
                 cwd: args.cwd,
+                roots: args.roots,
                 port: current.port,
                 model: current.model,
                 label: current.label,
@@ -1047,7 +1099,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     runId,
     model: args.model,
     prompt_hash: promptHash(args.prompt),
-    yolo: args.yolo,
+    yolo: mode === "bypassPermissions",
+    permission_mode: mode,
     tool_calls: calls,
     usage: { prompt: promptTokens, completion: completionTokens },
     result_preview_redacted: text.slice(0, 2000),

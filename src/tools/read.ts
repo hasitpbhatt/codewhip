@@ -32,7 +32,7 @@ export async function readTool(ctx: ToolContext, args: ReadArgs): Promise<ToolRe
   if (!Number.isInteger(limit) || limit < 1 || limit > 2000) {
     return { ok: false, output: "read: `limit` must be 1..2000" };
   }
-  const safe = jailPath(ctx.cwd, args.path);
+  const safe = jailPath(ctx.cwd, args.path, ctx.roots);
   if (safe === null) {
     return { ok: false, output: "read: path escapes workspace jail" };
   }

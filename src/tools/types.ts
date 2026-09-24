@@ -33,6 +33,11 @@ export type Permission = "allow" | "ask" | "deny";
 
 export type ToolContext = {
   cwd: string;
+  /**
+   * Realpath'd extra jail roots (--add-dir / settings). Containment only: the
+   * secret-file and self-protected checks still apply inside them.
+   */
+  roots?: readonly string[];
   /** Present when invoked from the agent loop: parent run context for delegation. */
   port?: ChatPort;
   model?: string;

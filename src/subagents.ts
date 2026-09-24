@@ -198,6 +198,9 @@ export type ChildRunOptions = {
    * from a different family). */
   models?: string[];
   retryWait?: boolean;
+  /** Parent's extra jail roots — a child reads the same directories the
+   * operator widened the workspace to, never more and never fewer. */
+  roots?: readonly string[];
   /** The delegating parent's runId (outcome attribution / metrics de-dup). */
   parentRunId?: string;
   /** Progress lines, already prefixed with the agent name. */
@@ -236,6 +239,7 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     remembered: listRules(opts.cwd),
     systemPrompt: opts.agent.systemPrompt,
     ...(opts.parentRunId === undefined ? {} : { parentRunId: opts.parentRunId }),
+    ...(opts.roots === undefined ? {} : { roots: opts.roots }),
     ...(opts.tokenBudget === undefined ? {} : { tokenBudget: Math.max(1, opts.tokenBudget) }),
     ...(opts.compactTokens === undefined ? {} : { compactTokens: opts.compactTokens }),
     ...(opts.retryWait === undefined ? {} : { retryWait: opts.retryWait }),

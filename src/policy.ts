@@ -421,5 +421,5 @@ export function checkPermission(
 }
 
 export function describePolicy(): string {
-  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; interpreter inline code / nested shells / encoded payloads denied; dynamic paths denied; bash containment is string-based, file tools use realpath jail); run-scoped flags sit outside these verdicts: --disallowed-tools refuses above the ladder, --plan refuses above the ladder, --allowed-tools answers the ask only)";
+  return "defaults read:allow edit:ask write:ask shell:ask webfetch:ask (ask-default; interpreter inline code / nested shells / encoded payloads denied; dynamic paths denied; bash containment is string-based, file tools use realpath jail); run-scoped flags sit outside these verdicts: --disallowed-tools refuses above the ladder, --plan refuses above the ladder, --allowed-tools answers the ask only; --permission-mode chooses who answers the ask (plan/bypassPermissions are --plan/--yolo, acceptEdits self-answers in-jail file edits, dontAsk refuses rather than prompting, manual prompts for every ask) and never outranks a deny";
 }
