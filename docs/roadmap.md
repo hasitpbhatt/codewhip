@@ -134,7 +134,7 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 | SBOM generation | 🔲 Planned | Tracked in security section |
 | Signed releases | 🔲 Planned | See `docs/roadmap.md` |
 | OpenSSF Best Practices badge | 🔲 Planned | Scorecard action in CI |
-| CHANGELOG | ✅ Done | `CHANGELOG.md` — Keep a Changelog + SemVer, `0.1.0`–`0.3.0` |
+| CHANGELOG | ✅ Done | `CHANGELOG.md` — Keep a Changelog + SemVer, `0.1.0`–`0.4.0` |
 | License | ✅ MIT | MIT stays — no AGPL change. Freedom-first, no copyleft |
 | Multi-maintainer governance | 🔲 Planned | Path defined in `MAINTAINERS.md` |
 
