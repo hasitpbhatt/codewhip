@@ -1,6 +1,6 @@
 import type { ChatPort, LoopMsg } from "./provider-port.js";
-import { TOOLS, toolSpecs, type ToolDef } from "./tools/registry.js";
-import type { ToolName, ToolResult } from "./tools/types.js";
+import { TOOLS, hostToolProblem, toolSpecs, type HostToolDef, type ToolDef } from "./tools/registry.js";
+import { isToolName, type ToolName, type ToolResult } from "./tools/types.js";
 import { checkPermission, permissionSubject } from "./policy.js";
 import { loadPromotedDenies } from "./policy-store.js";
 import { argsHash, sha256Hex } from "./hash.js";
@@ -23,7 +23,27 @@ import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
 import type { ProviderId } from "./provider-port.js";
 
 export type ApprovalAnswer = "yes" | "session" | "always" | "no";
-export type AskUser = (question: string) => Promise<ApprovalAnswer>;
+
+/**
+ * What an ask is actually about, handed to the answerer beside the formatted
+ * question. The CLI ignores it and reads its own keypress; a programmatic
+ * caller (`canUseTool` in `src/sdk.ts`) decides on these fields instead of
+ * parsing a display string. `subject` is the same value the policy verdict and
+ * the audit entry were graded against — never a rewritten replacement.
+ */
+export type AskContext = {
+  tool: string;
+  subject: string;
+  preview: string;
+  args: unknown;
+  /** The rule that produced the ask, e.g. `default:edit:ask`. */
+  ruleId: string;
+  runId: string;
+  step: number;
+  seq: number;
+};
+
+export type AskUser = (question: string, ctx?: AskContext) => Promise<ApprovalAnswer>;
 
 export type LoopEvent = {
   kind: "tool" | "retry" | "failover" | "policy" | "compact" | "hook";
@@ -189,6 +209,15 @@ export type LoopArgs = {
   hooks?: LoadedHooks;
   /** Spawner override for hooks (tests/bench only — production spawns shells). */
   hookDeps?: HookDeps;
+  /**
+   * Caller-supplied tools (the programmatic entry's `tool()`). They ride the
+   * same ladder, the same audit chain and the same redaction as a builtin —
+   * which means they inherit the fail-closed defaults too: no policy row of
+   * their own (`default:host-tool:ask`), never a remembered shape, refused by
+   * plan mode, and refused inside a child run (whose whole authority is
+   * read+search, so a host tool there would be mutating by proxy).
+   */
+  customTools?: readonly HostToolDef[];
 };
 
 export type LoopTraceCall = {
@@ -240,15 +269,15 @@ export type LoopResult = {
   messages: LoopMsg[];
 };
 
-function lookupTool(name: string): ToolDef | null {
-  if (
-    name === "read" || name === "search" || name === "edit" || name === "write" ||
-    name === "bash" || name === "webfetch" || name === "delegate" || name === "delegate_many" ||
-    name === "run_in_background" || name === "task_output" || name === "task_stop" || name === "todo"
-  ) {
-    return TOOLS[name];
-  }
-  return null;
+/**
+ * A tool call resolves against the twelve builtins first, then this run's
+ * host tools. Nothing else can enter: the registry is not mutable at run
+ * time, so a name either has a checked definition or the call is refused as
+ * unknown.
+ */
+function lookupTool(name: string, hosts: ReadonlyMap<string, HostToolDef>): ToolDef | HostToolDef | null {
+  if (isToolName(name)) return TOOLS[name];
+  return hosts.get(name) ?? null;
 }
 
 function previewForLog(name: string, args: unknown): string {
@@ -373,10 +402,30 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     roster,
     excludeDynamicSections: args.excludeDynamicSections === true,
   });
+  // Host tools belong to the run that declared them. A child is never OFFERED
+  // one (`toolSpecs` drops them at depth > 0, because a child's whole
+  // authority is read+search and a caller function there would be mutation by
+  // proxy), but the map is built either way so a fabricated call in a child
+  // names itself in the audit chain — `loop:child-host-tool`, not the generic
+  // "unknown tool" a made-up name gets.
+  const hosts = new Map<string, HostToolDef>();
+  const hostRejections: string[] = [];
+  for (const d of args.customTools ?? []) {
+    const problem = hostToolProblem(d);
+    if (problem !== null) {
+      hostRejections.push(problem);
+      continue;
+    }
+    if (hosts.has(d.name)) {
+      hostRejections.push(`"${d.name}" is declared twice — only the first definition is offered`);
+      continue;
+    }
+    hosts.set(d.name, d);
+  }
   // Filtered once, not per turn: every provider call in a run must advertise
   // exactly the same toolset, or a failover mid-run changes the contract the
   // transcript was written against.
-  const specs = toolSpecs(depth, args.disallowedTools);
+  const specs = toolSpecs(depth, args.disallowedTools, [...hosts.values()]);
   const messages: LoopMsg[] = [
     { role: "system", content: systemContent },
     ...(args.history ?? []),
@@ -411,6 +460,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   };
   for (const e of agentFileErrors) {
     emit("policy", `subagent file skipped: ${e}`);
+  }
+  for (const e of hostRejections) {
+    emit("policy", `host tool refused: ${e}`);
   }
   // Hooks load once at run start (the caller owns the LoadedHooks), so a
   // mid-run injection can neither register nor edit one; a broken config is
@@ -695,7 +747,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     }
     for (const call of turn.toolCalls) {
       seq += 1;
-      const def = lookupTool(call.name);
+      const def = lookupTool(call.name, hosts);
       let parsed: unknown = null;
       try {
         parsed = JSON.parse(call.argsJson) as unknown;
@@ -732,6 +784,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       const preview = previewForLog(call.name, parsed);
+      // The one question every builtin-only rule asks: is this name one of the
+      // twelve? Null for a host tool, which is then excluded from the policy
+      // row, the shape grammar, the flag grammar, the memo and the checkpoint
+      // path — all of which are written against builtins.
+      const builtinName: ToolName | null = isToolName(def.name) ? def.name : null;
       // Depth guard (belt): children never see the delegate specs, but a
       // rogue tool call for a non-advertised tool still fails closed here.
       // Children also have no network — webfetch is the parent's to make.
@@ -759,12 +816,26 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         emit("tool", `deny ${call.name} ${preview} (loop:child-readonly)`);
         continue;
       }
+      // A host tool is a caller function running with the parent's authority.
+      // A child has no authority of its own beyond reading, so it never gets
+      // one — not even a "read-only" host tool, because the harness cannot
+      // tell what that function does.
+      if (isChild && builtinName === null) {
+        const out = "subagents cannot call host-provided tools — the parent run owns them";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "loop:child-host-tool", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (loop:child-host-tool)`);
+        continue;
+      }
       // Plan mode is run-scoped policy: mutations and delegation are refused
       // before the permission ladder, so ask/yolo/remembered can never grant
-      // them — a read-only plan run spawns no children.
+      // them — a read-only plan run spawns no children. A host tool's body is
+      // opaque to the harness, so plan mode refuses it on that opacity alone.
       if (
         planMode &&
-        (def.name === "edit" || def.name === "write" || def.name === "bash" || def.name === "delegate" || def.name === "delegate_many")
+        (builtinName === null ||
+          def.name === "edit" || def.name === "write" || def.name === "bash" ||
+          def.name === "delegate" || def.name === "delegate_many")
       ) {
         const out = `plan mode: run is read-only — ${call.name} refused; produce a plan instead`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -779,7 +850,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // --yolo can grant what the operator filtered out. On a conflict
       // between the two lists the disallow wins, because that is the safe
       // reading of a mistyped flag.
-      const banned = matchToolFilter(args.disallowedTools, def.name, subject);
+      // A host tool is not addressable by that flag: its filter grammar is
+      // path/command/origin, none of which mean anything for an arbitrary
+      // caller function. The way to refuse a host tool is not to offer it.
+      const banned = builtinName === null ? null : matchToolFilter(args.disallowedTools, builtinName, subject);
       if (banned !== null) {
         const out = `refused for this run (--disallowed-tools ${describeToolFilter(banned)})`;
         messages.push({ role: "tool", toolCallId: call.id, content: out });
@@ -820,8 +894,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         // verdict above. The self-protected guard still applies: naming a tool
         // here buys no more authority over .codewhip/ than pressing `a` does.
         // Manual mode ignores the flag by design — there the operator's standing
-        // instruction is that a human answers every ask.
-        const granted = manual ? null : matchToolFilter(args.allowedTools, def.name, subject);
+        // instruction is that a human answers every ask. A host tool is outside
+        // the flag's grammar in both directions: its ask is answered by the
+        // caller's `canUseTool`, a mode, or `--yolo`, never by a shape string.
+        const granted = manual || builtinName === null ? null : matchToolFilter(args.allowedTools, builtinName, subject);
         const grantProtected =
           granted !== null &&
           (targetsSelfProtected(subject) ||
@@ -874,7 +950,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           // (ts/runId/preview_hash). Policy lives in the harness,
           // never in the prompt — matches here cost 0 tokens.
           const subjectForShape = subject;
-          const shape = shapeOf(def.name, subjectForShape);
+          // A host tool is never memorable. Its subject is whatever that
+          // function was handed — not a path, command head or origin the shape
+          // grammar understands — and `RememberedRule.tool` is a builtin-only
+          // union, so storing one would either write a rule no matcher reads
+          // or a rule that reads as a different tool. The grant stays per-call.
+          const shape = builtinName === null ? null : shapeOf(builtinName, subjectForShape);
           const rules = [...(args.remembered ?? [])];
           // Bash shapes are `${head} *`: match the bare head ("ls") or head
           // + args ("ls -la"). Edit/write shapes are bare paths: exact match
@@ -910,7 +991,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           } else {
             let answer: ApprovalAnswer = "no";
             try {
-              answer = await args.askUser(`allow ${call.name} ${preview}? [y/N/s/a] (s = this session only, a = remember) `);
+              answer = await args.askUser(
+                `allow ${call.name} ${preview}? [y/N/s/a] (s = this session only, a = remember) `,
+                { tool: def.name, subject, preview, args: parsed, ruleId: verdict.ruleId, runId, step: steps, seq }
+              );
             } catch {
               answer = "no";
             }
@@ -918,8 +1002,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
               const out = `held for approval (${verdict.ruleId}) — declined`;
               messages.push({ role: "tool", toolCallId: call.id, content: out });
               // Declines record a generalizable deny shape (independent of
-              // allow-curation, so dangerous heads stay promotable).
-              const dshape = declineShape(def.name, subjectForShape);
+              // allow-curation, so dangerous heads stay promotable). A host
+              // tool has no shape grammar — its decline is still audited, and a
+              // team that wants it refused pre-flight writes `deny <tool>:<shape>`
+              // in policy.md by hand, which matches on the same strings.
+              const dshape = builtinName === null ? null : declineShape(builtinName, subjectForShape);
               record("deny", `${verdict.ruleId}+declined`, sha256Hex(out), "human", out, dshape ?? undefined);
               emit("tool", `held ${call.name} ${preview} (${verdict.ruleId})`);
               continue;
@@ -981,7 +1068,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // above, so repeats stay visible on the audit trail, not hidden.
       const memoKey = `${def.name}:${hash}`;
       const guardOn = args.repeatGuard !== false;
-      if (guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
+      if (guardOn && builtinName !== null && IDEMPOTENT_TOOLS.has(builtinName)) {
         const hit = memo.get(memoKey);
         if (hit !== undefined) {
           hit.repeats += 1;
@@ -1082,7 +1169,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         // codegen) — over-invalidation costs one re-read; a stale read
         // corrupts the next edit.
         memo.clear();
-      } else if (result.ok && guardOn && IDEMPOTENT_TOOLS.has(def.name)) {
+      } else if (result.ok && guardOn && builtinName !== null && IDEMPOTENT_TOOLS.has(builtinName)) {
         memo.set(memoKey, { output: redacted, repeats: 0 });
       }
       // Redact BEFORE the cap slice so a secret straddling the boundary is
@@ -1096,9 +1183,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // candidate deny rule covering this shape would have over-blocked. The
       // shape rides the outcome record (additive, same vocabulary declines
       // use). yolo/remembered/policy grants carry no fresh human bit, so
-      // only grantActor "human" records one.
+      // only grantActor "human" records one. A host-tool grant records none:
+      // the shape vocabulary is path/command/origin, and a candidate rule built
+      // from it could never apply to a caller function.
       record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted,
-        grantActor === "human" ? declineShape(def.name, subject) ?? undefined : undefined);
+        grantActor === "human" && builtinName !== null ? declineShape(builtinName, subject) ?? undefined : undefined);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
       // PostToolUse hooks: observe-only, and they see the REDACTED output —
       // hooks are downstream of the redaction invariant, never upstream of it.

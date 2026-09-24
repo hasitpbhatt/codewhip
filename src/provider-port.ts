@@ -1,5 +1,3 @@
-import type { ToolName } from "./tools/types.js";
-
 /**
  * Any provider id: a builtin or a user-registered custom id. Lives on this
  * leaf so core modules (loop, metrics, outcomes) can type provider ids
@@ -24,7 +22,13 @@ export type LoopMsg = {
 
 /** Static OpenAI-style function spec, passed to the provider verbatim. */
 export type ToolSpec = {
-  name: ToolName;
+  /**
+   * A tool's wire name. `string`, not `ToolName`: the provider has never
+   * heard of the builtin list, and a host-provided tool (`src/sdk.ts`) rides
+   * these same specs. Every builtin-only decision therefore asks `isToolName`
+   * before it reads a name as one of the twelve.
+   */
+  name: string;
   description: string;
   parameters: unknown;
 };

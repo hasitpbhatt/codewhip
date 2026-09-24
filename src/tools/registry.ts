@@ -1,4 +1,5 @@
 import type { ToolContext, ToolName, ToolResult } from "./types.js";
+import { isToolName } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import { filtersToolEntirely, type ToolFilter } from "../tool-filter.js";
 import { isReadArgs, readTool } from "./read.js";
@@ -29,6 +30,50 @@ export type ToolDef = {
   timeoutMs: number;
   exec: ToolExec;
 };
+
+/**
+ * A tool the CALLER supplies — the programmatic entry's `tool()` (see
+ * `src/sdk.ts`). Structurally a `ToolDef` whose name is not one of the twelve
+ * builtins, which is why it is its own type instead of a widened `ToolDef`:
+ * every builtin-only decision (policy row, remembered shape, `--allowed-tools`
+ * shape grammar) can then ask `isToolName` and fail closed.
+ */
+export type HostToolDef = {
+  name: string;
+  spec: ToolSpec;
+  timeoutMs: number;
+  exec: ToolExec;
+};
+
+export type AnyToolDef = ToolDef | HostToolDef;
+
+/**
+ * Provider-side function names are `[a-zA-Z0-9_-]{1,64}`; the lowercase form
+ * is required so a host tool can never shadow a builtin by case-folding
+ * (`Read`/`READ` would otherwise dodge the collision check and the audit
+ * reader's expectations).
+ */
+export const HOST_TOOL_NAME_RX = /^[a-z][a-z0-9_-]{0,63}$/;
+export const HOST_TOOL_TIMEOUT_MIN_MS = 100;
+export const HOST_TOOL_TIMEOUT_MAX_MS = 120_000;
+
+/** Why a host tool cannot be offered, or null when it can. */
+export function hostToolProblem(def: HostToolDef): string | null {
+  if (!HOST_TOOL_NAME_RX.test(def.name)) {
+    return `"${def.name}" is not a tool name: lowercase letter, then up to 63 of [a-z0-9_-]`;
+  }
+  if (isToolName(def.name)) return `"${def.name}" is a built-in tool — a host tool cannot shadow it`;
+  if (def.spec.name !== def.name) return `spec.name "${def.spec.name}" does not match name "${def.name}"`;
+  const params = def.spec.parameters as { type?: unknown } | null;
+  if (typeof params !== "object" || params === null || params.type !== "object") {
+    return `"${def.name}" needs parameters: { type: "object", … } — the top level of a tool call is an object`;
+  }
+  if (typeof def.exec !== "function") return `"${def.name}" has no exec`;
+  if (!Number.isInteger(def.timeoutMs) || def.timeoutMs < HOST_TOOL_TIMEOUT_MIN_MS || def.timeoutMs > HOST_TOOL_TIMEOUT_MAX_MS) {
+    return `"${def.name}" timeout must be an integer between ${HOST_TOOL_TIMEOUT_MIN_MS}ms and ${HOST_TOOL_TIMEOUT_MAX_MS}ms`;
+  }
+  return null;
+}
 
 function readSpec(): ToolSpec {
   return {
@@ -220,9 +265,15 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
  * one command head) keep the spec advertised — the tool is in play, a slice of
  * it is not, and that slice is enforced where the call is graded.
  */
-export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[]): ToolSpec[] {
-  const visible = (name: ToolName): boolean => !filtersToolEntirely(disallowed, name);
+export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[], hosts?: readonly HostToolDef[]): ToolSpec[] {
+  // A `--disallowed-tools` entry names one of the twelve (its shape grammar is
+  // path/command/origin), so it can never address a host tool — the caller of
+  // `query()` drops a host tool by not passing it.
+  const visible = (name: string): boolean => !isToolName(name) || !filtersToolEntirely(disallowed, name);
   if (depth > 0) {
+    // A child is read-only and effect-free, so a host tool — whose body is
+    // arbitrary caller code running with the parent's authority — is not
+    // offered to it. Advertising what the harness would refuse burns tokens.
     return [TOOLS.read.spec, TOOLS.search.spec].filter((s) => visible(s.name));
   }
   return [
@@ -238,5 +289,6 @@ export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[]): ToolSp
     TOOLS.task_output.spec,
     TOOLS.task_stop.spec,
     TOOLS.todo.spec,
+    ...(hosts ?? []).map((h) => h.spec),
   ].filter((s) => visible(s.name));
 }

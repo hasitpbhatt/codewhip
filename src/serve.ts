@@ -95,10 +95,9 @@ function toToolSpecs(raw: unknown): ToolSpec[] {
     const name = typeof fn?.name === "string" ? fn.name.trim() : "";
     if (name.length === 0) continue;
     out.push({
-      // ToolSpec.name is codewhip's own ToolName union; a proxy must forward
-      // whatever the client called its tools, so the narrowing is a
-      // compile-time convenience only — nothing here resolves a tool by name.
-      name: name as ToolSpec["name"],
+      // Names pass through verbatim: a proxy forwards whatever the client
+      // called its tools, and nothing on this path resolves a tool by name.
+      name,
       description: typeof fn?.description === "string" ? fn.description : "",
       parameters: fn?.parameters ?? { type: "object", properties: {} },
     });

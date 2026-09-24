@@ -24,6 +24,17 @@ export const TOOL_NAMES = [
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
+/**
+ * Is this wire name one of the twelve? The only honest answer to every
+ * builtin-only question — a policy row, a remembered shape, a
+ * `--allowed-tools` grammar, a checkpoint — since a name reaching the loop can
+ * also be a host-provided tool (`src/sdk.ts`). Lives here, next to the list it
+ * reads, so no module has to import the registry to ask it.
+ */
+export function isToolName(name: string): name is ToolName {
+  return (TOOL_NAMES as readonly string[]).includes(name);
+}
+
 export type ToolResult = {
   ok: boolean;
   output: string;
