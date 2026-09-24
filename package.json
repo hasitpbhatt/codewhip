@@ -33,6 +33,7 @@
     "lint": "oxlint src --deny-warnings",
     "test": "tsx --test src/**/*.test.ts",
     "bench": "tsx src/bench/cli.ts",
+    "parity": "node scripts/parity.mjs",
     "immunity": "tsx src/immunity/cli.ts",
     "serve": "node dist/serve.js",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm test"
