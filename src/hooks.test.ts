@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
-import { loadHooks, runHooksFor, type HookDef, type HookPayload, type HookDeps, type SpawnResult } from "./hooks.js";
+import { loadHooks, parseHookEnvelope, runHooksFor, type HookDef, type HookPayload, type HookDeps, type SpawnResult } from "./hooks.js";
 
 function tmpDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -166,5 +166,111 @@ describe("hooks", () => {
     const passDefs: HookDef[] = [{ event: "PreToolUse", match: "bash", command: "exit 0" }];
     const p = await runHooksFor(passDefs, "PreToolUse", "bash", payload());
     strictEqual(p.status, "pass");
+  });
+});
+
+const out = (stdout: string): SpawnResult => ({ code: 0, stdout, stderr: "", timedOut: false });
+
+describe("the hook output envelope: what a hook may ask for", () => {
+  it("plain stdout is output, not a verdict — and it is not an error either", () => {
+    for (const s of ["", "hello", "  ", "123"]) {
+      const e = parseHookEnvelope(s);
+      strictEqual(e.deny, null);
+      strictEqual(e.context, "");
+      strictEqual(e.stop, null);
+      strictEqual(e.notes.length, 0, JSON.stringify(s));
+    }
+  });
+
+  it("additionalContext and systemMessage are read, and a wrong type is refused by name", () => {
+    const good = parseHookEnvelope('{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"the file is generated"}}');
+    strictEqual(good.context, "the file is generated");
+    strictEqual(good.notes.length, 0);
+    strictEqual(parseHookEnvelope('{"systemMessage":"build is cold"}').systemMessage, "build is cold");
+    ok(parseHookEnvelope('{"hookSpecificOutput":{"additionalContext":7}}').notes[0]?.includes("must be a string"));
+    ok(parseHookEnvelope('{"systemMessage":true}').notes[0]?.includes("must be a string"));
+  });
+
+  it("continue:false stops the run, with its stopReason or without one", () => {
+    strictEqual(parseHookEnvelope('{"continue":false,"stopReason":"no more writes today"}').stop, "no more writes today");
+    strictEqual(parseHookEnvelope('{"continue":false}').stop, "stopped by hook");
+    strictEqual(parseHookEnvelope('{"continue":true}').stop, null);
+    // A stopReason with no `continue:false` says nothing anyone can act on.
+    ok(parseHookEnvelope('{"stopReason":"just a mood"}').notes[0]?.includes("continue: false"));
+    ok(parseHookEnvelope('{"continue":"no"}').notes[0]?.includes("true or false"));
+  });
+
+  it("a hook may withhold a call and never grant one", () => {
+    strictEqual(parseHookEnvelope('{"decision":"deny","reason":"nope"}').deny, "nope");
+    strictEqual(parseHookEnvelope('{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"nope"}}').deny, "nope");
+    for (const loosening of ['{"decision":"allow"}', '{"decision":"approve"}', '{"hookSpecificOutput":{"permissionDecision":"allow"}}', '{"hookSpecificOutput":{"permissionDecision":"ask"}}']) {
+      const e = parseHookEnvelope(loosening);
+      strictEqual(e.deny, null, loosening);
+      ok(e.notes[0]?.includes("may deny a call, not grant"), loosening);
+    }
+  });
+
+  it("updatedInput is refused, because PreToolUse fires after the grant", () => {
+    const e = parseHookEnvelope('{"hookSpecificOutput":{"updatedInput":{"command":"rm -rf target"}}}');
+    strictEqual(e.deny, null);
+    ok(e.notes[0]?.includes("nobody approved"), e.notes.join("; "));
+    ok(e.notes[0]?.includes("ladder"), e.notes.join("; "));
+  });
+
+  it("fields this harness cannot perform are named, not dropped: bad JSON, suppressOutput", () => {
+    ok(parseHookEnvelope('{"a":').notes[0]?.includes("did not parse"));
+    ok(parseHookEnvelope('{"hookSpecificOutput":[]}').notes[0]?.includes("must be an object"));
+    ok(parseHookEnvelope('{"suppressOutput":true}').notes[0]?.includes("never rendered"));
+    // A JSON array is not an envelope at all, so it is output — like prose.
+    strictEqual(parseHookEnvelope("[1,2]").notes.length, 0);
+    // An unrecognised key is silence: a hook may print more than a verdict.
+    strictEqual(parseHookEnvelope('{"whatever":1}').notes.length, 0);
+  });
+
+  it("runHooksFor accumulates context and messages across passing hooks; a deny carries none", async () => {
+    const defs: HookDef[] = [
+      { event: "PreToolUse", match: "bash", command: "one" },
+      { event: "PreToolUse", match: "bash", command: "two" },
+    ];
+    const seen: { command: string; stdin: string; env: Record<string, string> }[] = [];
+    const r = await runHooksFor(defs, "PreToolUse", "bash", payload(), fakeSpawner([
+      out('{"hookSpecificOutput":{"additionalContext":"first"},"systemMessage":"note one"}'),
+      out('{"hookSpecificOutput":{"additionalContext":"second"},"continue":false,"stopReason":"halt"}'),
+    ], seen));
+    strictEqual(r.status, "pass");
+    strictEqual(r.fired, 2);
+    strictEqual(r.context, "first\nsecond");
+    strictEqual(r.systemMessage, "note one");
+    strictEqual(r.stop, "halt");
+    const denied = await runHooksFor(defs, "PreToolUse", "bash", payload(), fakeSpawner([
+      out('{"hookSpecificOutput":{"additionalContext":"first"}}'),
+      out('{"decision":"deny","reason":"halt"}'),
+      out('{"continue":false}'),
+    ], seen));
+    strictEqual(denied.status, "deny");
+    strictEqual(denied.context, "");
+    strictEqual(denied.stop, null);
+    strictEqual(denied.fired, 2);
+  });
+
+  it("an un-honourable ask surfaces as a warning, so the hook author learns the rule", async () => {
+    const defs: HookDef[] = [{ event: "PreToolUse", match: "bash", command: "one" }];
+    const seen: { command: string; stdin: string; env: Record<string, string> }[] = [];
+    const r = await runHooksFor(defs, "PreToolUse", "bash", payload(), fakeSpawner([
+      out('{"decision":"allow","hookSpecificOutput":{"updatedInput":{"command":"ls"}}}'),
+    ], seen));
+    strictEqual(r.status, "warn");
+    ok(r.reason.includes("may deny a call, not grant"), r.reason);
+    ok(r.reason.includes("nobody approved"), r.reason);
+  });
+
+  it("injected context and messages are redacted at the same seam as reasons", async () => {
+    const defs: HookDef[] = [{ event: "PreToolUse", match: "bash", command: "one" }];
+    const seen: { command: string; stdin: string; env: Record<string, string> }[] = [];
+    const r = await runHooksFor(defs, "PreToolUse", "bash", payload(), fakeSpawner([
+      out('{"hookSpecificOutput":{"additionalContext":"key sk-abcdef123456"},"systemMessage":"token sk-zyxwvu654321"}'),
+    ], seen));
+    ok(!r.context.includes("sk-abcdef123456"), r.context);
+    ok(!r.systemMessage.includes("sk-zyxwvu654321"), r.systemMessage);
   });
 });

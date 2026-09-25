@@ -189,4 +189,105 @@ describe("hooks seams (loop)", () => {
       fs.rmSync(runCwd, { recursive: true, force: true });
     }
   });
+
+  it("PreToolUse additionalContext joins the result the model reads on its next turn", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-ctx-"));
+    try {
+      fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+      const seen: { event: string; payload: HookPayload }[] = [];
+      const { port, record, messagesSeen } = makeFakePort([
+        toolTurn("read", JSON.stringify({ path: "f.txt" })),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: { defs: [{ event: "PreToolUse", match: "read", command: "annotate" }], errors: [] },
+        hookDeps: spawner([{ code: 0, stdout: '{"hookSpecificOutput":{"additionalContext":"this file is generated — do not edit"}}', stderr: "", timedOut: false }], seen),
+      });
+      strictEqual(r.text, "done");
+      strictEqual(record.length, 2, "the hook's context must not cost an extra provider call");
+      const toolMsg = r.messages.filter((m) => m.role === "tool").at(-1);
+      ok(toolMsg !== undefined && toolMsg.content.includes("this file is generated — do not edit"), toolMsg?.content ?? "");
+      ok(toolMsg !== undefined && toolMsg.content.includes("hello"), "the tool's own output must still be there");
+      // The proof it worked: the SECOND call carried that text to the model.
+      const second = JSON.stringify(messagesSeen[1] ?? []);
+      ok(second.includes("this file is generated"), "context never reached the model");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("continue:false stops the run mid-turn: the call is refused before executing, no further provider call is made, and the chain stays valid", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-stop-run-"));
+    try {
+      fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+      const seen: { event: string; payload: HookPayload }[] = [];
+      const events: { kind: string; text: string }[] = [];
+      const { port, record } = makeFakePort([
+        toolTurn("read", JSON.stringify({ path: "f.txt" })),
+        textTurn("must never run"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+        onEvent: (e) => events.push({ kind: e.kind, text: e.text }),
+        hooks: { defs: [{ event: "PreToolUse", match: "read", command: "halt" }], errors: [] },
+        hookDeps: spawner([{ code: 0, stdout: '{"continue":false,"stopReason":"the gate is closed"}', stderr: "", timedOut: false }], seen),
+      });
+      strictEqual(r.stopReason, "hook");
+      strictEqual(r.text, "");
+      strictEqual(record.length, 1, "a stopped run must not ask the model again");
+      // The call was refused, never executed: one trace entry, and it is the refusal.
+      const readTrace = r.trace.filter((t) => t.tool === "read");
+      strictEqual(readTrace.length, 1);
+      strictEqual(readTrace[0]?.policy, "deny:hook:stop");
+      const toolMsg = r.messages.filter((m) => m.role === "tool").at(-1);
+      ok(toolMsg?.content.includes("run stopped by PreToolUse hook: the gate is closed"), toolMsg?.content ?? "");
+      ok(events.some((e) => e.kind === "hook" && e.text.includes("hook:stop")), JSON.stringify(events));
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("PostToolUse context appends in the same turn; Stop context is refused out loud; systemMessage never reaches a model", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-post-"));
+    try {
+      fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
+      const seen: { event: string; payload: HookPayload }[] = [];
+      const events: { kind: string; text: string }[] = [];
+      const { port, messagesSeen } = makeFakePort([
+        toolTurn("read", JSON.stringify({ path: "f.txt" })),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [],
+        onEvent: (e) => events.push({ kind: e.kind, text: e.text }),
+        hooks: {
+          defs: [
+            { event: "PostToolUse", match: "read", command: "watch" },
+            { event: "Stop", match: "*", command: "wrap" },
+          ],
+          errors: [],
+        },
+        hookDeps: spawner([
+          { code: 0, stdout: '{"hookSpecificOutput":{"additionalContext":"ci says: flaky"},"systemMessage":"for the human only"}', stderr: "", timedOut: false },
+          { code: 0, stdout: '{"hookSpecificOutput":{"additionalContext":"too late for this"}}', stderr: "", timedOut: false },
+        ], seen),
+      });
+      strictEqual(r.text, "done");
+      const toolMsg = r.messages.filter((m) => m.role === "tool").at(-1);
+      ok(toolMsg?.content.includes("ci says: flaky"), toolMsg?.content ?? "");
+      ok(events.some((e) => e.kind === "hook" && e.text === "message: for the human only"), JSON.stringify(events));
+      // Stop's context cannot reach a model that no longer exists — and says so.
+      ok(events.some((e) => e.text.includes("no model turn remains")), JSON.stringify(events));
+      const wire = JSON.stringify(messagesSeen);
+      ok(!wire.includes("for the human only"), "a systemMessage was sent to a provider");
+      ok(!wire.includes("too late for this"), "Stop context leaked into a transcript");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
 });

@@ -155,6 +155,7 @@ const SUBTYPE: Record<StopReason, string> = {
   cost_budget: "error_cost_budget",
   error: "error",
   cancelled: "cancelled",
+  hook: "error_hook_stop",
 };
 
 /** The single machine document both json and stream-json finish with. */

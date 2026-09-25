@@ -262,7 +262,7 @@ export type LoopTraceCall = {
 };
 
 /** Why the loop exited — the structured counterpart to the `error` string. */
-export type StopReason = "complete" | "max_steps" | "token_budget" | "cost_budget" | "error" | "cancelled";
+export type StopReason = "complete" | "max_steps" | "token_budget" | "cost_budget" | "error" | "cancelled" | "hook";
 
 export type LoopResult = {
   text: string;
@@ -485,6 +485,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   // Overwritten by every break below; the loop falling out on its own is the
   // step cap, so that is the initial value.
   let stopReason: StopReason = "max_steps";
+  /** A hook printed `continue: false`; the reason, and the step to stop after. */
+  let hookStop: string | null = null;
   /** `--json-schema`: verdict on the final answer, and repairs spent on it. */
   let structured: LoopResult["structured"];
   let repairsUsed = 0;
@@ -1168,6 +1170,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // must not re-trigger side effects) and before checkpoint+exec. An
       // explicit deny short-circuits the call; a warn verdict proceeds.
       let hookArgs: unknown = parsed;
+      let preHookContext = "";
       if (hookDefs.length > 0) {
         // Hooks sit downstream of the redaction invariant: args ride the
         // stdin payload masked, exactly as the model produced them minus secrets.
@@ -1192,6 +1195,19 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         if (hr.status === "warn") {
           hooksWarned += 1;
           emit("hook", `PreToolUse ${call.name}: ${hr.reason}`);
+        }
+        // The three fields a passing hook may still ask for. Context is prompt
+        // text and re-pays every remaining turn of the run, so the receipt line
+        // says how much of it landed.
+        if (hr.systemMessage.length > 0) emit("hook", `message: ${hr.systemMessage}`);
+        if (hr.context.length > 0) preHookContext = hr.context;
+        if (hr.stop !== null) {
+          const out = `run stopped by PreToolUse hook: ${hr.stop}`;
+          messages.push({ role: "tool", toolCallId: call.id, content: out });
+          record("deny", "hook:stop", sha256Hex(out), "policy", out);
+          emit("hook", `stop ${call.name} ${preview} (hook:stop: ${hr.stop})`);
+          hookStop = hr.stop;
+          break;
         }
       }
       // Checkpoint before-image FIRST: undo needs the pre-edit bytes even
@@ -1259,7 +1275,8 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       messages.push({
         role: "tool",
         toolCallId: call.id,
-        content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
+        content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : "")
+          + (preHookContext.length === 0 ? "" : `\n[PreToolUse hook adds: ${preHookContext}]`),
       });
       // Immunity telemetry: a human-approved ask is a POSITIVE sample — any
       // candidate deny rule covering this shape would have over-blocked. The
@@ -1286,7 +1303,23 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           hooksWarned += 1;
           emit("hook", `PostToolUse ${call.name}: ${hr.reason}`);
         }
+        if (hr.systemMessage.length > 0) emit("hook", `message: ${hr.systemMessage}`);
+        // Joined onto the result the model already has, so the hook's reading of
+        // what just happened arrives in the same turn it describes.
+        if (hr.context.length > 0) {
+          const last = messages[messages.length - 1];
+          if (last !== undefined && last.role === "tool") last.content += `\n[PostToolUse hook adds: ${hr.context}]`;
+        }
+        if (hr.stop !== null) {
+          emit("hook", `stop ${call.name} ${preview} (hook:stop: ${hr.stop})`);
+          hookStop = hr.stop;
+          break;
+        }
       }
+    }
+    if (hookStop !== null) {
+      stopReason = "hook";
+      break;
     }
   }
 
@@ -1299,6 +1332,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       ...(error === undefined ? {} : { error: redactSecrets(error) }),
     }, args.hookDeps);
     hooksFired += hr.fired;
+    if (hr.systemMessage.length > 0) emit("hook", `message: ${hr.systemMessage}`);
+    if (hr.context.length > 0) {
+      // There is no next turn to carry it, so the ask is refused as visibly as
+      // an un-honoured agent field would be — never dropped in silence.
+      emit("hook", `Stop: additionalContext refused (the run is over; no model turn remains): ${hr.context.slice(0, 200)}`);
+    }
     if (hr.status !== "pass") {
       hooksWarned += 1;
       emit("hook", `Stop: ${hr.reason}`);
