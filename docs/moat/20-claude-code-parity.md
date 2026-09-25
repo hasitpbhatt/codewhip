@@ -140,7 +140,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | LSP tool | **GAP-5** | absent |
 | CronCreate/List/Delete, RemoteTrigger, PushNotification, SendUserFile, EndConversation, ReportFindings, Artifact | N/S | cloud/push platform surface |
 | Image input to Read | **GAP-3** | `LoopMsg.content` is `string` (`src/provider-port.ts:18`); `read` refuses binary (`src/tools/read.ts:68`) |
-| Parallel tool execution | **GAP-3** | `src/loop.ts:801` sequential `for`; deferred in `torvalds-architecture-review.md:105` |
+| Parallel tool execution | HAVE | independent read-only batches run concurrently, capped at 4, with results committed in assistant order: `src/parallel-tools.ts` `runBoundedParallel`; eligibility and commit at `src/loop.ts:813`–`:932`. Only `read` and already-granted `webfetch` qualify; a hook, host tool, mutation, interactive tool, duplicate call id, memo hit, or a call that would prompt sends the whole batch down the unchanged serial path (`src/loop.ts:814`, `:820`–`:859`) |
 | Prompt caching | **GAP-3** | no `cache_control` anywhere in `src/` |
 
 ## E. Subagents and delegation
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 19**, **GAP 40**,
-i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 18, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 44**, **PARTIAL 19**, **GAP 39**,
+i.e. **43.1%** at parity or better. Remaining GAP rows by wave: 3 → 17, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -730,6 +730,46 @@ tests (`src/subagents.test.ts`, `src/agents-flag.test.ts`).
   (`src/index.ts:1145`). No new lines are added anywhere else: a run without
   `--agent` pays nothing for the feature.
 
+Wave 3g (parallel tool execution) closed 1 row: independent read-only batches
+run concurrently and commit in assistant order. HAVE-or-better 43 → 44,
+**GAP 40 → 39, wave 3 18 → 17**. 6 new tests in `src/parallel-tools.test.ts`.
+Five rulings:
+
+- **A batch is parallel or the whole turn is serial, never a mix.** The
+  eligibility scan runs before any tool runs and bails on the first call it
+  cannot prove safe (`src/loop.ts:813`–`:864`): anything outside `read` and
+  already-granted `webfetch`, a host tool (opaque caller code — the harness
+  cannot promise it only reads), a configured hook, a duplicate or empty call
+  id, a memo hit, or any call that would need a keystroke. A same-turn `read`
+  must not observe a half-applied edit, and two approvals must never race for
+  one terminal, so partial parallelism is the one design that is not available.
+- **"Already granted" is a ladder verdict, not a shortcut past one.** Each
+  candidate still runs `matchToolFilter` and `checkPermission` first, and joins
+  the batch only with the ruleId/actor the real ladder would have recorded —
+  policy, `+allowed-tools`, `+yolo`/`+mode:bypassPermissions`, or
+  `+remembered` (`src/loop.ts:835`–`:859`). A yolo `webfetch` therefore records
+  `allow:default:webfetch:ask+yolo` with actor `yolo`, byte-identical to the
+  serial path, and a self-protected subject is refused before it can join.
+- **Speed is bounded; ordering is not negotiable.** `runBoundedParallel`
+  (`src/parallel-tools.ts`) is a four-slot worker pool, so a 40-call turn is 10
+  deep, not 40, and `MAX_PARALLEL_TOOL_CALLS = 4` is one number rather than a
+  per-call-site cap. Results are written back to their **input** index, so
+  completion order is free while `tool_result` messages, `seq`, the trace,
+  `outcomes.jsonl` and the audit chain all stay in the order the model asked
+  for — the audit `seq` is reserved before execution and the appends happen on
+  the commit loop (`src/loop.ts:906`–`:930`).
+- **One failure is one failed call, not a failed batch.** Each execution keeps
+  its own `withTimeout` and its own `try/catch` inside the pool, so a crash or
+  timeout becomes that call's `ToolResult` string and every other result still
+  commits; nothing is re-run, because the memo write happens on the ordered
+  commit rather than inside the worker.
+- **`read` is in the set for correctness, not for speed.** It is a sync walk
+  behind an `async` signature, so a read batch is mostly a no-op on wall clock;
+  the honest speedup is pre-approved `webfetch`, and a test drives both through
+  instrumented tools to prove overlap rather than inferring it. The narrow
+  first cut is the price of not refactoring every denial, hook and approval
+  branch; the seam is one eligibility scan, so widening it later is additive.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -776,8 +816,14 @@ count is the instrument, not the memory of it.
    roster in JSON, three-source precedence, and an entry on the main thread;
    append-not-replace, child-only `tools` narrowing and no mid-session switch are
    the named deltas) — GAP 42 → 41, wave 3 20 → 19.
-   Remaining: parallel tool
-   exec, vision input, prompt caching, hook events 3→33 with
+   Parallel tool execution **closed 2026-09-25** (`src/parallel-tools.ts`,
+   the eligibility scan and ordered commit at `src/loop.ts:813`–`:932`): a
+   4-slot cap over `read` + pre-approved `webfetch`, and a whole-batch serial
+   fallback the moment one call cannot be proven safe — GAP 41 → 40, wave 3
+   19 → 18 at the start of this line; the hooks-output row above then took it to
+   40 → 39 / 18 → 17.
+   Remaining: vision
+   input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus
    the `.claude/agents/` path itself,
    web search tool, worktree isolation, MCP client (with

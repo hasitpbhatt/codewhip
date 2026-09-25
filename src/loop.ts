@@ -21,6 +21,7 @@ import { listAgentsWithErrors, type AgentDef } from "./subagents.js";
 import { MAX_REPAIRS, repairNote, structuredInstruction, structuredTurn } from "./structured.js";
 import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
 import { NOOP_DEBUG, type Debug } from "./debug.js";
+import { MAX_PARALLEL_TOOL_CALLS, runBoundedParallel } from "./parallel-tools.js";
 import type { ProviderId } from "./provider-port.js";
 
 export type ApprovalAnswer = "yes" | "session" | "always" | "no";
@@ -64,6 +65,8 @@ export type FailoverTarget = {
  * remembered-rule path (an `a` answer promotes a shape after the deny).
  */
 const IDEMPOTENT_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["read", "search", "webfetch"]);
+/** Async builtins with no workspace or harness-state writes. */
+const PARALLEL_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["read", "webfetch"]);
 /** Identical repeats of one call allowed before the answer is replaced by a nudge. */
 const REPEAT_NUDGE_AT = 3;
 
@@ -806,6 +809,127 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       stopReason = "complete";
       break;
+    }
+    const parallelCandidates = (() => {
+      if (turn.toolCalls.length < 2 || hookDefs.length > 0) return null;
+      const ids = new Set<string>();
+      const candidates: Array<{ call: (typeof turn.toolCalls)[number]; def: ToolDef; parsed: unknown; hash: string; preview: string; subject: string; ruleId: string; actor: AuditActor }> = [];
+      for (const call of turn.toolCalls) {
+        if (call.id.length === 0 || ids.has(call.id)) return null;
+        ids.add(call.id);
+        // Host tools are deliberately not candidates: their bodies are opaque
+        // caller code, so the harness cannot promise they only read.
+        if (!isToolName(call.name) || !PARALLEL_TOOLS.has(call.name) || (isChild && call.name !== "read")) return null;
+        const def = TOOLS[call.name];
+        let parsed: unknown = null;
+        try {
+          parsed = JSON.parse(call.argsJson) as unknown;
+        } catch {
+          return null;
+        }
+        if (parsed === null) return null;
+        const hash = argsHash(parsed);
+        const preview = previewForLog(call.name, parsed);
+        const subject = permissionSubject(def.name, parsed, preview);
+        if (matchToolFilter(args.disallowedTools, def.name, subject) !== null) return null;
+        const verdict = checkPermission(def.name, subject, promoted, { skipPolicyDenies: args.policySurface === "prompt" });
+        if (verdict.decision === "deny") return null;
+        let ruleId = verdict.ruleId;
+        let actor: AuditActor = "policy";
+        if (verdict.decision === "ask") {
+          // Only a grant that needs no keystroke may join. An ask that would
+          // prompt falls back to the serial ladder, so two approvals never
+          // race for one terminal and every answer keeps its own transcript.
+          const granted = matchToolFilter(args.allowedTools, def.name, subject);
+          if (granted !== null && !targetsSelfProtected(subject) && (granted.shape === null || !targetsSelfProtected(granted.shape))) {
+            actor = "human";
+            ruleId = `${verdict.ruleId}+allowed-tools`;
+          } else if (mode === "bypassPermissions") {
+            actor = "yolo";
+            ruleId = args.yolo ? `${verdict.ruleId}+yolo` : `${verdict.ruleId}+mode:bypassPermissions`;
+          } else {
+            const shape = shapeOf(def.name, subject);
+            const hit = manual || shape === null ? undefined : (args.remembered ?? []).find((r) =>
+              r.tool === def.name && r.shape === shape && (def.name !== "webfetch" || webfetchOrigin(subject) === r.shape),
+            );
+            if (hit === undefined || targetsSelfProtected(def.name === "webfetch" ? hit.shape : subject)) return null;
+            actor = "remembered";
+            ruleId = `${verdict.ruleId}+remembered`;
+          }
+        }
+        if (args.repeatGuard !== false && memo.has(`${def.name}:${hash}`)) return null;
+        candidates.push({ call, def, parsed, hash, preview, subject, ruleId, actor });
+      }
+      return candidates;
+    })();
+    if (parallelCandidates !== null) {
+      dbg(`parallel batch: ${parallelCandidates.length} read-only call(s), cap ${MAX_PARALLEL_TOOL_CALLS}`);
+      const firstSeq = seq + 1;
+      seq += parallelCandidates.length;
+      const results = await runBoundedParallel(parallelCandidates, MAX_PARALLEL_TOOL_CALLS, async (candidate) => {
+        const execStart = Date.now();
+        let result: ToolResult;
+        try {
+          result = await withTimeout(
+            (signal) => candidate.def.exec(
+              {
+                cwd: args.cwd,
+                roots: args.roots,
+                port: current.port,
+                model: current.model,
+                label: current.label,
+                depth,
+                onChildUsage: foldChildUsage,
+                onChildEvent: (text) => emit("tool", text),
+                remainingBudget: args.tokenBudget === undefined ? undefined : Math.max(0, args.tokenBudget - (promptTokens + completionTokens)),
+                rotationModels: args.models,
+                retryWait: args.retryWait,
+                compactTokens: args.compactTokens,
+                disallowedTools: args.disallowedTools,
+                agents: args.agents,
+                ...(args.askUserQuestion === undefined ? {} : { askUserQuestion: args.askUserQuestion }),
+                debug: dbg,
+                parentRunId: runId,
+                runId,
+              },
+              candidate.parsed,
+              signal,
+            ),
+            candidate.def.timeoutMs,
+            args.signal,
+          );
+        } catch (err) {
+          result = { ok: false, output: `tool crashed: ${err instanceof Error ? err.message : "error"}` };
+        }
+        return { result, execStart };
+      });
+      for (const [index, candidate] of parallelCandidates.entries()) {
+        const callSeq = firstSeq + index;
+        const { result, execStart } = results[index] as { result: ToolResult; execStart: number };
+        const redacted = redactSecrets(result.output);
+        const scrubbed = redacted !== result.output;
+        if (result.ok && args.repeatGuard !== false) memo.set(`${candidate.def.name}:${candidate.hash}`, { output: redacted, repeats: 0 });
+        messages.push({
+          role: "tool",
+          toolCallId: candidate.call.id,
+          content: capOutput(redacted) + (scrubbed ? "\n[redacted: secrets masked before forwarding]" : ""),
+        });
+        const ruleId = candidate.ruleId;
+        const actor = candidate.actor;
+        calls.push({ seq: callSeq, tool: candidate.call.name, args_hash: candidate.hash, result_hash: sha256Hex(redacted.slice(0, 2000)), decision: "allow", ruleId });
+        const auditError = appendEntry(args.cwd, {
+          runId, actor, tool: candidate.call.name, args_hash: candidate.hash,
+          result_hash: sha256Hex(redacted.slice(0, 2000)), policy: `allow:${ruleId}`,
+        });
+        if (auditError !== null) {
+          auditDropped += 1;
+          emit("policy", `audit: ${auditError}`);
+        }
+        trace.push({ seq: callSeq, tool: candidate.call.name, policy: `allow:${ruleId}`, actor, preview: redactSecrets(candidate.preview).slice(0, 500), subject: candidate.subject });
+        dbg(`exec ${candidate.def.name} ${result.ok ? "ok" : "FAILED"} in ${Date.now() - execStart}ms (timeout ${candidate.def.timeoutMs}ms) — ${redacted.length} chars${scrubbed ? ", secrets masked" : ""}, seq ${callSeq}`);
+        emit("tool", `${result.ok ? "ok" : "fail"} ${candidate.call.name} ${candidate.preview} (${ruleId})`);
+      }
+      continue;
     }
     for (const call of turn.toolCalls) {
       seq += 1;

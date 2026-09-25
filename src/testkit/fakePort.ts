@@ -48,6 +48,17 @@ export function toolTurn(
     promptTokens: tokens?.prompt ?? 1, completionTokens: tokens?.completion ?? 1,
   };
 }
+/** Shorthand: one assistant turn requesting several tools at once. */
+export function toolBatchTurn(
+  calls: ReadonlyArray<{ id: string; name: string; argsJson: string }>,
+  tokens?: { prompt: number; completion: number },
+): ChatPortResponse {
+  return {
+    ok: true, text: null, toolCalls: calls.map((c) => ({ ...c })),
+    promptTokens: tokens?.prompt ?? 1, completionTokens: tokens?.completion ?? 1,
+  };
+}
+
 /** Shorthand: a 429 with optional Retry-After seconds. */
 export function rateLimited(retryAfterMs?: number): ChatPortResponse {
   return { ok: false, error: "rate limited", retryable: "rate-limited", retryAfterMs };
