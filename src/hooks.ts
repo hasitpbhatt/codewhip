@@ -7,7 +7,8 @@ import type { ToolName } from "./tools/types.js";
 
 /**
  * Event hooks: user-authored shell commands fired by the harness at run
- * seams, Claude Code's grammar. Three seams can act (`PreToolUse`,
+ * seams, in the widely-used `PreToolUse`/`PostToolUse` grammar. Three seams
+ * can act (`PreToolUse`,
  * `SessionStart`, `UserPromptSubmit`); the other eight observe. The commands
  * run OUTSIDE the bash jail BY DESIGN — this is user config, like
  * a shell profile, not a model request. Containment is structural: hook
@@ -297,7 +298,7 @@ function jsonField(stdout: string, key: string): string | null {
 }
 
 /**
- * The JSON a hook may print on stdout, in Claude Code's envelope names.
+ * The JSON a hook may print on stdout, in the standard envelope names.
  *
  * Deliberately asymmetric: every field that would LOOSEN the harness is refused
  * by name with the reason, while an unrecognised key is silence. A hook author

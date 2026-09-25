@@ -26,7 +26,7 @@ bounded by policy, watched by audit, billed by the meter — and visibly
 getting smarter about *their* repo every week.
 
 Horizon 1: OpenCode parity in the terminal, with enforcement-grade governance.
-Horizon 2: a credible open alternative to Claude Code's closed trust monopoly.
+Horizon 2: a credible open alternative to the incumbent closed-trust model monopoly.
 
 ## 3. Creed (Naval, condensed)
 

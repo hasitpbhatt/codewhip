@@ -21,7 +21,7 @@ import { EMPTY_LEDGER } from "./session-ledger.js";
 import { setWriteSink } from "./run-output.js";
 
 /**
- * Wave-2 session naming (docs/moat/20-claude-code-parity.md): `-r` by name,
+ * Wave-2 session naming (docs/moat/20-parity-matrix.md): `-r` by name,
  * `--name`/`--tag`/`--fork-session`, and the REPL `.rename`/`.tag`/`.branch`.
  *
  * `cmdRun` is not driven here: it needs a real provider port. The composition it

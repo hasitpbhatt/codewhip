@@ -3161,7 +3161,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     } else if (process.stdin.isTTY !== true) {
-      // `cat diff.patch | codewhip run -p "review this"` — Claude Code's
+      // `cat diff.patch | codewhip run -p "review this"` — a familiar
       // idiom: the query is the argument, the pipe is the material.
       const piped = await readStdin(process.stdin, STDIN_CONTEXT_WAIT_MS);
       if (piped.error !== undefined) {

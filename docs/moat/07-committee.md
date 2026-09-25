@@ -1,9 +1,9 @@
-# 07 — The five-persona committee: beating opencode/kilo, closing on Claude Code
+# 07 — The five-persona committee: beating opencode/kilo, closing on the incumbent
 
 > Convened 2026-09-11, immediately after the free-provider aggregation
 > shipped (16 builtins, 4 keyless, `codewhip free` / `--free` chain).
 > Question put to the committee: *what makes CodeWhip the best of the
-> OpenCode/Kilo class, and on par or better than Claude Code — without
+> OpenCode/Kilo class, and on par or better than the incumbent — without
 > violating a single SOUL.md ruling?*
 > Evidence base: `src/` as of ab79ddf, 212 passing tests, zero runtime deps.
 
@@ -11,7 +11,7 @@
 
 CodeWhip's wedge against OpenCode/Kilo is already built and they can't copy
 it cheaply: **aggregated free tiers + honest $0 receipts + a hash-chained
-audit trail in the same run**. The gap to Claude Code is not capability
+audit trail in the same run**. The gap to the incumbent is not capability
 theater — it is three concrete trust-and-session features: an **undo**
 (checkpoints), a **review-before-act mode** (plan), and **sessions that
 survive their own context window** (compaction). All three are harness-side,
@@ -95,7 +95,7 @@ OpenCode can clone the free-chain table in a week. Kilo can ship a `free`
 flag in a day. What they cannot ship without repudiating their own
 business model: **local-first, hash-chained, signed audit of everything
 the agent did, keyed to per-repo verdicts, with the meter attached.**
-Claude Code will never let you swap providers, run at $0, or hand the audit
+The incumbent will never let you swap providers, run at $0, or hand the audit
 artifact to your own compliance team — their margin is token rent. So the
 definitive move is to make the trust artifacts *exportable proof*:
 checkpoints + rollback complete the loop (deny → allow → undo → verdict),
@@ -132,7 +132,7 @@ OpenCode with extra files. That's why undo ships before any capability work.
    test suite green before each push; receipts untouched. *(Linus, Naval)*
 7. **Positioning states the class, not the parity.** README compares on
    the axis that matters: metered, audited, undoable, $0-capable vs
-   capability-breadth. No "Claude Code killer" hype — SOUL voice. *(Jobs)*
+   capability-breadth. No "incumbent killer" hype — SOUL voice. *(Jobs)*
 
 ## Build order (feeds `docs/roadmap.md`)
 

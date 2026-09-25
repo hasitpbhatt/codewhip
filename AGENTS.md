@@ -15,7 +15,7 @@ npm start          # node dist/index.js
 ```
 
 Optional runners: `npm run bench` (quality/cost benchmarks),
-`npm run parity` (recount `docs/moat/20-claude-code-parity.md` and fail if its
+`npm run parity` (recount `docs/moat/20-parity-matrix.md` and fail if its
 Score section no longer matches its own rows — run it after touching that file)
 and `npm run immunity` (the C3 escape suite and replay; see
 `docs/moat/18-verdict-privilege-experiments.md`).

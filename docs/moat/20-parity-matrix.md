@@ -1,30 +1,25 @@
-# 20 — Claude Code parity: the matrix and the build queue
+# 20 — Terminal parity: the matrix and the build queue
 
-Goal: close the feature gap between codewhip and Claude Code. This file is the
-audit instrument, not an essay: every row is one Claude Code capability, one
-status, and file:line evidence on the codewhip side. It replaces
-`10-competitive-reality.md` §4 as the gap list (that doc stays as the 2026-09-18
-record; several of its "still open" items have since shipped and are marked so
-here).
+Goal: close the feature gap between codewhip and the leading terminal coding
+agents. This file is the audit instrument, not an essay: every row is one
+widely-available capability, one status, and file:line evidence on the
+codewhip side. It replaces `10-competitive-reality.md` §4 as the gap list
+(that doc stays as the 2026-09-18 record; several of its "still open" items
+have since shipped and are marked so here).
 
-Method: Claude Code's surface was taken from the live docs in September 2026 —
-[cli-reference](https://code.claude.com/docs/en/cli-reference),
-[commands](https://code.claude.com/docs/en/commands),
-[interactive-mode](https://code.claude.com/docs/en/interactive-mode),
-[hooks](https://code.claude.com/docs/en/hooks),
-[skills](https://code.claude.com/docs/en/skills),
-[plugins](https://code.claude.com/docs/en/plugins),
-[sub-agents](https://code.claude.com/docs/en/sub-agents),
-[mcp](https://code.claude.com/docs/en/mcp),
-[headless](https://code.claude.com/docs/en/headless),
-[permission-modes](https://code.claude.com/docs/en/permission-modes),
-[sandboxing](https://code.claude.com/docs/en/sandboxing),
-[tools](https://code.claude.com/docs/en/tools),
-[checkpointing](https://code.claude.com/docs/en/checkpointing),
-[settings](https://code.claude.com/docs/en/settings),
-[memory](https://code.claude.com/docs/en/memory),
-[agent-sdk/typescript](https://code.claude.com/docs/en/agent-sdk/typescript).
-codewhip's side was taken from the compiled registry and `src/`, not from docs.
+Why a matrix at all: the terminal-agent category has converged on a
+recognisable feature set — a headless scripting surface, a permission ladder,
+a consent-gated edit/shell toolset, subagents, hooks, slash commands, and
+checkpointed undo. Those are facts about the category, not one vendor's
+roadmap, and codewhip is measured against the category. Where a row names a
+concrete surface (`CLAUDE.md`, `.claude/commands/`, a `mcp add` subcommand) it
+is naming a *file or flag other tools also use*, so an operator arriving from
+elsewhere finds the same shape here.
+
+Method: the left-hand column was compiled in September 2026 from the public
+documentation of the major terminal coding agents, cross-read against their
+CLI references, hook and settings schemas, and sub-agent docs. codewhip's
+side was taken from the compiled registry and `src/`, not from docs.
 
 ## Legend
 
@@ -38,7 +33,7 @@ codewhip's side was taken from the compiled registry and `src/`, not from docs.
 
 ## Scope ruling — what cannot be a parity row
 
-Claude Code's 2026 surface includes Anthropic-platform capabilities that a
+The incumbent closed-box product's 2026 surface includes vendor-platform capabilities that a
 model-agnostic open-source CLI cannot have *as such*: account OAuth to
 claude.ai, hosted cloud sessions, the Slack/GitHub-App auto-fixers, Claude
 Design, Artifacts browser, mobile QR pairing, Remote Control from claude.ai,
@@ -56,7 +51,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## A. Invocation and scripting
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `claude "query"` interactive start | HAVE | `src/index.ts:2948` bare `codewhip` on a TTY opens the REPL, `cmdRepl:1781`; a positional query is the first turn of a run (`:1475`) |
 | `-p/--print` headless one-shot | HAVE | `-p`/`--headless` (`src/index.ts:676`); `src/run-output.ts` owns stdout, prose moves to stderr. `--print` keeps its older share-markdown meaning — the long name diverges, the short flag does not |
@@ -88,7 +83,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## B. Session and context
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `-c/--continue` most-recent | HAVE | `--continue` |
 | `-r <id-or-name>` resume by name | HAVE | `-r`/`--resume`/`--continue` all take a name or a ≥4-char id prefix — `src/sessions.ts:199` (`resolveSession`), `src/sessions.ts:217` (`loadSession`) |
@@ -111,7 +106,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## C. Permissions, policy, audit
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | allow/deny/ask rules in settings | HAVE | `policy.md`, `codewhip-policy.yaml`, `src/policy.ts` |
 | `permissions.defaultMode` | **HAVE** | `src/settings.ts:56` `mergeFile` reads `defaultMode` (`:85`) and its twin `additionalDirectories` (`:95`), reporting and ignoring a bad value; `:117` `loadSettings` layers user then project, project wins; consumed once at `src/index.ts:1053` |
@@ -120,11 +115,11 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `/fewer-permission-prompts` (scan transcripts → allowlist) | ALIAS | `policy candidates` / `policy approve` from declines |
 | Sandboxing: Seatbelt / bubblewrap, `allowedDomains`, `proxy` | **GAP-4** | harness jail only; honest label ("harness jail, not OS isolation"). H2 item |
 | OS-level credential/env scrubbing | PARTIAL | `src/redact.ts` at write + model boundary |
-| Audit trail, hash chain, signed export | **HAVE-plus** | `src/audit.ts` — Claude Code has no user-verifiable chain |
+| Audit trail, hash chain, signed export | **HAVE-plus** | `src/audit.ts` — the category leader has no user-verifiable chain |
 
 ## D. Tools
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | Read / Write / Edit | HAVE | `src/tools/{read,write,edit}.ts` |
 | Glob + Grep | ALIAS | single `search` (glob+grep merged) |
@@ -145,7 +140,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## E. Subagents and delegation
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
 | `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:144` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:386`), and both are compiled onto one list the child is born with (`src/subagents.ts:480`, `:599`); the other eight are refused BY NAME with their reason (`src/subagents.ts:73`) — no field is ever accepted-and-dropped |
@@ -156,7 +151,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## F. Hooks
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `PreToolUse` / `PostToolUse` / `Stop` | HAVE | `src/hooks.ts` |
 | Lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreCompact`/`PostCompact`, `SubagentStart`/`Stop`, `SessionEnd`, `StopFailure` | **PARTIAL** | 8 added to the original 3 = **11 of 33 exist**, dispatched by one `hookPolicy` table (`src/hooks.ts:103`) that decides per seam whether a hook may stop the run and whether `additionalContext` has a turn to land in. Fired at `src/loop.ts:535` (`fireLifecycle`) — SessionStart/UserPromptSubmit before the first turn (`:627`), Pre/PostCompact around compaction (`:680`, `:690`), SubagentStart/Stop around a delegate call (`:1405`, `:1455`), StopFailure+SessionEnd on exit (`:1534`). **Named delta — 22 events still absent:** `Setup`, `Notification`, `TaskCreated`/`Completed`, `PermissionRequest`/`Denied`, `FileChanged`, `ConfigChange`, `CwdChanged`, `WorktreeCreate`/`Remove`, `InstructionsLoaded`, `Elicitation`, `MessageDisplay`, `TeammateIdle`, `PostToolBatch`, `UserPromptExpansion` |
@@ -167,7 +162,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## G. Extensibility: commands, skills, plugins, MCP
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `.claude/commands/*.md` + `$ARGUMENTS` | HAVE | `.codewhip/commands/*.md` |
 | `` !`cmd` `` pre-execution, `@file` refs in commands | **GAP-4** | absent |
@@ -182,18 +177,18 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## H. Memory and project files
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | CLAUDE.md hierarchy enterprise/project/user | PARTIAL | `AGENTS.md` + `policy.md`; no user-level or enterprise tier (`src/system.ts`) |
 | `@path` imports, `.claude/rules/` with `paths:` | **GAP-4** | no imports; `docs/moat/02-memory.md` planned it |
 | auto memory dir per project, `/memory` | PARTIAL | `src/remember.ts` + `remember-store.ts`; no `/memory` view |
 | `claudeMdExcludes`, `instructionFiles` | **GAP-4** | fixed filename |
-| Always-allow memory with provenance + curated shapes | **HAVE-plus** | `src/remember-store.ts` — Claude Code stores no provenance |
+| Always-allow memory with provenance + curated shapes | **HAVE-plus** | `src/remember-store.ts` — That tool stores no provenance |
 | Policy promotion from repeated declines | **HAVE-plus** | `src/policy-store.ts` |
 
 ## I. Checkpointing and undo
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | per-turn checkpoint, `/rewind`, Esc+Esc | PARTIAL | per-run, per-file (`src/checkpoints.ts`); no per-turn granularity or picker |
 | Restore code / conversation / both, summarize-from-here | **GAP-4** | `rollback` restores code only, never the transcript |
@@ -201,11 +196,11 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 ## J. Observability, metrics, research surface
 
-| Claude Code | Status | codewhip evidence |
+| Category capability | Status | codewhip evidence |
 |---|---|---|
 | `/insights` session report, `sessionStore` | **GAP-5** | absent |
 | usage/limit telemetry, `system/api_retry` events | PARTIAL | `src/provider-stats.ts` + `codewhip stats` |
-| Task success bars, machine-graded eval, verdicts, trust certificate, signed audit, cost receipts | **HAVE-plus** | `src/eval.ts`, `src/metrics.ts`, `src/verdict.ts`, `src/trust` path — Claude Code has no equivalent; this is the wedge |
+| Task success bars, machine-graded eval, verdicts, trust certificate, signed audit, cost receipts | **HAVE-plus** | `src/eval.ts`, `src/metrics.ts`, `src/verdict.ts`, `src/trust` path — That tool has no equivalent; this is the wedge |
 | Escape/autoimmune suite (`npm run immunity`) | **HAVE-plus** | `src/immunity/` |
 
 ## Score
@@ -241,7 +236,7 @@ Wave 1 (headless scripting) closed 4 rows: `-p/--print`, stdin piping,
 Wave 2a (session naming) closed 3 rows: resume by name, `--name`/
 `--fork-session`/`.branch`, `sessions rename|tag` + REPL `.rename`/`.tag`.
 HAVE-or-better 29 → 32, GAP 57 → 54. Two things this deliberately did *not*
-copy from Claude Code: names are one word with no spaces (a name is the handle
+copy from the other tool: names are one word with no spaces (a name is the handle
 `-r` looks up, and a two-word name prints a resume command that does not
 resume), and a name collision is refused before the run starts rather than
 after it has spent a transcript nobody can find by name again.
@@ -634,7 +629,7 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
 `ask_user` is the thirteenth builtin: the model puts one multiple-choice
 question to the human who started the run and their answer arrives as a tool
 result (`src/tools/ask-user.ts:82`, `src/index.ts:1606`). The row is PARTIAL, not
-HAVE, because three things in Claude Code's schema are not here: up to four
+HAVE, because three things in that tool's schema are not here: up to four
 questions per call, the `header` chip, and the `preview` body. The capability the
 row named — asking back — ships with tests.
 
@@ -701,7 +696,7 @@ tests (`src/subagents.test.ts`, `src/agents-flag.test.ts`).
   `codewhip: --agent "nosuch" is not on the roster (explore, plan, review)`,
   followed by a `$0.0000` receipt. A roster that half-loads surfaces later as
   `unknown agent "…"`, which is a different bug's error message.
-- **The persona appends; it does not replace.** Claude Code's agent definition is
+- **The persona appends; it does not replace.** In that tool, the agent definition is
   the system prompt. Here the entry's prompt is joined to the harness base
   (`src/subagents.ts:522`), because the base is what tells the model which calls
   get refused: replace it and the model retries denys until it learns by

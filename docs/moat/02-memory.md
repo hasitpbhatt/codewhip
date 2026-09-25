@@ -2,7 +2,7 @@
 
 > Specific knowledge can't be trained. It has to be earned, per repo, per team, per rejection.
 
-CodeWhip `0.1.0` is a stub (`run` → "not implemented yet"). That is an advantage: we can instrument the learning loop from line one. OpenCode stores sessions in local SQLite (`opencode.db`, messages/parts/events) but never compounds them — sessions are reopenable, not recallable. Claude Code has memory/Dreaming/Outcomes-grader but it is closed and cloud-tied. Our moat is local-first state that compounds.
+CodeWhip `0.1.0` is a stub (`run` → "not implemented yet"). That is an advantage: we can instrument the learning loop from line one. OpenCode stores sessions in local SQLite (`opencode.db`, messages/parts/events) but never compounds them — sessions are reopenable, not recallable. The incumbent has memory/Dreaming/Outcomes-grader but it is closed and cloud-tied. Our moat is local-first state that compounds.
 
 ## 1. Signal taxonomy — what we collect, why it can't be copied
 

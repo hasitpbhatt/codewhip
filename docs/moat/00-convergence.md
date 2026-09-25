@@ -2,7 +2,7 @@
 
 **Converged wedge:** CodeWhip is the terminal agent a team lead can let an intern run on prod-adjacent code at 2am — because every action is policy-checked, memory-scoped, replayable from a redacted audit link, and metered to <$0.05 on polish work.
 
-House order stands: moat = state that compounds (memory > governance > execution >> connectors). H1 = OpenCode parity in terminal. H2 = past Claude Code.
+House order stands: moat = state that compounds (memory > governance > execution >> connectors). H1 = OpenCode parity in terminal. H2 = past the closed-box incumbent.
 
 ## Debate rulings (no ties)
 

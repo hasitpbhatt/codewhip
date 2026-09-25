@@ -27,7 +27,7 @@ surviving ideas are ways to re-insert the missing inputs — past inputs
 (replay), mint-time inputs (witnesses), and counterfactual inputs
 (quarantine probes) — using only machinery the harness already has.
 
-Survey method: web searches (2026-09-13) over live products (Claude Code
+Survey method: web searches (2026-09-13) over live products (the incumbent
 permissions/settings docs and `/fewer-permission-prompts`, Cursor, Cline,
 OpenCode, enterprise gateways, Oracle OCI Agent Evaluation Framework,
 Trussed.ai, Votal/1kx marketing claims, OPA policy-versioning practice,
@@ -70,7 +70,7 @@ threshold trade flip-set mass against coverage? does a poisoned decline
 stream produce flips that per-decision review misses?).
 
 **Why nobody has it — product evidence.** No harness re-derives permission
-verdicts. Claude Code allow rules live in `settings.local.json`
+verdicts. incumbent allow rules live in `settings.local.json`
 (persistent, no re-validation; per code.claude.com/docs/en/permissions and
 /en/settings); Cursor/Cline keep static config; nothing replays history
 against the current store. The closest product gestures are Oracle's OCI
@@ -153,7 +153,7 @@ continuity paper sketches and states it has not done ("does not yet
 measure its frequency or operational cost").
 
 **Why nobody has it — product evidence.** Nothing expires or invalidates
-grants on environment change. Claude Code allow rules are persistent with
+grants on environment change. incumbent allow rules are persistent with
 no built-in expiration (code.claude.com/docs/en/settings; the only
 middle grounds are per-session approvals and the `/fewer-permission-prompts`
 skill that auto-writes MORE persistent rules from session history —
@@ -250,7 +250,7 @@ staged rollout for RULE FILES — OPA canary deployments (cloudmatos.ai),
 staged rollouts with canary analysis for services — but these gate
 deployments of hand-authored Rego in CI, with no adjudicated human
 history, no disposable-clone execution of probes, and no adversary. No
-agent harness stages permission rules at all: Claude Code, Cursor, Cline
+agent harness stages permission rules at all: the incumbents, Cursor, Cline
 apply allow/deny rules the moment they are written (settings files);
 codewhip's promotion is likewise immediate today.
 

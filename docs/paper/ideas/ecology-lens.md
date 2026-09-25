@@ -33,7 +33,7 @@ capabilities held by the right instance.
 
 Survey method: web searches (2026-09-13) over live products (Microsoft
 Entra Agent ID, Okta Agent SSO/XAA, AgentApproved agent attestation, Rubrik
-Agent Rewind, the IDE rewind surface — Claude Code `/rewind`, Gemini CLI
+Agent Rewind, the IDE rewind surface — incumbent `/rewind`, Gemini CLI
 `/rewind`, OpenCode `/undo`, Cline checkpoints, Kiro, Codex `/rewind`
 request, cursor.directory / ClawHub shared-rule economies, VS Code
 Workspace Trust) and 2024–2026 papers (AWCP arXiv:2602.20493; authenticated
@@ -167,7 +167,7 @@ found 28.7% of rule lines duplicated across repos — unvetted copy-paste at
 scale) and ClawHub (Snyk's ToxicSkills: prompt injection in 36% of
 analyzed skills). Everything shared there is INSTRUCTIONS; nobody ships
 shared permission shapes — mined or hand-authored — and no harness
-consumes another repo's decline history. Enterprise practice (Claude Code
+consumes another repo's decline history. Enterprise practice (the incumbents
 settings sharing inside orgs) spreads static hand-written allowlists.
 The literature uniformly treats shared rules as an ATTACK surface
 (Rules File Backdoor, PoisonedSkills, ToxicSkills); the DEFENSE direction
@@ -251,7 +251,7 @@ append-only chain, so a "cleaned" state still carries the receipts —
 measure reconstructability of an erased action from the ledger alone.
 
 **Why nobody has it — product evidence.** Every shipped rewind is
-operator-held: Claude Code `/rewind`, Gemini CLI `/rewind`, OpenCode
+operator-held: incumbent `/rewind`, Gemini CLI `/rewind`, OpenCode
 `/undo`, Cline checkpoints, Kiro (which carefully distinguishes reverts
 from checkpoints), Codex (`/rewind` still a feature request, issue
 #11626) — or enterprise-recovery-held: Rubrik Agent Rewind markets full

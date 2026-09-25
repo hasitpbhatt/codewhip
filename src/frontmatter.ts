@@ -4,8 +4,8 @@
  * error grammar — extracted verbatim from subagents.parseAgentFile so
  * agent-file behavior stays pinned by its existing tests.
  *
- * Keys are `[a-zA-Z_]+`: agent files honour Claude Code's field names, which
- * are camelCase (`disallowedTools`), while this repo's own are snake_case
+ * Keys are `[a-zA-Z_]+`: agent files may use the common camelCase frontmatter
+ * field names (`disallowedTools`), while this repo's own are snake_case
  * (`max_steps`). Both spellings parse, and which ones mean anything is
  * `parseAgentFile`'s business — this parser only supplies the grammar.
  */
