@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChatPort } from "./provider-port.js";
 import type { UsageBucket } from "./outcomes.js";
+import type { Debug } from "./debug.js";
 import type { LoopArgs } from "./loop.js";
 import { listRules } from "./remember-store.js";
 import { parseFlatFrontmatter } from "./frontmatter.js";
@@ -203,6 +204,8 @@ export type ChildRunOptions = {
   roots?: readonly string[];
   /** The delegating parent's runId (outcome attribution / metrics de-dup). */
   parentRunId?: string;
+  /** Parent's `--debug` sink — a child's decisions join the same log. */
+  debug?: Debug;
   /** Progress lines, already prefixed with the agent name. */
   onEvent?: (text: string) => void;
   /** Per-child wall clock — the child's signal aborts when it fires. */
@@ -238,6 +241,7 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     depth: opts.depth + 1,
     remembered: listRules(opts.cwd),
     systemPrompt: opts.agent.systemPrompt,
+    ...(opts.debug === undefined ? {} : { debug: opts.debug }),
     ...(opts.parentRunId === undefined ? {} : { parentRunId: opts.parentRunId }),
     ...(opts.roots === undefined ? {} : { roots: opts.roots }),
     ...(opts.tokenBudget === undefined ? {} : { tokenBudget: Math.max(1, opts.tokenBudget) }),

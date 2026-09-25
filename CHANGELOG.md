@@ -290,6 +290,29 @@ parse time there rather than silently doing nothing.
   Nothing in the cost path moved: same models, same meter, same receipt line;
   the prompt is 785 characters (≈200 tokens) longer for the new spec and
   guidance, which is the whole price of the feature.
+- **`--debug` and `--debug-file <path>`: the harness's own decisions on a
+  channel.** Parity-matrix Wave 3b: the `--debug`, `--debug-file` row. This is
+  not a verbosity dial — the transcript already prints every tool call, verdict
+  and hop, on stderr and on the audit chain. What had no channel was the
+  *reasoning*: which rung of the consent ladder answered a call, why model
+  rotation was skipped, what the transcript weighed when the budget was
+  re-read, what a hook returned, how long a tool actually took. Sixteen
+  sentences now go to `--debug` (stderr under `-p`, so stdout stays data) or to
+  an appended file. Three rules are enforced by the sink rather than by
+  discipline at the call sites: every line is redacted before it lands, because
+  a debug log sees more than anything else in the program; an `*.env*` target
+  and any path inside `.codewhip/` are refused at parse time, because that is
+  where the audit chain, the stored keys and the policy this log describes
+  live; and at 8 MiB — or on any write error — it warns once and goes quiet,
+  since a broken diagnostic must not kill the run it is explaining. Lines
+  append synchronously on purpose: the tail of the run that crashed is the only
+  part anyone ever reads, and a buffered stream is how that tail gets lost.
+  Subagents inherit the parent's sink, because delegation is where surprises
+  hide and a child that cannot be debugged is a child that cannot be trusted.
+  11 tests (`src/debug.test.ts`) cover the refusals, redaction, the warn-once
+  path and the cap, plus one loop test asserting the sink is silent until armed.
+  Cost: disk and nothing else — no prompt token is added, so every receipt is
+  unchanged.
 
 ### Changed
 

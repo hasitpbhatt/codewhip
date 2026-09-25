@@ -359,6 +359,55 @@ because it may bill pay-go. Keep completion-refusers like `codestral-latest`
 out of agent chains: it answers but won't call tools for file work. Receipts
 show the per-model mix whenever a run crosses models or providers.
 
+## Debugging a run you could not explain
+
+```sh
+codewhip run "..." --debug               # decisions to the prose channel (stderr under -p)
+codewhip run "..." --debug-file run.log  # the same, appended to a file
+```
+
+The transcript tells you what a run *did* — every tool call, verdict and hop is
+already on stderr and on the audit chain. It does not tell you *why*: which rung
+of the consent ladder answered, why rotation was skipped, what the transcript
+weighed when the budget was re-read, what a hook returned, how long a tool
+actually took. `--debug` puts those on a channel. This is verbatim output from
+`src/debug.test.ts`, where the loop is real and only the provider is stubbed (so
+the tiny token counts are the fixture's, not a model's):
+
+```
+run a475a8c7-7f33-4c12-a8b3-dabea0bf1403 nvidia:m depth=0 steps<=5 mode=bypassPermissions plan=false yolo=true tokens=none cost=none tools=12 hooks=0 roots=0 history=0 compact>60000
+step 1/5 on nvidia:m — 2 messages, est 637 tokens
+metered +1p/+1c = 2 tokens
+ladder read subject="f.txt" verdict=allow:default:read:allow mode=bypassPermissions → granted by policy (default:read:allow)
+memo: read:0c4ec1c861cfe3f43d6259fca4861beee0936d7556ba508576b707f… stored (12 chars)
+exec read ok in 12ms (timeout 10000ms) — 12 chars, seq 1
+step 2/5 on nvidia:m — 4 messages, est 661 tokens
+metered +1p/+1c = 4 tokens
+stop complete — steps=2 calls=1 repeats=0 hops=0 compact=0 checkpoints=0 waited=0ms tokens=2+2 audit_seq=1 dropped=0 hooks=0/0
+```
+
+What the sink guarantees, so no call site has to remember it:
+
+- **Every line is redacted** before it lands. A debug log sees arguments,
+  subjects and tool output — more surface than anything else in the program —
+  so it gets the same scrubber a transcript push does.
+- **An `*.env*` target is refused, and so is any path inside `.codewhip/`.**
+  That directory holds the audit chain, the stored keys and the policy the log
+  is describing; commentary and evidence do not belong at the same blast
+  radius. Both refusals happen at parse time, before the run starts.
+- **It caps at 8 MiB, then warns once and goes quiet.** A disk error is treated
+  the same way. Debugging is diagnostics, not a dependency: the run continues.
+- **Lines append synchronously.** The tail of the run that crashed is the only
+  part anyone reads, and a buffered stream is how a tail is lost.
+- **Subagents share the log.** A child run's ladder decisions and its own
+  `run …` line — carrying its own `runId` and `depth=1` — land on the parent's
+  sink, because delegation is where surprises hide.
+
+`--debug-file` overwrites nothing: it appends, so several runs can share one
+file and read as a timeline. The file is created on the first line, which means
+a run that refuses to start (a model that was never enabled, say) leaves no
+empty log behind.
+
 ## TUI
 
 `codewhip run --tui` opts into the terminal UI. The rich renderer needs the

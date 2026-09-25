@@ -73,7 +73,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:569`, precedence `:1056`, ladder rungs `src/loop.ts:897`–`:1001`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
 | `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:581`, validation before the run `:1059`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:51` → read/edit/write/search → `src/subagents.ts:242`. Was a single-cwd jail before Wave 2c |
 | `--bare` (skip discovery of hooks/skills/commands) | **GAP-4** | absent |
-| `--debug`, `--debug-file` | **GAP-3** | absent |
+| `--debug`, `--debug-file` | **HAVE** | both arms exist and neither is a verbosity dial on the transcript: they capture the decisions the loop makes and never prints. `--debug` writes to the prose channel (so `-p` keeps stdout as data), `--debug-file <path>` appends to a file (`src/index.ts:571`, `:573`). The sink owns the rules so no call site can forget them: every line is redacted before it lands (`src/debug.ts:120`), an `*.env*` target and any path inside `.codewhip/` are refused because that is where the audit chain, keys and policy this log describes live (`src/debug.ts:41`), and at 8 MiB — or any write error — it warns once and goes quiet, since a broken diagnostic must never kill the run it is explaining (`src/debug.ts:88`). Lines append synchronously: the tail of the run that crashed is the only part anyone reads (`src/debug.ts:104`). 16 sentences sit in the loop, led by the rung that answered a call (`src/loop.ts:1104`) and per-call exec timing with the audit seq (`src/loop.ts:1234`); subagents inherit the parent's sink, because the surprise usually hides in the child (`src/subagents.ts:208`) |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
 | `--betas` API beta headers | **GAP-3** | wire sends none (`src/provider.ts`) |
 | `claude update`, `install [version]` | **GAP-4** | no update path |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 41**, **PARTIAL 16**, **GAP 45**,
-i.e. **40.2%** at parity or better. Remaining GAP rows by wave: 3 → 23, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 42**, **PARTIAL 16**, **GAP 44**,
+i.e. **41.2%** at parity or better. Remaining GAP rows by wave: 3 → 22, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -522,6 +522,36 @@ contract (a store written by an older build still loads). Four rulings:
   own policy subject (`src/policy.ts:289`), so a team can `deny todo:get`
   without losing the plan.
 
+Wave 3b (the harness's own decisions on a channel) closed 1 row:
+`--debug`, `--debug-file`. HAVE-or-better 41 → 42, GAP 45 → 44, wave 3 23 → 22.
+11 new tests in `src/debug.test.ts`. Four rulings:
+
+- **It logs why, not what.** The transcript already prints every tool call,
+  verdict and hop, on stderr and on the audit chain; a flag that repeated that
+  would be a verbosity dial. What had no channel was the reasoning that died
+  inside the loop — which rung answered (`src/loop.ts:1104`), why rotation was
+  skipped (`:698`), what the transcript weighed at each metering point (`:734`),
+  what a hook returned (`:1147`). 16 sentences, chosen because each one is the
+  answer to a question an operator has asked out loud.
+- **Redaction lives at the sink, not at the call sites.** A debug log is the
+  widest leak surface the program has: it sees arguments, subjects and tool
+  output. One `clip()` (`src/debug.ts:118`) means a future call site cannot
+  forget to scrub, and cannot opt out.
+- **The log may not sit next to what it describes.** `*.env*` and any path
+  inside `.codewhip/` are refused at parse time (`src/debug.ts:41`), before a
+  run starts: the first is the file shape this repo refuses to read, and the
+  second is where the audit chain, the stored keys and the policy live. Writing
+  the commentary beside the evidence would put both at the same blast radius.
+- **A broken diagnostic is a warning, not a failure.** Disk error or 8 MiB cap:
+  one line to the prose channel and the sink goes quiet for the rest of the run
+  (`src/debug.ts:88`) — the same rule hooks already follow. Lines append
+  synchronously (`src/debug.ts:104`) because the tail of the run that crashed is
+  the only part anyone ever reads, and a buffered stream is precisely how that
+  tail is lost. Subagents inherit the parent's sink (`src/subagents.ts:208`):
+  delegation is where surprises hide, and a child that cannot be debugged is a
+  child that cannot be trusted. The cost is disk and nothing else — no prompt
+  token is added, so receipts are unchanged at `$0` delta.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -554,11 +584,12 @@ count is the instrument, not the memory of it.
    `src/tools/registry.ts` and the structured ask in `src/loop.ts`). **Wave 2
    is complete: no row is left in it.**
 3. **Wave 3 — agent capability.** task-list blockers **closed 2026-09-25**
-   (`src/tools/todo-store.ts`, `src/tools/todo.ts`). Remaining: parallel tool
+   (`src/tools/todo-store.ts`, `src/tools/todo.ts`); `--debug`/`--debug-file`
+   **closed 2026-09-25** (`src/debug.ts`). Remaining: parallel tool
    exec, vision input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, subagent frontmatter,
    `AskUserQuestion`, web search tool, worktree isolation, MCP client (with
-   ruling), effort/thinking, `--debug`.
+   ruling), effort/thinking.
 4. **Wave 4 — extensibility and install.** skills, http/agent hook types,
    `--bare`, command `!cmd`/`@file`, memory imports and rules dirs,
    NotebookEdit, OS sandbox profiles, per-turn checkpoints + transcript rewind,

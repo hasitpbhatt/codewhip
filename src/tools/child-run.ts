@@ -44,6 +44,7 @@ export function runChild(
     retryWait: ctx.retryWait,
     roots: ctx.roots,
     parentRunId: ctx.parentRunId,
+    debug: ctx.debug,
     deadlineMs: child.deadlineMs,
     ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
   });
