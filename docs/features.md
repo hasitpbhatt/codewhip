@@ -408,6 +408,65 @@ file and read as a timeline. The file is created on the first line, which means
 a run that refuses to start (a model that was never enabled, say) leaves no
 empty log behind.
 
+## What this session has already spent
+
+Every run prints its own receipt. Until now the session kept none of them: mid
+conversation, "how full is my context" and "what has this cost me" had no
+answer. Three REPL verbs answer them from one ledger, folded once per run:
+
+```
+.context — est. tokens (chars/4; the same measure compaction budgets with), provider nvidia:moonshotai/kimi-k3
+  system prompt   1,840    3.1%
+  tool specs      2,610    4.3%
+  history            75    0.1%
+    · user       23
+    · assistant  36
+    · tool       18
+    · tool calls 1 (asked for by 1 assistant turn)
+  used            4,525    7.5%
+  free            55,475   92.5%
+  ceiling 60,000 is the compaction limit
+.usage — 2 runs this session
+  kilo:cohere/north-mini-code:free       3,100 prompt +      240 completion  (est.)
+  nvidia:moonshotai/kimi-k3              5,200 prompt +      410 completion
+  total: 8,300 prompt + 650 completion = 8,950 tokens
+  est. = the provider sent no usage block, so these are chars/4, not meter readings
+.cost — 2 runs this session: $0.0000
+  $0.0000 (:free model) · $0.0000 (nvidia free tier)
+```
+
+That block is the renderers' own output (`src/session-ledger.ts`), captured by
+feeding them a scripted transcript and two usage rows — the numbers are the
+real function of that input, not a live model run. `/context`, `/usage` and
+`/cost` work too, and none of the three takes an argument.
+
+- **The grid reads the loop's report, not a fresh guess.** `agentLoop` returns
+  the size of the system prompt and tool specs it actually sent and the
+  compaction ceiling it used, so the two fixed costs above are what the next
+  turn will pay again. Recomputing them from the transcript would produce a
+  second, slightly different model of the prompt and hide the difference.
+- **`history` is measured the way compaction measures it** — chars/4 over the
+  whole list — so the grid and the compactor cannot disagree about when the
+  transcript is due to be pruned. The per-role figures under it are breakdowns
+  and each rounds on its own. Over the ceiling, the grid says so and `free`
+  clamps at zero rather than going negative.
+- **`.cost` refuses to add up what it cannot price.** One route with no price
+  row and there is no session total:
+
+  ```
+  .cost: no session total — acme:acme-1 has no price row
+    acme:acme-1: cost untracked (see provider console)
+  ```
+
+  `$0.00` is printed only for routes actually priced at zero, with the reason
+  (`nvidia free tier`, `:free model`, `local runtime — your own machine`). This
+  is the same rule `--max-budget-usd` and the polish gate follow, so the
+  read-out cannot quietly disagree with the flag that stops a run.
+- **Nothing is written.** The ledger lives in memory with the transcript and
+  lands in the session file on `.exit`, so asking about cost does not create
+  files. It also costs nothing to answer: no prompt token is spent, which is
+  why enabling these three changes no receipt.
+
 ## TUI
 
 `codewhip run --tui` opts into the terminal UI. The rich renderer needs the

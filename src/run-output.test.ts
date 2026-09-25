@@ -56,6 +56,7 @@ function loopResult(over: Partial<LoopResult> = {}): LoopResult {
     checkpoints: 1,
     compact: { events: 0, truncated: 0, dropped: 0 },
     repeatCalls: 0,
+    contextShape: { system: 900, tools: 700, ceiling: 60000 },
     messages: [],
     ...over,
   };
