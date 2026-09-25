@@ -37,7 +37,7 @@ import { NOOP_DEBUG, openDebug, rejectDebugPath } from "./debug.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
-import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
+import { BUILTIN_AGENTS, CHILD_MAX_STEPS_CAP, listAgentsWithErrors, mainThreadTurn, parseAgentsJson, type AgentDef } from "./subagents.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { loadHooks } from "./hooks.js";
 import { removeRule } from "./remember-store.js";
@@ -109,6 +109,20 @@ type RunOptions = {
   appendSystemPromptFile?: string;
   /** `--exclude-dynamic-system-prompt-sections`: drop the agent roster. */
   excludeDynamicSections: boolean;
+  /**
+   * `--agents <json>`: a roster for THIS run, parsed at argument time so a
+   * refused field stops the run before it spends a token. It outranks
+   * `.codewhip/agents/*.md`, which outranks the built-ins — the most specific
+   * voice about one name wins, and a name still means exactly one agent.
+   */
+  agents?: AgentDef[];
+  /**
+   * `--agent <name>`: run the main loop AS that roster entry. Its prompt is
+   * appended to the system prompt (never a replacement for the harness base —
+   * see `mainThreadTurn`), its refusals join the run's, and its model can
+   * outrank a routed default.
+   */
+  agent?: string;
   /**
    * `--json-schema`: the schema text, validated at parse time. The parsed
    * schema is what reaches the loop — `src/structured.ts` enforces a
@@ -214,6 +228,8 @@ function printRunOptions(): void {
   console.log(`  --add-dir <dir>  widen the file jail to another directory (repeatable, max ${MAX_ROOTS}; also permissions.additionalDirectories in settings.json). Containment only: secret files and .codewhip/ state stay refused inside it`);
   console.log(`  --append-system-prompt <text>  your own last line of the system prompt (<=${APPEND_MAX_CHARS} chars, re-pays every turn); --append-system-prompt-file <path> reads it from a file`);
   console.log("  --exclude-dynamic-system-prompt-sections   drop the per-run delegable-agent roster from the system prompt (refusal notes are never dropped)");
+  console.log(`  --agents '<json>'  add subagents for this run: {"<name>": {"description": …, "prompt": …, "model": …, "maxTurns": 1..${CHILD_MAX_STEPS_CAP}, "tools": […], "disallowedTools": […]}}. Same rules as .codewhip/agents/<name>.md (tools narrows over read/search only, a field this harness cannot honour is refused BY NAME) and it outranks the files; a bad entry stops the run before a token is spent`);
+  console.log("  --agent <name>     run the MAIN loop as that roster entry: its prompt joins the appended tail of the system prompt (it never replaces the harness base, which is what states which calls get refused), its refusals join the run's above the ladder, and its model outranks a routed default but not an explicit --model. Its maxTurns stays a child's budget — the main thread's is --max-steps");
   console.log(`  --json-schema <json> | --json-schema-file <path>  the answer must be one JSON document satisfying this schema — a miss costs ${MAX_REPAIRS} repair round, then the run fails rather than return an unvalidated document. Enforces a documented subset (type, properties, required, additionalProperties, items, enum, const, min/maxLength, pattern, min/max(Exclusive)imum, min/maxItems) and refuses a schema naming anything else, so a gate that cannot fire never looks armed. Conflicts with --plan`);
   console.log("  --share              write a redacted share bundle (.codewhip/share-<runId>.json) after the run");
   console.log("  --print              with --share: also print a pasteable Markdown receipt block (audit-anchored) to stdout");
@@ -329,7 +345,8 @@ function printCommandHelp(topic: string): boolean {
       return true;
     case "agents":
       console.log("codewhip agents — list the delegable read-only subagents (built-ins + .codewhip/agents/*.md) with validation errors surfaced.");
-      console.log("  Custom agent file: .codewhip/agents/<name>.md — frontmatter description (required), model, max_steps; body = system prompt.");
+      console.log("  Custom agent file: .codewhip/agents/<name>.md — frontmatter description (required), model, max_steps, tools (narrow to read/search), disallowedTools; body = system prompt.");
+      console.log('  Same roster on the command line: codewhip run --agents \'{"<name>":{"description":…,"prompt":…}}\' — outranks the files, and --agent <name> runs the main loop as that entry (see: codewhip help run).');
       return true;
     case "remember":
       console.log('codewhip remember list               — grants the agent auto-runs, with what each covers');
@@ -489,6 +506,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let jsonSchema: string | undefined;
   let jsonSchemaFile: string | undefined;
   let excludeDynamicSections = false;
+  let agentsArg: AgentDef[] | undefined;
+  let agentName: string | undefined;
   let share = false;
   let sharePrint = false;
   let noStream = false;
@@ -638,6 +657,22 @@ function parseRunArgs(args: string[]): RunOptions | null {
       if (!v.ok) return fail(v.error);
       i = v.next;
       appendSystemPromptFile = v.value;
+    } else if (a === "--agents" || a.startsWith("--agents=")) {
+      const v = takeValue(a, args, i, "--agents needs a JSON object of {\"<name>\": { … }} entries");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      // Refused at the flag, not at first use: an entry that quietly drops out
+      // of the roster comes back later as `unknown agent "…"`, which is a
+      // completely different sentence from the one that explains it.
+      const parsed = parseAgentsJson(v.value);
+      if (parsed.errors.length > 0) return fail(parsed.errors.join("; "));
+      agentsArg = parsed.agents;
+    } else if (a === "--agent" || a.startsWith("--agent=")) {
+      const v = takeValue(a, args, i, "--agent needs an agent name");
+      if (!v.ok) return fail(v.error);
+      i = v.next;
+      if (agentName !== undefined) return fail(`--agent given twice (${agentName}, then ${v.value}) — one run is one agent`);
+      agentName = v.value;
     } else if (a === "--exclude-dynamic-system-prompt-sections") {
       excludeDynamicSections = true;
     } else if (a === "--json-schema" || a.startsWith("--json-schema=")) {
@@ -766,6 +801,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
     models: modelsArg ?? [],
     provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, debug, debugFile, failover, free, autoFailover, plan, share, sharePrint,
     allowedTools, disallowedTools, excludeDynamicSections,
+    ...(agentsArg === undefined ? {} : { agents: agentsArg }),
+    ...(agentName === undefined ? {} : { agent: agentName }),
     addDirs,
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt }),
@@ -1101,6 +1138,41 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     opts = { ...opts, prompt: first.value.text };
     say(`!! --input-format stream-json armed: stdin is NDJSON user messages (max ${MAX_MESSAGES}) — every turn emits its own result line, and a follow-up is picked up at the next turn boundary, never inside a step already running`);
   }
+  // `--agent <name>`: this run acts as that roster entry. Resolved before
+  // routing, because a model the entry pins has to reach the provider config
+  // and not only the loop — and an unknown name is refused before a token is
+  // spent, exactly like a mistyped --add-dir or an unreadable schema file.
+  let agentPersona = "";
+  if (opts.agent !== undefined) {
+    const roster = listAgentsWithErrors(process.cwd(), opts.agents ?? []);
+    for (const e of roster.errors) say(`!! agents: ${e}`);
+    const def = roster.agents.find((a) => a.name === opts.agent);
+    if (def === undefined) {
+      console.error(`codewhip: --agent "${opts.agent}" is not on the roster (${roster.agents.map((a) => a.name).join(", ")})`);
+      process.exitCode = 1;
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
+    const wantedFilters = opts.disallowedTools.length;
+    const turn = mainThreadTurn(def, {
+      model: opts.model,
+      modelExplicit: opts.modelExplicit,
+      disallowedTools: opts.disallowedTools,
+    });
+    agentPersona = turn.append;
+    opts = {
+      ...opts,
+      model: turn.model,
+      ...(turn.rotationOff ? { modelExplicit: true, models: [] } : {}),
+      disallowedTools: turn.disallowedTools,
+    };
+    const added = turn.disallowedTools.length - wantedFilters;
+    say(
+      `!! --agent ${def.name}: its ${def.systemPrompt.length}-char prompt joins the system prompt and re-pays every turn` +
+        `${turn.rotationOff ? `; model pinned to ${turn.model} (rotation off — candidates belong to the routed family)` : ""}` +
+        `${added > 0 ? `; ${added} refusal(s) added above the ladder` : ""}`
+    );
+  }
   const routed = resolveRoute({
     prompt: opts.prompt,
     taskClass: opts.taskClass,
@@ -1307,8 +1379,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     const text = fs.readFileSync(appendPath, "utf8");
     runAppend = runAppend.length > 0 ? `${runAppend}\n${text}` : text;
   }
+  if (agentPersona.length > 0) {
+    // The persona goes LAST in the appended tail: `composeSystemPrompt` puts
+    // the human's words after the harness base and the roster, and this is the
+    // most specific thing the human said about this run.
+    runAppend = runAppend.length > 0 ? `${runAppend}\n${agentPersona}` : agentPersona;
+  }
   if (runAppend.length > APPEND_MAX_CHARS) {
-    console.error(`codewhip: --append-system-prompt and -file together are ${runAppend.length} chars, over the ${APPEND_MAX_CHARS} cap (it re-pays on every turn)`);
+    console.error(`codewhip: the run's appended system prompt is ${runAppend.length} chars, over the ${APPEND_MAX_CHARS} cap (--append-system-prompt, -file and --agent share one budget, and it re-pays on every turn)`);
     process.exitCode = 1;
     printStubReceipt(opts.model, opts.provider);
     return;
@@ -1533,6 +1611,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       ...(structuredSchema === undefined ? {} : { structuredSchema }),
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
+      ...(opts.agents === undefined ? {} : { agents: opts.agents }),
       ...(runAppend.length > 0 ? { appendSystemPrompt: runAppend } : {}),
       excludeDynamicSections: opts.excludeDynamicSections,
       retryWait: opts.retryWait,
