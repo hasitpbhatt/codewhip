@@ -525,6 +525,32 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   let hooksFired = 0;
   let hooksDenied = 0;
   let hooksWarned = 0;
+  /**
+   * One call shape for every lifecycle seam (session start/end, prompt submit,
+   * compaction, subagent start/stop). The counter updates and the event line
+   * live here so a new seam cannot forget to report itself; whether the
+   * verdict can STOP anything is decided by `hookPolicy` inside hooks.ts, not
+   * by the call site.
+   */
+  const fireLifecycle = async (
+    event: "SessionStart" | "SessionEnd" | "UserPromptSubmit" | "PreCompact" | "PostCompact" | "SubagentStart" | "SubagentStop" | "StopFailure",
+    payload: { tool?: string; text?: string; error?: string },
+  ): Promise<{ stop: string | null; context: string; systemMessage: string }> => {
+    if (hookDefs.length === 0) return { stop: null, context: "", systemMessage: "" };
+    const hr = await runHooksFor(hookDefs, event, payload.tool ?? "", {
+      event, tool: payload.tool ?? "", seq, runId, cwd: args.cwd,
+      ...(payload.text === undefined ? {} : { text: redactSecrets(payload.text).slice(0, 2000) }),
+      ...(payload.error === undefined ? {} : { error: redactSecrets(payload.error) }),
+    }, args.hookDeps);
+    hooksFired += hr.fired;
+    if (hr.systemMessage.length > 0) emit("hook", `message: ${hr.systemMessage}`);
+    if (hr.status !== "pass") {
+      if (hr.status === "deny") hooksDenied += 1;
+      else hooksWarned += 1;
+      emit("hook", `${event}${hr.status === "deny" ? " denied" : ""}: ${hr.reason}`);
+    }
+    return { stop: hr.stop, context: hr.context, systemMessage: hr.systemMessage };
+  };
 
   let current = { label: args.label, model: args.model, port: args.port };
   const buckets = new Map<string, UsageBucket>();
@@ -598,7 +624,29 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     }
   };
 
-  for (let step = 1; step <= args.maxSteps; step++) {
+  // SessionStart + UserPromptSubmit fire ONCE, before the first provider turn.
+  // They are the only lifecycle seams allowed to stop the run (hookPolicy), and
+  // a stop here is honoured by skipping the loop entirely — no turn is spent,
+  // so the receipt is honest at zero. Their additionalContext joins the user
+  // prompt, the same place a slash command's expansion lands.
+  if (hookDefs.length > 0) {
+    const start = await fireLifecycle("SessionStart", {});
+    const submit = await fireLifecycle("UserPromptSubmit", { text: args.prompt });
+    const preTurnContext = [start.context, submit.context].filter((c) => c.length > 0).join("\n\n");
+    if (preTurnContext.length > 0) {
+      const last = messages[messages.length - 1];
+      if (last !== undefined && last.role === "user") {
+        last.content = `${last.content}\n\n${preTurnContext}`;
+      }
+    }
+    const stop = start.stop ?? submit.stop;
+    if (stop !== null) {
+      hookStop = stop;
+      stopReason = "hook";
+    }
+  }
+
+  for (let step = 1; step <= args.maxSteps && hookStop === null; step++) {
     if (args.signal?.aborted === true) {
       cancelled = true;
       stopReason = "cancelled";
@@ -622,6 +670,14 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (est > compactLimit) {
         const c = compactTranscript(messages, compactLimit);
         if (c.truncated > 0 || c.dropped > 0) {
+          // PreCompact is observe-only by policy: a hook may watch (or log)
+          // that the harness is about to shrink the transcript, but cannot veto
+          // it — undoing compaction would let a hook grow the very context the
+          // ceiling exists to bound. PostCompact sees the settled numbers.
+          // Awaited (not fired-and-forget): a hook process that outlives the
+          // run is an orphan, and the fired/denied counters must be settled
+          // before the outcome record is written.
+          await fireLifecycle("PreCompact", { text: `est ${est} > ${compactLimit}` });
           messages.splice(0, messages.length, ...c.messages);
           compactEvents += 1;
           compactTruncated += c.truncated;
@@ -631,6 +687,9 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             `compacted: ${c.truncated} old tool output(s) truncated, ${c.dropped} exchange(s) elided (est. ${c.tokensBefore} → ${c.tokensAfter} tokens)`
           );
           dbg(`compaction fired at est=${est} > ${compactLimit}: ${c.tokensBefore} → ${c.tokensAfter} est tokens, ${messages.length} messages kept`);
+          await fireLifecycle("PostCompact", {
+            text: `compacted: ${c.truncated} truncated, ${c.dropped} elided (est ${c.tokensBefore} → ${c.tokensAfter} tokens)`,
+          });
         } else {
           dbg(`est ${est} > ${compactLimit} but nothing was prunable (system + protected tail only)`);
         }
@@ -1338,6 +1397,15 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // when the exec itself crashes. Saved only on a successful exec, so
       // failed calls leave no checkpoint trail. Self-protected paths return
       // null and are never snapshotted.
+      // SubagentStart/SubagentStop bracket a delegate call. Observe-only by
+      // policy (hookPolicy): the child's transcript is the parent's to write,
+      // so a hook watches that a child was launched and what it returned, but
+      // cannot inject into the child or veto it — that authority already
+      // belongs to the PreToolUse hook that gated this very call.
+      const isDelegate = def.name === "delegate" || def.name === "delegate_many";
+      if (isDelegate && hookDefs.length > 0) {
+        await fireLifecycle("SubagentStart", { tool: def.name });
+      }
       const beforeImage =
         def.name === "edit" || def.name === "write" ? captureBefore(args.cwd, parsed, args.roots) : null;
       const execStart = Date.now();
@@ -1384,6 +1452,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // must cover exactly the stored/served bytes.
       const redacted = redactSecrets(result.output);
       const scrubbed = redacted !== result.output;
+      if (isDelegate && hookDefs.length > 0) {
+        // SubagentStop sees the child's report AFTER redaction, so a hook can
+        // never read a secret the model will not.
+        await fireLifecycle("SubagentStop", { tool: def.name, text: redacted.slice(0, 2000) });
+      }
       if (result.ok && (def.name === "edit" || def.name === "write" || def.name === "bash")) {
         // The tree may have moved: every memoized read/search is now
         // potentially stale. bash is the common mutation path (npm, git,
@@ -1466,6 +1539,24 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       hooksWarned += 1;
       emit("hook", `Stop: ${hr.reason}`);
     }
+  }
+  // StopFailure then SessionEnd, both observe-only (hookPolicy: the run is
+  // over). StopFailure fires ONLY on an error/abort — the distinct signal a
+  // CI job tails — and SessionEnd always fires last, carrying the final text
+  // and stop reason. They are additive names over the same settled state the
+  // Stop hook already sees; no new verdict power reaches them.
+  if (hookDefs.length > 0) {
+    const failed = stopReason === "error" || stopReason === "cancelled";
+    if (failed) {
+      await fireLifecycle("StopFailure", {
+        text,
+        ...(error === undefined ? {} : { error }),
+      });
+    }
+    await fireLifecycle("SessionEnd", {
+      text,
+      ...(error === undefined ? {} : { error }),
+    });
   }
 
   dbg(

@@ -159,9 +159,9 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
 | `PreToolUse` / `PostToolUse` / `Stop` | HAVE | `src/hooks.ts` |
-| `SessionStart`, `Setup`, `UserPromptSubmit`, `Notification`, `PreCompact`/`PostCompact`, `SubagentStart`/`Stop`, `TaskCreated`/`Completed`, `PermissionRequest`/`Denied`, `SessionEnd`, `FileChanged`, `ConfigChange`, `CwdChanged`, `WorktreeCreate`/`Remove`, `InstructionsLoaded`, `Elicitation`, `MessageDisplay`, `StopFailure`, `TeammateIdle`, `PostToolBatch`, `UserPromptExpansion` — 30 more events | **GAP-3** | 3 of 33 exist |
+| Lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreCompact`/`PostCompact`, `SubagentStart`/`Stop`, `SessionEnd`, `StopFailure` | **PARTIAL** | 8 added to the original 3 = **11 of 33 exist**, dispatched by one `hookPolicy` table (`src/hooks.ts:103`) that decides per seam whether a hook may stop the run and whether `additionalContext` has a turn to land in. Fired at `src/loop.ts:535` (`fireLifecycle`) — SessionStart/UserPromptSubmit before the first turn (`:627`), Pre/PostCompact around compaction (`:680`, `:690`), SubagentStart/Stop around a delegate call (`:1405`, `:1455`), StopFailure+SessionEnd on exit (`:1534`). **Named delta — 22 events still absent:** `Setup`, `Notification`, `TaskCreated`/`Completed`, `PermissionRequest`/`Denied`, `FileChanged`, `ConfigChange`, `CwdChanged`, `WorktreeCreate`/`Remove`, `InstructionsLoaded`, `Elicitation`, `MessageDisplay`, `TeammateIdle`, `PostToolBatch`, `UserPromptExpansion` |
 | `matcher` regex + `if` permission-rule syntax | PARTIAL | `match` is a bare tool name |
-| `additionalContext`, `updatedInput`, `systemMessage`, `continue`, `async`, `once`, `statusMessage`, `asyncRewake` | **PARTIAL** | Four ship: `additionalContext` joins the tool result the model reads next (`src/loop.ts:1203` → `:1279`, and `:1311` after exec; capped at 8 000 by `src/hooks.ts:79`), `systemMessage` reaches the human and never a provider (`src/loop.ts:1202`), `continue:false` stops the run (`src/loop.ts:1209` → `StopReason` `"hook"` at `:265`, `src/run-output.ts:158`), and all three are redacted at the same seam that covers a deny reason (`src/hooks.ts:322`). Two are refused BY RULING: `updatedInput` and a non-`deny` `permissionDecision` — PreToolUse fires after the ladder graded the call, so a hook that rewrote its arguments or granted it would run something nobody approved (`src/hooks.ts:224`, `:259`, `:262`). Four are absent: `async`, `once`, `statusMessage`, `asyncRewake` |
+| `additionalContext`, `updatedInput`, `systemMessage`, `continue`, `async`, `once`, `statusMessage`, `asyncRewake` | **PARTIAL** | Four ship: `additionalContext` joins the tool result the model reads next (`src/loop.ts:1386` → `:1476`, and `:1510` after exec; capped at 8 000 by `src/hooks.ts:155`), `systemMessage` reaches the human and never a provider (`src/loop.ts:1385`), `continue:false` stops the run (`src/loop.ts:1387` → `StopReason` `"hook"` at `:265`, `src/run-output.ts:158`), and all three are redacted at the same seam that covers a deny reason (`src/hooks.ts:428`–`:432`). Two are refused BY RULING: `updatedInput` and a non-`deny` `permissionDecision` — PreToolUse fires after the ladder graded the call, so a hook that rewrote its arguments or granted it would run something nobody approved (`src/hooks.ts:314`, `:349`, `:352`). Four are absent: `async`, `once`, `statusMessage`, `asyncRewake`. What a hook may ask for is now decided per **event** by `hookPolicy`, not by which field it happened to print |
 | `type: http \| mcp_tool \| prompt \| agent` | **GAP-4** | `command` only |
 | Hooks on the audit chain | **HAVE-plus** | `deny:hook:pretool` |
 
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 44**, **PARTIAL 19**, **GAP 39**,
-i.e. **43.1%** at parity or better. Remaining GAP rows by wave: 3 → 17, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 44**, **PARTIAL 20**, **GAP 38**,
+i.e. **43.1%** at parity or better. Remaining GAP rows by wave: 3 → 16, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -770,6 +770,42 @@ Five rulings:
   first cut is the price of not refactoring every denial, hook and approval
   branch; the seam is one eligibility scan, so widening it later is additive.
 
+Wave 3h (hook lifecycle events) moved 1 row from GAP to PARTIAL: the hook event
+surface went 3 → 11 of 33. HAVE-or-better unchanged at 44, PARTIAL 19 → 20,
+**GAP 39 → 38, wave 3 17 → 16**. Scored PARTIAL and not HAVE because the 22
+remaining events are named, not pretended. 6 new tests in
+`src/loop-hooks.test.ts`. Five rulings:
+
+- **What a hook may ASK FOR is a property of the EVENT, not of the field.** One
+  `hookPolicy` table (`src/hooks.ts:103`) answers, per seam, whether a verdict
+  can stop the run and whether `additionalContext` has a model turn to land in.
+  It replaced "whatever the call site happened to honour", so `PreCompact` and
+  `SubagentStart` refuse `continue:false` and injected context BY RULE rather
+  than by accident of where they were called.
+- **Only a pre-turn seam may stop a run — exactly three do.** `PreToolUse`,
+  `SessionStart`, `UserPromptSubmit`, asserted in a test rather than a comment.
+  Everything else describes work already spent: a `PostCompact` hook cannot
+  un-compact, a `SubagentStop` cannot retroactively un-delegate, a `SessionEnd`
+  has no turn left. The withheld stop is said OUT LOUD
+  (`src/hooks.ts:394`–`:399`) — a hook author who typed `continue:false` learns
+  the rule instead of watching it silently do nothing.
+- **A lifecycle event has no tool, so a tool name in its `match` is refused.**
+  `SubagentStart` with `match:"bash"` is a load error naming the reason, not a
+  config that silently never fires. `Stop` keeps its match-agnostic *dispatch*
+  (it always has) but still *validates* strictly, so a typo is still reported —
+  the two concerns are separated on purpose (`src/hooks.ts:172`).
+- **A lifecycle stop costs nothing.** `SessionStart`'s veto skips the turn loop
+  entirely (`src/loop.ts:649`), so the receipt shows zero tokens; a run refused
+  by policy before it starts must not look like a run that spent money. A test
+  asserts the provider was never called at all.
+- **Every seam is awaited; none fire-and-forget.** Backgrounding `PreCompact` was
+  tempting since its outcome cannot change what compaction does — but an
+  un-awaited hook process outliving the run is an orphan, and the fired/denied
+  counters must settle before the outcome record is written
+  (`src/hooks.ts:428`). Lifecycle events also inherit redaction:
+  `SubagentStop` sees the child's report only after the same `redactSecrets`
+  pass the model does, so a hook can never read a secret the model will not.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -822,6 +858,11 @@ count is the instrument, not the memory of it.
    fallback the moment one call cannot be proven safe — GAP 41 → 40, wave 3
    19 → 18 at the start of this line; the hooks-output row above then took it to
    40 → 39 / 18 → 17.
+   Hook lifecycle events **advanced GAP → PARTIAL 2026-09-25** (8 seams added —
+   `SessionStart`/`UserPromptSubmit` before the first turn, `PreCompact`/
+   `PostCompact` around compaction, `SubagentStart`/`SubagentStop` around
+   delegation, `StopFailure`/`SessionEnd` on exit; 3 → 11 of 33, with what a hook
+   may ask for decided per EVENT by `hookPolicy`) — GAP 39 → 38, wave 3 17 → 16.
    Remaining: vision
    input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus

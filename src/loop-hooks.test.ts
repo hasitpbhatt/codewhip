@@ -282,10 +282,151 @@ describe("hooks seams (loop)", () => {
       ok(toolMsg?.content.includes("ci says: flaky"), toolMsg?.content ?? "");
       ok(events.some((e) => e.kind === "hook" && e.text === "message: for the human only"), JSON.stringify(events));
       // Stop's context cannot reach a model that no longer exists — and says so.
-      ok(events.some((e) => e.text.includes("no model turn remains")), JSON.stringify(events));
+      // The refusal wording now comes from hookPolicy (centralized) rather than
+      // the Stop call site, so it names the same thing: no turn remains.
+      ok(events.some((e) => e.text.includes("no model turn remaining")), JSON.stringify(events));
       const wire = JSON.stringify(messagesSeen);
       ok(!wire.includes("for the human only"), "a systemMessage was sent to a provider");
       ok(!wire.includes("too late for this"), "Stop context leaked into a transcript");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("a lifecycle event cannot veto where its policy forbids: PostCompact ignores continue:false and additionalContext is refused by name", async () => {
+    const { runHooksFor } = await import("./hooks.js");
+    const spawner: HookDeps = {
+      spawnHook: () => Promise.resolve({
+        code: 0,
+        stdout: '{"hookSpecificOutput":{"additionalContext":"sneak in"},"continue":false,"stopReason":"halt"}',
+        stderr: "", timedOut: false,
+      }),
+    };
+    const r = await runHooksFor([{ event: "PostCompact", match: "*", command: "c" }], "PostCompact", "",
+      { event: "PostCompact", tool: "", seq: 0, runId: "r1", cwd: "/c" }, spawner);
+    // Observe-only seam: neither the stop nor the context is honoured, and both
+    // refusals are said out loud rather than dropped.
+    strictEqual(r.stop, null);
+    strictEqual(r.context, "");
+    ok(r.reason.includes("compaction is the harness's own transcript edit"), r.reason);
+    ok(r.reason.includes("continue: false"), r.reason);
+  });
+
+  it("hookPolicy is exhaustive over the 11 events and gates stops/context per seam", async () => {
+    const { hookPolicy } = await import("./hooks.js");
+    const events = ["PreToolUse", "PostToolUse", "Stop", "SessionStart", "UserPromptSubmit",
+      "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "SessionEnd", "StopFailure"] as const;
+    // Only pre-turn seams may stop a run.
+    strictEqual(JSON.stringify(events.filter((e) => hookPolicy(e).stops)), JSON.stringify(["PreToolUse", "SessionStart", "UserPromptSubmit"]));
+    // Context is honoured only where a model turn genuinely follows, and every
+    // refusal carries its reason.
+    for (const e of events) {
+      const p = hookPolicy(e);
+      if (p.context === "none") ok(p.contextRefusal.length > 0, `${e} must explain its refusal`);
+    }
+  });
+
+  it("a tool name is refused as a match on a lifecycle event (only '*' is meaningful)", async () => {
+    const { loadHooks } = await import("./hooks.js");
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-hooks-lc-"));
+    fs.mkdirSync(path.join(cwd, ".codewhip"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codewhip", "hooks.json"), JSON.stringify([
+      { event: "SessionEnd", match: "*", command: "ok" },
+      { event: "SubagentStart", match: "bash", command: "nope" },
+    ]));
+    try {
+      const r = loadHooks(cwd);
+      strictEqual(r.defs.length, 1);
+      strictEqual(r.defs[0]?.event, "SessionEnd");
+      ok(r.errors.some((e) => e.includes("SubagentStart") && e.includes('match must be "*"')), r.errors.join(" | "));
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("SessionStart continue:false stops BEFORE any provider call; SessionEnd still fires on the exit", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-lifecycle-"));
+    try {
+      const seen: { event: string }[] = [];
+      const { port, record } = makeFakePort([textTurn("must never run")]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: {
+          defs: [
+            { event: "SessionStart", match: "*", command: "s" },
+            { event: "SessionEnd", match: "*", command: "e" },
+          ],
+          errors: [],
+        },
+        hookDeps: {
+          spawnHook: (_c, _stdin, env) => {
+            const event = env["CODEWHIP_EVENT"] ?? "";
+            seen.push({ event });
+            const stop = event === "SessionStart" ? '{"continue":false,"stopReason":"policy gate"}' : "";
+            return Promise.resolve({ code: 0, stdout: stop, stderr: "", timedOut: false });
+          },
+        },
+      });
+      // The stop was honoured before the first turn: no provider call, no text.
+      strictEqual(record.length, 0, "a SessionStart stop must not spend a provider turn");
+      strictEqual(r.stopReason, "hook");
+      ok(seen.some((s) => s.event === "SessionStart"), JSON.stringify(seen));
+      ok(seen.some((s) => s.event === "SessionEnd"), JSON.stringify(seen));
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("SessionStart additionalContext joins the user prompt the model reads", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-lcctx-"));
+    try {
+      const { port, messagesSeen } = makeFakePort([textTurn("done")]);
+      await agentLoop({
+        prompt: "fix it", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: { defs: [{ event: "SessionStart", match: "*", command: "s" }], errors: [] },
+        hookDeps: {
+          spawnHook: () => Promise.resolve({
+            code: 0,
+            stdout: '{"hookSpecificOutput":{"additionalContext":"repo convention: tabs, not spaces"}}',
+            stderr: "", timedOut: false,
+          }),
+        },
+      });
+      const wire = JSON.stringify(messagesSeen[0] ?? []);
+      ok(wire.includes("tabs, not spaces"), "SessionStart context never reached the model");
+      ok(wire.includes("fix it"), "the original prompt must survive");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("SubagentStart/SubagentStop fire around a delegate call", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-sub-"));
+    try {
+      const seen: { event: string; payload: HookPayload }[] = [];
+      const { port } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "explore", task: "look around" })),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: {
+          defs: [
+            { event: "SubagentStart", match: "*", command: "s" },
+            { event: "SubagentStop", match: "*", command: "e" },
+          ],
+          errors: [],
+        },
+        hookDeps: spawner([PASS_SPAWN], seen),
+      });
+      strictEqual(r.text, "done");
+      strictEqual(seen.filter((s) => s.event === "SubagentStart").length, 1);
+      // The child actually ran, so SubagentStop fires exactly once too.
+      strictEqual(seen.filter((s) => s.event === "SubagentStop").length, 1);
     } finally {
       fs.rmSync(runCwd, { recursive: true, force: true });
     }

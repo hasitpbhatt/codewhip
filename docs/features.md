@@ -326,14 +326,37 @@ the TUI can't submit commands mid-run (v1 limitation,
 ## Hooks: your shell at the harness seams
 
 `.codewhip/hooks.json` (and the user-level `$CODEWHIP_CONFIG_DIR/hooks.json`)
-registers shell commands on three seams — **PreToolUse** (can veto one call),
-**PostToolUse** (observe the redacted result), **Stop** (observe the run's end):
+registers shell commands on **eleven** seams. Three can act; the rest observe:
+
+| Seam | Power |
+|---|---|
+| `PreToolUse` | **can veto one call** (before it executes) |
+| `SessionStart`, `UserPromptSubmit` | **can stop the run** before the first turn — at zero token cost |
+| `PostToolUse` | observe the redacted result |
+| `PreCompact` / `PostCompact` | observe compaction before/after |
+| `SubagentStart` / `SubagentStop` | observe a delegated child launching / returning |
+| `Stop`, `SessionEnd`, `StopFailure` | observe the run's end (`StopFailure` fires only on error/cancel) |
 
 ```json
 { "hooks": [
-  { "event": "PreToolUse", "match": "bash", "command": "grep -q 'rm -rf' || exit 2" }
+  { "event": "PreToolUse", "match": "bash", "command": "grep -q 'rm -rf' || exit 2" },
+  { "event": "SessionStart", "match": "*", "command": "./scripts/check-branch" },
+  { "event": "PostToolUse", "match": "edit", "command": "npm run fmt -- --check" }
 ] }
 ```
+
+**What a hook may ask for is a property of the event, not of the field it
+prints.** An observe-only seam that prints `{"continue":false}` or an
+`additionalContext` has both **refused by name**, with the reason, rather than
+failing silently — a `PostCompact` hook cannot un-compact, and a `SessionEnd`
+hook has no model turn left to inject into. Only the three pre-turn seams above
+can stop a run. `additionalContext` is only honoured where a turn actually
+follows it (so on `PreToolUse` it joins the tool result, and on `SessionStart`/
+`UserPromptSubmit` it joins the user prompt).
+
+A lifecycle event has no tool, so its `match` must be `"*"` — naming a tool
+there is a load error that says so, not a hook that silently never fires. (`Stop`
+is the one exception: it has always fired regardless of its `match`.)
 
 Each hook gets the event payload (tool, redacted args, redacted output, runId,
 cwd) as JSON on **stdin** plus `CODEWHIP_*` env vars, and has 10 s and 64 KB of
