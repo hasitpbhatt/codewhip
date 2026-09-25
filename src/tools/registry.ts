@@ -12,6 +12,7 @@ import { delegateTool } from "./delegate.js";
 import { delegateManyTool } from "./delegate_many.js";
 import { runInBackgroundTool, taskOutputTool, taskStopTool } from "./background-tools.js";
 import { isTodoArgs, todoTool } from "./todo.js";
+import { askUserTool } from "./ask-user.js";
 
 // NOTE (principal review): AGENTS.md says "Zod-validated", but package.json
 // carries zero runtime deps. Week-1 ships static OpenAI specs + per-tool
@@ -33,7 +34,7 @@ export type ToolDef = {
 
 /**
  * A tool the CALLER supplies — the programmatic entry's `tool()` (see
- * `src/sdk.ts`). Structurally a `ToolDef` whose name is not one of the twelve
+ * `src/sdk.ts`). Structurally a `ToolDef` whose name is not one of the thirteen
  * builtins, which is why it is its own type instead of a widened `ToolDef`:
  * every builtin-only decision (policy row, remembered shape, `--allowed-tools`
  * shape grammar) can then ask `isToolName` and fail closed.
@@ -256,6 +257,7 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
     exec: (ctx, args, _signal) =>
       isTodoArgs(args) ? todoTool(ctx, args) : Promise.resolve({ ok: false, output: "todo: bad args" } as ToolResult),
   },
+  ask_user: askUserTool,
 };
 
 /**
@@ -275,9 +277,20 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
  * file's `tools:` frontmatter arrives here the same way: narrowed to a subset
  * of CHILD_TOOL_NAMES at parse time and handed down as whole-tool refusals, so
  * this one filter path serves both the operator's flag and the file's grant.
+ *
+ * `ask_user` is the one spec gated on a capability instead of a policy: with no
+ * keyboard reachable (headless `-p`, an SDK `query()`, a TUI whose bridge draws
+ * approval but not questions) the tool could only ever return its own refusal,
+ * so it is not offered. Exec still refuses without a channel — a spec list
+ * assembled elsewhere cannot make one appear.
  */
-export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[], hosts?: readonly HostToolDef[]): ToolSpec[] {
-  // A `--disallowed-tools` entry names one of the twelve (its shape grammar is
+export function toolSpecs(
+  depth = 0,
+  disallowed?: readonly ToolFilter[],
+  hosts?: readonly HostToolDef[],
+  askHuman = false
+): ToolSpec[] {
+  // A `--disallowed-tools` entry names one of the thirteen (its shape grammar is
   // path/command/origin), so it can never address a host tool — the caller of
   // `query()` drops a host tool by not passing it.
   const visible = (name: string): boolean => !isToolName(name) || !filtersToolEntirely(disallowed, name);
@@ -300,6 +313,7 @@ export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[], hosts?:
     TOOLS.task_output.spec,
     TOOLS.task_stop.spec,
     TOOLS.todo.spec,
+    ...(askHuman ? [TOOLS.ask_user.spec] : []),
     ...(hosts ?? []).map((h) => h.spec),
   ].filter((s) => visible(s.name));
 }

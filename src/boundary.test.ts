@@ -124,6 +124,7 @@ const CORE_EXPECTED = new Set([
   "src/tool-filter.ts",
   "src/verdict.ts",
   "src/wire-util.ts",
+  "src/tools/ask-user.ts",
   "src/tools/background-status.ts",
   "src/tools/background-tasks.ts",
   "src/tools/background-tools.ts",

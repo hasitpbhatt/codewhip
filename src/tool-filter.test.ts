@@ -138,8 +138,11 @@ describe("tool filter matching", () => {
     strictEqual(delegationBlind([]), false);
   });
   it("a bare disallow removes the spec; a shape-scoped one leaves it advertised", () => {
-    const names = (disallowed: ToolFilter[]): string[] => toolSpecs(0, disallowed).map((s) => s.name);
+    const names = (disallowed: ToolFilter[]): string[] => toolSpecs(0, disallowed, undefined, true).map((s) => s.name);
     strictEqual(names([]).length, TOOL_NAMES.length);
+    // ask_user is the one spec gated on a capability, not on a policy: with no
+    // human at a keyboard it could only ever return its own refusal.
+    ok(!toolSpecs(0, [], undefined, false).map((s) => s.name).includes("ask_user"));
     ok(!names([{ tool: "write", shape: null }]).includes("write"));
     ok(names([{ tool: "write", shape: "src/a.ts" }]).includes("write"));
     ok(!names([{ tool: "read", shape: null }, { tool: "search", shape: null }]).includes("read"));

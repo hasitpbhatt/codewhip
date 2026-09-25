@@ -518,6 +518,39 @@ Inside `--tui`, three commands steer the live run without restarting it:
 - `/plan` — plan mode is run-scoped, so this only reports that: re-run with
   `--plan` for a read-only run.
 
+## Asking you a question (`ask_user`)
+
+A run can stop and ask instead of guessing. `ask_user` puts one multiple-choice
+question on your terminal and returns your answer to the model as a tool result:
+
+```text
+Two ways to finish this. Which?
+  1. commit the parser only
+  2. commit parser + docs
+  3. hold off, I want to look
+(answer with one number, or type your own words) >
+```
+
+Real rendering, produced by `node -e` over `questionPrompt` in `dist/index.js`
+(2026-09-25) — the string readline prints, not a mock-up.
+
+- **A number picks the option; anything else is your own answer.** Typing `2`
+  sends `commit parser + docs`. Typing `hold off until I have read the diff`
+  sends exactly that, verbatim — the menu is a convenience, not a cage.
+  `multiSelect` questions accept `1,3`.
+- **It is not an approval.** `ask_user` is allow-class in policy
+  (`default:ask_user:allow`) because it changes nothing on disk — the edit, the
+  `rm` and the fetch that follow are still gated by the normal consent ladder.
+  Answering a question never grants a permission, and a team can still refuse
+  the question itself: its subject is the question text, so
+  `deny ask_user:Revert the branch?*` in `policy.md` holds.
+- **Only where a human is.** Headless `-p`, an SDK `query()` and a TUI run that
+  cannot draw a question never see the tool at all — the spec is not advertised,
+  so no model wastes a call on it. A subagent is refused outright
+  (`loop:child-no-prompt`): one keyboard has one owner, and the parent run holds
+  it. Ctrl-C or an interrupted prompt comes back as *no answer*, with the
+  question echoed — never as an empty yes.
+
 ## Approvals that stick ("always allow")
 
 Every `edit`/`write`/`bash`/`webfetch` call that policy asks about prompts:

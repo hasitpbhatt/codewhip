@@ -16,6 +16,7 @@ import {
   type AgentDef,
 } from "./subagents.js";
 import { toolSpecs } from "./tools/registry.js";
+import { TOOL_NAMES } from "./tools/types.js";
 import { readAuditLog, verifyChain } from "./audit.js";
 import { readOutcomeRecords } from "./outcomes.js";
 import { summarize } from "./metrics.js";
@@ -86,14 +87,18 @@ describe("subagents", () => {
     }
   });
 
-  it("toolSpecs: depth 0 sees all 12 tools; children see only read+search (no network, no delegation)", () => {
+  it("toolSpecs: depth 0 sees all 13 tools with a keyboard, 12 without; children see only read+search", () => {
     const names0 = toolSpecs(0).map((s) => s.name);
-    strictEqual(names0.length, 12);
+    strictEqual(names0.length, TOOL_NAMES.length - 1);
+    ok(!names0.includes("ask_user"), "no keyboard reachable means no question tool advertised");
+    const asked = toolSpecs(0, undefined, undefined, true).map((s) => s.name);
+    strictEqual(asked.length, TOOL_NAMES.length);
+    ok(asked.includes("ask_user"));
     ok(names0.includes("delegate") && names0.includes("delegate_many"));
-    const names1 = toolSpecs(1).map((s) => s.name);
+    const names1 = toolSpecs(1, undefined, undefined, true).map((s) => s.name);
     strictEqual(names1.length, 2);
     ok(names1.includes("read") && names1.includes("search"));
-    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch") && !names1.includes("todo"));
+    ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch") && !names1.includes("todo") && !names1.includes("ask_user"));
   });
 
   it("parseAgentFile: tools narrows what a child is offered, and narrows only", () => {
