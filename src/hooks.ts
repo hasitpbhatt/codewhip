@@ -7,8 +7,9 @@ import type { ToolName } from "./tools/types.js";
 
 /**
  * Event hooks: user-authored shell commands fired by the harness at run
- * seams (PreToolUse / PostToolUse / Stop), Claude Code's grammar. The
- * commands run OUTSIDE the bash jail BY DESIGN — this is user config, like
+ * seams, Claude Code's grammar. Three seams can act (`PreToolUse`,
+ * `SessionStart`, `UserPromptSubmit`); the other eight observe. The commands
+ * run OUTSIDE the bash jail BY DESIGN — this is user config, like
  * a shell profile, not a model request. Containment is structural: hook
  * files live only in configDir()/.codewhip (paths write.ts already refuses
  * to touch), and hooks load ONCE at run start, so a mid-run prompt
@@ -26,7 +27,19 @@ import type { ToolName } from "./tools/types.js";
  * call, so rewriting its arguments there runs something nobody approved.
  */
 
-export type HookEvent = "PreToolUse" | "PostToolUse" | "Stop";
+export type HookEvent =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "Stop"
+  | "SessionStart"
+  | "UserPromptSubmit"
+  | "PreCompact"
+  | "PostCompact"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "SessionEnd"
+  | "StopFailure";
+
 export type HookDef = { event: HookEvent; match: string; command: string };
 export type LoadedHooks = { defs: HookDef[]; errors: string[] };
 export type HookRunResult = {
@@ -68,7 +81,71 @@ const KNOWN_TOOLS: Record<ToolName, true> = {
   delegate: true, delegate_many: true, run_in_background: true, task_output: true,
   task_stop: true, todo: true, ask_user: true,
 };
-const HOOK_EVENTS: readonly string[] = ["PreToolUse", "PostToolUse", "Stop"];
+const HOOK_EVENTS: readonly HookEvent[] = [
+  "PreToolUse", "PostToolUse", "Stop",
+  "SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact",
+  "SubagentStart", "SubagentStop", "SessionEnd", "StopFailure",
+];
+
+/**
+ * What a hook is allowed to DO at each seam. One table, so the answer to
+ * "can this event stop the run / inject prompt text" is data rather than a
+ * branch re-derived at every call site.
+ *
+ * `stops` is true only where the event fires BEFORE a provider turn and a
+ * refusal is therefore still actionable. Everything else describes work that
+ * has already happened or is about to happen: a `PostCompact` hook cannot
+ * un-compact, and a `SessionEnd` hook has no turn left to stop.
+ *
+ * `context` is "prompt" only where a model turn genuinely follows. Prompt text
+ * re-pays every remaining turn of the run, so injecting it at a seam with no
+ * turn after it is prompt text nobody benefits from and the meter charges for.
+ */
+export type HookPolicy = {
+  stops: boolean;
+  context: "prompt" | "none";
+  contextRefusal: string;
+  /** Whether `match` addresses a tool name; a lifecycle event has no tool. */
+  toolScoped: boolean;
+  /**
+   * True when the event fires whatever `match` says. `Stop` has always been
+   * match-agnostic (`event === "Stop" || …` in the original filter), and that
+   * is preserved so a config written against it keeps firing. The new
+   * lifecycle events deliberately are NOT: they must use `match: "*"`, so a
+   * tool name can never masquerade as scoping a run-level seam.
+   */
+  anyMatch: boolean;
+};
+
+const TOOL_SCOPED: HookPolicy = { stops: false, context: "prompt", contextRefusal: "", toolScoped: true, anyMatch: false };
+const RUN_LEVEL: HookPolicy = { stops: false, context: "none", contextRefusal: "the run is over — there is no model turn remaining, so additionalContext is refused rather than dropped in silence", toolScoped: false, anyMatch: true };
+const LIFECYCLE: HookPolicy = { stops: false, context: "none", contextRefusal: "", toolScoped: false, anyMatch: false };
+
+export function hookPolicy(event: HookEvent): HookPolicy {
+  switch (event) {
+    case "PreToolUse":
+      return { stops: true, context: "prompt", contextRefusal: "", toolScoped: true, anyMatch: false };
+    case "PostToolUse":
+      return TOOL_SCOPED;
+    case "SessionStart":
+    case "UserPromptSubmit":
+      return { stops: true, context: "prompt", contextRefusal: "", toolScoped: false, anyMatch: false };
+    // Compaction already ran (or is about to): nothing to inject into, and a
+    // veto here would silently undo a transcript the model has to keep.
+    case "PreCompact":
+    case "PostCompact":
+      return { ...LIFECYCLE, contextRefusal: "compaction is the harness's own transcript edit — additionalContext is refused here, and a verdict cannot veto it" };
+    case "SubagentStart":
+    case "SubagentStop":
+      return { ...LIFECYCLE, contextRefusal: "a subagent's transcript is the parent's to write — additionalContext is refused at both subagent seams" };
+    // The run is over: there is no turn left to stop and nothing left to read.
+    // `Stop` keeps its match-agnostic dispatch (anyMatch) for backward compat.
+    case "Stop":
+    case "SessionEnd":
+    case "StopFailure":
+      return RUN_LEVEL;
+  }
+}
 const MAX_DEFS = 16;
 const MAX_COMMAND_CHARS = 2000;
 const HOOK_TIMEOUT_MS = 10_000;
@@ -88,19 +165,33 @@ function validDef(item: unknown, file: string, errors: string[]): HookDef | null
   const event = o["event"];
   const match = o["match"];
   const command = o["command"];
-  if (typeof event !== "string" || !HOOK_EVENTS.includes(event)) {
-    errors.push(`${file}: unknown hook event ${JSON.stringify(event) ?? "?"} (want PreToolUse|PostToolUse|Stop)`);
+  if (typeof event !== "string" || !HOOK_EVENTS.includes(event as HookEvent)) {
+    errors.push(`${file}: unknown hook event ${JSON.stringify(event) ?? "?"} (want one of ${HOOK_EVENTS.join("|")})`);
     return null;
   }
-  if (typeof match !== "string" || (match !== "*" && !(match in KNOWN_TOOLS))) {
-    errors.push(`${file}: hook match must be "*" or a tool name, got ${JSON.stringify(match) ?? "?"}`);
+  const policy = hookPolicy(event as HookEvent);
+  // Validation is separate from dispatch. Stop-family events VALIDATE their
+  // match strictly ("*" or a known tool — so a typo is still reported), but
+  // DISPATCH ignoring the tool (anyMatch) is the legacy behaviour preserved
+  // from `event === "Stop" || …`. The genuinely new run-level seams
+  // (PreCompact, SubagentStart, …) have no tool at all, so they demand "*".
+  const matchOk =
+    policy.toolScoped || policy.anyMatch
+      ? typeof match === "string" && (match === "*" || match in KNOWN_TOOLS)
+      : match === "*";
+  if (!matchOk) {
+    errors.push(
+      policy.toolScoped || policy.anyMatch
+        ? `${file}: hook match must be "*" or a tool name, got ${JSON.stringify(match) ?? "?"}`
+        : `${file}: ${event} is a lifecycle event with no tool, so its match must be "*" — got ${JSON.stringify(match) ?? "?"}`,
+    );
     return null;
   }
   if (typeof command !== "string" || command.length < 1 || command.length > MAX_COMMAND_CHARS) {
     errors.push(`${file}: hook command must be a 1..${MAX_COMMAND_CHARS} char string`);
     return null;
   }
-  return { event: event as HookEvent, match, command };
+  return { event: event as HookEvent, match: match as string, command };
 }
 
 function loadOne(file: string, errors: string[], out: HookDef[]): void {
@@ -278,7 +369,12 @@ export async function runHooksFor(
   payload: HookPayload,
   deps?: HookDeps
 ): Promise<HookRunResult> {
-  const applicable = defs.filter((d) => d.event === event && (event === "Stop" || d.match === "*" || d.match === tool));
+  const policy = hookPolicy(event);
+  const applicable = defs.filter((d) => {
+    if (d.event !== event) return false;
+    if (policy.anyMatch) return true;
+    return policy.toolScoped ? d.match === "*" || d.match === tool : d.match === "*";
+  });
   const spawner = deps?.spawnHook ?? defaultSpawnHook;
   const acc = { context: "", systemMessage: "", stop: null as string | null, notes: [] as string[] };
   const join = (a: string, b: string): string => (a.length === 0 ? b : `${a}\n${b}`);
@@ -305,12 +401,25 @@ export async function runHooksFor(
       continue;
     }
     const env = parseHookEnvelope(res.stdout);
+    // The policy is enforced HERE, at the seam, not left to the caller's
+    // good intentions: a hook that prints a field its event cannot honour is
+    // refused by name, exactly like one that tries to grant a permission.
     if (env.deny !== null) {
-      return { ...NO_OUT, status: "deny", reason: redactSecrets(env.deny), fired };
+      if (policy.stops) return { ...NO_OUT, status: "deny", reason: redactSecrets(env.deny), fired };
+      acc.notes.push(`"decision":"deny" is not honoured at ${event}: ${policy.contextRefusal.split(" — ")[0] ?? policy.contextRefusal}`);
+      continue;
     }
-    if (env.context.length > 0) acc.context = join(acc.context, env.context).slice(0, CONTEXT_CAP);
+    if (env.context.length > 0) {
+      if (policy.context === "prompt") acc.context = join(acc.context, env.context).slice(0, CONTEXT_CAP);
+      else if (!acc.notes.some((n) => n.startsWith("additionalContext"))) acc.notes.push(policy.contextRefusal);
+    }
     if (env.systemMessage.length > 0) acc.systemMessage = join(acc.systemMessage, env.systemMessage).slice(0, MESSAGE_CAP);
-    if (env.stop !== null && acc.stop === null) acc.stop = env.stop.slice(0, 500);
+    if (env.stop !== null) {
+      if (policy.stops && acc.stop === null) acc.stop = env.stop.slice(0, 500);
+      else if (!acc.notes.some((n) => n.startsWith("`continue: false`"))) {
+        acc.notes.push(`\`continue: false\` is not honoured at ${event} — a hook may withhold a call or a turn, never one that has already been spent`);
+      }
+    }
     for (const n of env.notes) if (!acc.notes.includes(n)) acc.notes.push(n);
   }
   const notes = acc.notes.join("; ");
