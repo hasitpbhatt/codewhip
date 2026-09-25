@@ -17,6 +17,7 @@ import {
   sessionDir,
 } from "./sessions.js";
 import { parseRunArgs, replSessionCommand, type ReplState } from "./index.js";
+import { EMPTY_LEDGER } from "./session-ledger.js";
 import { setWriteSink } from "./run-output.js";
 
 /**
@@ -275,6 +276,7 @@ const state = (over: Partial<ReplState> = {}): ReplState => ({
   lastRunId: null,
   sessionId: null,
   labels: { tags: [] },
+  ledger: EMPTY_LEDGER,
   ...over,
 });
 

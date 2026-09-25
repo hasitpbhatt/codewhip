@@ -40,6 +40,7 @@ import { BUILTIN_AGENTS, listAgentsWithErrors } from "./subagents.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { loadHooks } from "./hooks.js";
 import { removeRule } from "./remember-store.js";
+import { contextGrid, costLines, EMPTY_LEDGER, mergeUsage, usageLines, withShape, type Ledger } from "./session-ledger.js";
 import { isVerdict, proposeVerdict, resolveRunPrefix, setVerdict, type Verdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
 import type { ServeOptions } from "./serve.js";
@@ -925,6 +926,11 @@ type ReplState = {
   sessionId: string | null;
   /** Name/tags/lineage — what `/rename`, `/tag` and `/branch` mutate. */
   labels: SessionLabels;
+  /**
+   * Cumulative usage + the last run's context shape — what `.context`, `.usage`
+   * and `.cost` read. Folded once per run, never re-derived from the transcript.
+   */
+  ledger: Ledger;
 };
 
 async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
@@ -1573,6 +1579,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       replState.lastRunId = result.runId;
       replState.sessionId = ident.sessionId;
       replState.labels = sessionLabels;
+      replState.ledger = withShape(mergeUsage(replState.ledger, result.usageByModel), result.contextShape);
     }
     if (result.cancelled) {
       say("cancelled — partial transcript kept.");
@@ -1735,18 +1742,32 @@ function replSessionLabel(state: ReplState, id: string): string {
 const MAX_SESSION_TAGS = 8;
 
 /**
- * REPL session commands — `.rename`, `.tag`, `.branch`, `.sessions`. They mutate
- * only in-memory state; the one file write happens on `.exit`, same as the
- * transcript. Returns the lines to print, or null when this is not a session
+ * REPL session commands — `.rename`, `.tag`, `.branch`, `.sessions` (which
+ * mutate in-memory state, with the one file write deferred to `.exit` like the
+ * transcript) and `.context`, `.usage`, `.cost` (which only read the session
+ * ledger). Returns the lines to print, or null when this is not a session
  * command (so `/foo` still reaches custom commands).
  */
 function replSessionCommand(cwd: string, state: ReplState, line: string): string[] | null {
-  const m = /^(?:[/.])(rename|tag|branch|sessions)\b\s*(.*)$/u.exec(line);
+  const m = /^(?:[/.])(rename|tag|branch|sessions|context|usage|cost)\b\s*(.*)$/u.exec(line);
   if (m === null) return null;
   const verb = m[1] ?? "";
   const arg = (m[2] ?? "").trim();
   const id = state.sessionId ?? state.lastRunId;
   switch (verb) {
+    case "context": {
+      if (arg.length > 0) return [".context takes no argument"];
+      return contextGrid({
+        provider: state.provider,
+        model: state.model,
+        ...(state.ledger.shape === undefined ? {} : { shape: state.ledger.shape }),
+        history: state.history,
+      });
+    }
+    case "usage":
+      return arg.length === 0 ? usageLines(state.ledger) : [".usage takes no argument"];
+    case "cost":
+      return arg.length === 0 ? costLines(state.ledger) : [".cost takes no argument"];
     case "rename": {
       if (arg.length === 0) return [`usage: .rename <name>   (${SESSION_NAME_RULE}; -r <name> resumes it)`];
       const clean = sanitizeSessionName(arg);
@@ -1802,6 +1823,7 @@ function printReplHelp(cwd: string): void {
   console.log("codewhip repl — type a prompt to run it; .exit/.quit to leave; .help for this list.");
   console.log("  /<name> [args] expands .codewhip/commands/<name>.md ($ARGUMENTS substituted) before the run.");
   console.log("  .sessions list · .rename <name> · .tag <tag> · .branch [name] fork this transcript");
+  console.log("  .context how full the prompt is · .usage tokens this session · .cost $ this session");
   const { commands, errors } = listCommandsWithErrors(cwd);
   if (commands.length === 0) {
     console.log("  no custom commands yet — add .codewhip/commands/<name>.md (body = prompt template).");
@@ -1822,6 +1844,7 @@ function cmdRepl(defaults: Omit<RunOptions, "prompt">): void {
     lastRunId: null,
     sessionId: null,
     labels: { tags: [...defaults.sessionTags] },
+    ledger: EMPTY_LEDGER,
   };
   if (defaults.sessionName !== undefined) shared.labels.name = defaults.sessionName;
   if (defaults.continue) {

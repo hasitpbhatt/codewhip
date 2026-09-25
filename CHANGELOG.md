@@ -313,6 +313,27 @@ parse time there rather than silently doing nothing.
   path and the cap, plus one loop test asserting the sink is silent until armed.
   Cost: disk and nothing else — no prompt token is added, so every receipt is
   unchanged.
+- **`.context`, `.usage` and `.cost` in the REPL: what this session has already
+  spent.** Parity-matrix Wave 3c: the `/context`, `/usage`, `/cost` row, which
+  was PARTIAL because each run printed its own receipt and the session kept
+  nothing. Now one ledger rides the transcript: `agentLoop` reports the shape it
+  actually put on the wire — system prompt, tool specs, and the compaction
+  ceiling it used — and the REPL folds that plus the run's usage in per turn.
+  `.context` is a grid: the two fixed costs, the transcript by role, tool calls,
+  what is used and what is free, with percentages against the ceiling. `.usage`
+  totals per `provider:model` across the session; `.cost` totals dollars.
+  Honesty rules, all enforced in the renderer (`src/session-ledger.ts`): every
+  number is labelled `est. tokens (chars/4…)` because that is the measure
+  compaction budgets with, a route whose provider sent no usage block is tagged
+  `(est.)`, the ceiling is named as the compaction limit rather than the model's
+  window, and **one unpriced leg buys no total** — `.cost` names the route that
+  has no price row and points at its console instead of printing `$0.00`, the
+  same rule `--max-budget-usd` and the polish gate follow. The ledger is
+  in-memory until `.exit`, like the transcript: the three verbs write no files.
+  15 tests (`src/session-ledger.test.ts`) cover the merge arithmetic, the sticky
+  estimated flag, the immutability of the folded ledger, over-ceiling reporting
+  and both cost branches. Cost: three numbers on an existing return value — no
+  prompt token is added, so every receipt is unchanged.
 
 ### Changed
 

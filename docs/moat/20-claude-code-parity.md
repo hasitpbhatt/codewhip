@@ -96,7 +96,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `/rename`, `/tag`, `tagSession()` | HAVE | `codewhip sessions rename\|tag` (`src/index.ts:1654`) over `labelSession` (`src/sessions.ts:263`); REPL `.rename`/`.tag` at `src/index.ts:1715` |
 | `/clear [name]`, `/compact [instructions]` | PARTIAL | compaction is automatic and model-aware (`src/compact.ts`); no manual `/compact`, no instructions arg |
 | `--autocompact auto\|tokens` | ALIAS | `compactTokens: 0` to disable |
-| `/context`, `/usage`, `/cost` | PARTIAL | receipts print tokens/model/`$`; no context grid |
+| `/context`, `/usage`, `/cost` | HAVE | `.context`/`.usage`/`.cost` in the REPL (`src/index.ts:1758`/`:1767`/`:1769`, dispatched by the same matcher as the session verbs at `src/index.ts:1752`) over a session ledger folded once per run (`src/index.ts:1582`, `src/session-ledger.ts:35`); the grid's fixed costs come from the loop's own report (`src/loop.ts:1324`), not a caller's re-estimate |
 | `/export [file]`, `/copy`, `/recap` | PARTIAL | `--share` + `--print` bundle exists; no transcript export/recap |
 | `/diff` working-tree view | PARTIAL | `captureBefore` preview + TUI diff (`src/tui/view.ts:54`) |
 | `/todos`, `Ctrl+T` checklist | ALIAS | `todo` tool + `.codewhip/todos.json` |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 42**, **PARTIAL 16**, **GAP 44**,
-i.e. **41.2%** at parity or better. Remaining GAP rows by wave: 3 → 22, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 15**, **GAP 44**,
+i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 22, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -552,6 +552,41 @@ Wave 3b (the harness's own decisions on a channel) closed 1 row:
   child that cannot be trusted. The cost is disk and nothing else — no prompt
   token is added, so receipts are unchanged at `$0` delta.
 
+Wave 3c (what the session has already spent) closed 1 row that was already
+PARTIAL: `/context`, `/usage`, `/cost`. HAVE-or-better 42 → 43, PARTIAL 16 → 15,
+**GAP 44 and the wave counts unchanged** — flipping a PARTIAL row earns a point
+on the bar and does not remove a wave-3 gap, and this file's own rule is that the
+count stays arithmetic rather than flattering. 15 new tests in
+`src/session-ledger.test.ts`. Four rulings:
+
+- **The numbers are reported, not recomputed.** `agentLoop` now returns the
+  shape it actually put on the wire — system prompt, tool specs and the
+  compaction ceiling it used (`src/loop.ts:1324`) — and the REPL folds usage plus
+  that shape into one session ledger per run (`src/index.ts:1582`). A grid built
+  by a second estimate of the prompt would disagree with the run it claims to
+  describe, and the disagreement would be invisible.
+- **Every figure that is not a meter reading says so.** The grid header names its
+  own measure (`est. tokens (chars/4; the same measure compaction budgets with)`),
+  a route whose provider never sent a usage block is tagged `(est.)`, and the
+  ceiling is labelled the compaction limit rather than the model's window. A
+  context read-out is precisely the number a person trusts and then runs out of
+  room on, so the honest reading is the useful one. The `history` row is summed
+  the way `estimateTokens` sums a whole list, which is what the compactor
+  budgets against — the per-role bullets under it are breakdowns and round
+  separately.
+- **An unpriced leg buys no total.** `.cost` prints the sum only when every route
+  in it has a price row; otherwise it names the leg with none and points at its
+  console (`src/session-ledger.ts:152`). That is the same rule `--max-budget-usd`
+  and the polish gate already follow, so the session read-out cannot quietly
+  disagree with the flag that gates a run.
+- **The ledger is surface-side, and lives until `.exit`.** It renders lines for a
+  human, so it needs the price table — therefore it is classified in `SURFACE`
+  (`src/boundary.test.ts:44`), and no core module imports it: the research
+  substrate still loads without the provider table. Like the transcript, it is
+  in memory during a session and writes nothing; the three verbs are read-only by
+  construction. Cost of the feature is the three numbers riding an existing return
+  value — no prompt token is added, so receipts are unchanged at `$0` delta.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -585,7 +620,10 @@ count is the instrument, not the memory of it.
    is complete: no row is left in it.**
 3. **Wave 3 — agent capability.** task-list blockers **closed 2026-09-25**
    (`src/tools/todo-store.ts`, `src/tools/todo.ts`); `--debug`/`--debug-file`
-   **closed 2026-09-25** (`src/debug.ts`). Remaining: parallel tool
+   **closed 2026-09-25** (`src/debug.ts`); `.context`/`.usage`/`.cost` over a
+   session ledger **closed 2026-09-25** (`src/session-ledger.ts`,
+   `src/loop.ts:1324`) — a PARTIAL row, so the wave-3 GAP pile is untouched.
+   Remaining: parallel tool
    exec, vision input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, subagent frontmatter,
    `AskUserQuestion`, web search tool, worktree isolation, MCP client (with

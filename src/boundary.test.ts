@@ -37,6 +37,11 @@ const SURFACE = new Set([
   "src/models.ts",
   "src/onemin.ts",
   "src/router.ts",
+  // The REPL's own read-out: it folds the loop's receipts into session totals
+  // and renders `.context`/`.usage`/`.cost` for a human at a keyboard, which
+  // means it needs the price table. Nothing in core imports it — the substrate
+  // stays free of the provider table — so it is a mouth, not a spine.
+  "src/session-ledger.ts",
   "src/run-output.ts",
   // The inbound twin of run-output: a CLI I/O boundary, not loop substrate —
   // the loop never reads stdin, cmdRun feeds it messages.

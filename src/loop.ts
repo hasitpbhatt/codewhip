@@ -282,6 +282,14 @@ export type LoopResult = {
    * on resume); the saved copy is exactly what the last provider call saw.
    */
   messages: LoopMsg[];
+  /**
+   * What the run put on the wire before the model answered a single token:
+   * the system prompt, the advertised tool specs, and the ceiling compaction
+   * keeps the transcript under. Reported, never recomputed by the caller — a
+   * context grid assembled from a second guess at these three numbers would
+   * drift from the run it claims to describe.
+   */
+  contextShape: { system: number; tools: number; ceiling: number };
 };
 
 /**
@@ -1313,5 +1321,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     trace,
     cancelled,
     messages: [...messages],
+    contextShape: {
+      system: estimateTokens([{ role: "system", content: systemContent }]),
+      tools: estimateTokens([{ role: "system", content: JSON.stringify(specs) }]),
+      ceiling: args.compactTokens ?? DEFAULT_COMPACT_TOKENS,
+    },
   };
 }
