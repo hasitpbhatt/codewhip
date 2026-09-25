@@ -403,6 +403,50 @@ describe("hooks seams (loop)", () => {
     }
   });
 
+  it("exit 2 at SessionStart actually STOPS the run — the documented veto spelling, not just continue:false", async () => {
+    // The P1 this pins: `exit 2` returned status:"deny" with stop:null, so the
+    // loop read null, skipped the veto, and the run went on to spend tokens while
+    // the event line and outcomes.jsonl both claimed a denial.
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-exit2-"));
+    try {
+      const { port, record } = makeFakePort([textTurn("must never run")]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: { defs: [{ event: "SessionStart", match: "*", command: "gate" }], errors: [] },
+        hookDeps: { spawnHook: () => Promise.resolve({ code: 2, stdout: "", stderr: "not on main", timedOut: false }) },
+      });
+      strictEqual(record.length, 0, "an exit-2 veto must not spend a provider turn");
+      strictEqual(r.stopReason, "hook");
+      const rec = readOutcomeRecords(runCwd)[0];
+      strictEqual(rec?.hooks?.denied, 1, "a denial that was applied must be counted");
+      strictEqual(verifyChain(runCwd).valid, true);
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("exit 2 at an observe-only seam is refused by name and is NOT counted as a denial", async () => {
+    const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-exit2-obs-"));
+    try {
+      const { port } = makeFakePort([textTurn("done")]);
+      const r = await agentLoop({
+        prompt: "go", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6, yolo: true,
+        stdinIsTTY: true, port, askUser: stubAsk, remembered: [], onEvent: () => undefined,
+        hooks: { defs: [{ event: "SessionEnd", match: "*", command: "gate" }], errors: [] },
+        hookDeps: { spawnHook: () => Promise.resolve({ code: 2, stdout: "", stderr: "too late", timedOut: false }) },
+      });
+      // The run completed (SessionEnd cannot un-complete it) and the refused
+      // veto is a WARNING, not a denial — outcomes must not claim otherwise.
+      strictEqual(r.text, "done");
+      const rec = readOutcomeRecords(runCwd)[0];
+      strictEqual(rec?.hooks?.denied, 0, "an unapplied veto must not be recorded as a denial");
+      ok((rec?.hooks?.warned ?? 0) > 0, "the refused veto must surface as a warning");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
   it("SubagentStart/SubagentStop fire around a delegate call", async () => {
     const runCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-lhook-sub-"));
     try {
