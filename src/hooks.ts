@@ -104,7 +104,15 @@ const HOOK_EVENTS: readonly HookEvent[] = [
 export type HookPolicy = {
   stops: boolean;
   context: "prompt" | "none";
+  /** Why injected `additionalContext` is refused at this seam. */
   contextRefusal: string;
+  /**
+   * Why a VERDICT (`decision:"deny"` / `exit 2` / `continue:false`) cannot take
+   * effect here. Kept separate from `contextRefusal` because they are different
+   * rules: a hook author told "additionalContext is refused" learns nothing about
+   * why their veto was dropped, which is the one thing they need to know.
+   */
+  stopRefusal: string;
   /** Whether `match` addresses a tool name; a lifecycle event has no tool. */
   toolScoped: boolean;
   /**
@@ -117,27 +125,27 @@ export type HookPolicy = {
   anyMatch: boolean;
 };
 
-const TOOL_SCOPED: HookPolicy = { stops: false, context: "prompt", contextRefusal: "", toolScoped: true, anyMatch: false };
-const RUN_LEVEL: HookPolicy = { stops: false, context: "none", contextRefusal: "the run is over — there is no model turn remaining, so additionalContext is refused rather than dropped in silence", toolScoped: false, anyMatch: true };
-const LIFECYCLE: HookPolicy = { stops: false, context: "none", contextRefusal: "", toolScoped: false, anyMatch: false };
+const TOOL_SCOPED: HookPolicy = { stops: false, context: "prompt", contextRefusal: "", stopRefusal: "a veto after the call has already run has nothing to stop", toolScoped: true, anyMatch: false };
+const RUN_LEVEL: HookPolicy = { stops: false, context: "none", contextRefusal: "the run is over — there is no model turn remaining, so additionalContext is refused rather than dropped in silence", stopRefusal: "the run is already over, so a verdict has nothing left to stop", toolScoped: false, anyMatch: true };
+const LIFECYCLE: HookPolicy = { stops: false, context: "none", contextRefusal: "", stopRefusal: "", toolScoped: false, anyMatch: false };
 
 export function hookPolicy(event: HookEvent): HookPolicy {
   switch (event) {
     case "PreToolUse":
-      return { stops: true, context: "prompt", contextRefusal: "", toolScoped: true, anyMatch: false };
+      return { stops: true, context: "prompt", contextRefusal: "", stopRefusal: "", toolScoped: true, anyMatch: false };
     case "PostToolUse":
       return TOOL_SCOPED;
     case "SessionStart":
     case "UserPromptSubmit":
-      return { stops: true, context: "prompt", contextRefusal: "", toolScoped: false, anyMatch: false };
+      return { stops: true, context: "prompt", contextRefusal: "", stopRefusal: "", toolScoped: false, anyMatch: false };
     // Compaction already ran (or is about to): nothing to inject into, and a
     // veto here would silently undo a transcript the model has to keep.
     case "PreCompact":
     case "PostCompact":
-      return { ...LIFECYCLE, contextRefusal: "compaction is the harness's own transcript edit — additionalContext is refused here, and a verdict cannot veto it" };
+      return { ...LIFECYCLE, contextRefusal: "compaction is the harness's own transcript edit — additionalContext is refused here", stopRefusal: "compaction is the harness's own transcript edit — a verdict cannot veto it" };
     case "SubagentStart":
     case "SubagentStop":
-      return { ...LIFECYCLE, contextRefusal: "a subagent's transcript is the parent's to write — additionalContext is refused at both subagent seams" };
+      return { ...LIFECYCLE, contextRefusal: "a subagent's transcript is the parent's to write — additionalContext is refused at both subagent seams", stopRefusal: "this call is already past the PreToolUse hook that gated it — a second verdict here could only contradict the one that approved it" };
     // The run is over: there is no turn left to stop and nothing left to read.
     // `Stop` keeps its match-agnostic dispatch (anyMatch) for backward compat.
     case "Stop":
@@ -394,7 +402,16 @@ export async function runHooksFor(
     }
     if (res.code === 2) {
       const reason = jsonField(res.stdout, "reason") ?? (res.stderr.trim().slice(0, 500) || "denied by hook");
-      return { ...NO_OUT, status: "deny", reason: redactSecrets(reason), fired };
+      // `exit 2` is the documented assertion spelling, so it is the one a hook
+      // author is most likely to reach for, and it must behave EXACTLY like
+      // `{"decision":"deny"}`. On an observe-only seam neither may report a
+      // denial that did not happen — say the veto was dropped, and why. The
+      // caller decides what to do with an honoured deny (`status`), so this
+      // function keeps its contract: a deny carries NONE of the accumulated
+      // context or messages.
+      if (policy.stops) return { ...NO_OUT, status: "deny", reason: redactSecrets(reason), fired };
+      acc.notes.push(`exit 2 is not honoured at ${event}: ${policy.stopRefusal}`);
+      continue;
     }
     if (res.code !== 0) {
       warn = `exited ${res.code} (not an assertion) — proceeding`;
@@ -405,13 +422,16 @@ export async function runHooksFor(
     // good intentions: a hook that prints a field its event cannot honour is
     // refused by name, exactly like one that tries to grant a permission.
     if (env.deny !== null) {
+      // Same contract as `exit 2` above: an honoured deny returns status only
+      // (never the accumulated context), and an observe-only seam refuses the
+      // veto by name instead of reporting a denial that did not happen.
       if (policy.stops) return { ...NO_OUT, status: "deny", reason: redactSecrets(env.deny), fired };
-      acc.notes.push(`"decision":"deny" is not honoured at ${event}: ${policy.contextRefusal.split(" — ")[0] ?? policy.contextRefusal}`);
+      acc.notes.push(`"decision":"deny" is not honoured at ${event}: ${policy.stopRefusal}`);
       continue;
     }
     if (env.context.length > 0) {
       if (policy.context === "prompt") acc.context = join(acc.context, env.context).slice(0, CONTEXT_CAP);
-      else if (!acc.notes.some((n) => n.startsWith("additionalContext"))) acc.notes.push(policy.contextRefusal);
+      else if (!acc.notes.includes(policy.contextRefusal)) acc.notes.push(policy.contextRefusal);
     }
     if (env.systemMessage.length > 0) acc.systemMessage = join(acc.systemMessage, env.systemMessage).slice(0, MESSAGE_CAP);
     if (env.stop !== null) {

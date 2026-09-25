@@ -545,11 +545,21 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     hooksFired += hr.fired;
     if (hr.systemMessage.length > 0) emit("hook", `message: ${hr.systemMessage}`);
     if (hr.status !== "pass") {
+      // Only count a denial that was actually APPLIED. On an observe-only seam
+      // a veto is refused by policy and comes back as a warning note, so it
+      // lands here as `warned` — `hooksDenied` keeps meaning what outcomes.ts
+      // documents: "PreToolUse denials applied".
       if (hr.status === "deny") hooksDenied += 1;
       else hooksWarned += 1;
       emit("hook", `${event}${hr.status === "deny" ? " denied" : ""}: ${hr.reason}`);
     }
-    return { stop: hr.stop, context: hr.context, systemMessage: hr.systemMessage };
+    // An honoured deny arrives as `status` with `stop: null` (a deny carries
+    // none of the accumulated context), so the caller cannot act on `hr.stop`
+    // alone. Map it here: both spellings — `exit 2` and `{"decision":"deny"}`
+    // — must stop the run identically, or a CI gate written either way is a
+    // no-op that still reports a denial.
+    const stop = hr.status === "deny" ? hr.reason : hr.stop;
+    return { stop, context: hr.context, systemMessage: hr.systemMessage };
   };
 
   let current = { label: args.label, model: args.model, port: args.port };
