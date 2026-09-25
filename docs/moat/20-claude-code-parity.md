@@ -161,7 +161,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `PreToolUse` / `PostToolUse` / `Stop` | HAVE | `src/hooks.ts` |
 | `SessionStart`, `Setup`, `UserPromptSubmit`, `Notification`, `PreCompact`/`PostCompact`, `SubagentStart`/`Stop`, `TaskCreated`/`Completed`, `PermissionRequest`/`Denied`, `SessionEnd`, `FileChanged`, `ConfigChange`, `CwdChanged`, `WorktreeCreate`/`Remove`, `InstructionsLoaded`, `Elicitation`, `MessageDisplay`, `StopFailure`, `TeammateIdle`, `PostToolBatch`, `UserPromptExpansion` — 30 more events | **GAP-3** | 3 of 33 exist |
 | `matcher` regex + `if` permission-rule syntax | PARTIAL | `match` is a bare tool name |
-| `additionalContext`, `updatedInput`, `systemMessage`, `continue`, `async`, `once`, `statusMessage`, `asyncRewake` | **GAP-3** | only deny/allow decision + reason |
+| `additionalContext`, `updatedInput`, `systemMessage`, `continue`, `async`, `once`, `statusMessage`, `asyncRewake` | **PARTIAL** | Four ship: `additionalContext` joins the tool result the model reads next (`src/loop.ts:1203` → `:1279`, and `:1311` after exec; capped at 8 000 by `src/hooks.ts:79`), `systemMessage` reaches the human and never a provider (`src/loop.ts:1202`), `continue:false` stops the run (`src/loop.ts:1209` → `StopReason` `"hook"` at `:265`, `src/run-output.ts:158`), and all three are redacted at the same seam that covers a deny reason (`src/hooks.ts:322`). Two are refused BY RULING: `updatedInput` and a non-`deny` `permissionDecision` — PreToolUse fires after the ladder graded the call, so a hook that rewrote its arguments or granted it would run something nobody approved (`src/hooks.ts:224`, `:259`, `:262`). Four are absent: `async`, `once`, `statusMessage`, `asyncRewake` |
 | `type: http \| mcp_tool \| prompt \| agent` | **GAP-4** | `command` only |
 | Hooks on the audit chain | **HAVE-plus** | `deny:hook:pretool` |
 
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 18**, **GAP 41**,
-i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 19, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 19**, **GAP 40**,
+i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 18, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
