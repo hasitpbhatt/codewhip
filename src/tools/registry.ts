@@ -1,5 +1,5 @@
 import type { ToolContext, ToolName, ToolResult } from "./types.js";
-import { isToolName } from "./types.js";
+import { isToolName, CHILD_TOOL_NAMES } from "./types.js";
 import type { ToolSpec } from "../provider-port.js";
 import { filtersToolEntirely, type ToolFilter } from "../tool-filter.js";
 import { isReadArgs, readTool } from "./read.js";
@@ -271,7 +271,10 @@ export const TOOLS: Record<ToolName, ToolDef> = {  read: {
  * human filtered out is not advertised, so the model is never tempted into a
  * call the harness already refuses. Shape-scoped entries (one path, one host,
  * one command head) keep the spec advertised — the tool is in play, a slice of
- * it is not, and that slice is enforced where the call is graded.
+ * it is not, and that slice is enforced where the call is graded. An agent
+ * file's `tools:` frontmatter arrives here the same way: narrowed to a subset
+ * of CHILD_TOOL_NAMES at parse time and handed down as whole-tool refusals, so
+ * this one filter path serves both the operator's flag and the file's grant.
  */
 export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[], hosts?: readonly HostToolDef[]): ToolSpec[] {
   // A `--disallowed-tools` entry names one of the twelve (its shape grammar is
@@ -282,7 +285,7 @@ export function toolSpecs(depth = 0, disallowed?: readonly ToolFilter[], hosts?:
     // A child is read-only and effect-free, so a host tool — whose body is
     // arbitrary caller code running with the parent's authority — is not
     // offered to it. Advertising what the harness would refuse burns tokens.
-    return [TOOLS.read.spec, TOOLS.search.spec].filter((s) => visible(s.name));
+    return CHILD_TOOL_NAMES.map((n) => TOOLS[n].spec).filter((s) => visible(s.name));
   }
   return [
     TOOLS.read.spec,

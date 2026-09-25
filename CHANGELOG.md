@@ -334,6 +334,35 @@ parse time there rather than silently doing nothing.
   estimated flag, the immutability of the folded ledger, over-ceiling reporting
   and both cost branches. Cost: three numbers on an existing return value — no
   prompt token is added, so every receipt is unchanged.
+- **`tools:` and `disallowedTools:` in agent files, and the eight fields that
+  are refused by name.** Parity-matrix Wave 3d: the ten-field subagent-frontmatter
+  row, which read "not honoured". A `.codewhip/agents/<name>.md` can now say what
+  its child may touch. `tools:` **narrows and cannot widen** — a child's whole
+  authority is `read` and `search`, so `tools: bash` is a parse error rather than
+  a promise the harness breaks on the first call, and `CHILD_TOOL_NAMES`
+  (`src/tools/types.ts:37`) is the single list both the parser and the child's
+  spec builder read. `disallowedTools:` takes the same grammar as
+  `--disallowed-tools` (bare names, `webfetch(https://x.com)`, comma lists), so
+  there is still one shape language here. Both fields compile onto the one
+  refusal list the child is born with (`src/subagents.ts:298`): a narrowed child
+  is *un-advertised* through the same filter path that refuses its calls, which
+  is why `tools: read` sends one tool spec where it used to send two. That list
+  now also inherits the run's own `--disallowed-tools`
+  (`src/loop.ts:1197` → `src/tools/child-run.ts:47`) — stated exactly, this is
+  not a fixed escape: no filter a child could evade is expressible today, since
+  `read`/`search` take no shape and a child cannot reach the four shapeful tools.
+  What shipped is a child that honours the operator's refusals by construction
+  instead of by that accident. `permissionMode`, `skills`, `mcpServers`, `hooks`,
+  `memory`, `background`, `effort` and `isolation` are refused BY NAME, each with
+  the reason it cannot be honoured, and so is any unknown key — a field that
+  parses and then silently does nothing is the failure mode worth more than a
+  load error, and `codewhip agents` prints the skipped file with the line needed
+  to fix it. `parseFlatFrontmatter` accepts camelCase keys for that reason
+  (`src/frontmatter.ts:30`), and the parser is pinned directly now
+  (`src/frontmatter.test.ts`). 9 tests, including an end-to-end one: a
+  `tools: Read` child is measured at one advertised spec, and a child whose file
+  says `disallowedTools: Search` is refused inside its own run. Cost: a narrower
+  child prompt; nothing added to any system prompt, so receipts are unchanged.
 
 ### Changed
 

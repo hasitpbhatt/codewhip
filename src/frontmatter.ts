@@ -3,6 +3,11 @@
  * (.codewhip/agents/*.md, .codewhip/commands/*.md). One parser, one
  * error grammar — extracted verbatim from subagents.parseAgentFile so
  * agent-file behavior stays pinned by its existing tests.
+ *
+ * Keys are `[a-zA-Z_]+`: agent files honour Claude Code's field names, which
+ * are camelCase (`disallowedTools`), while this repo's own are snake_case
+ * (`max_steps`). Both spellings parse, and which ones mean anything is
+ * `parseAgentFile`'s business — this parser only supplies the grammar.
  */
 export function parseFlatFrontmatter(
   fileName: string,
@@ -22,7 +27,7 @@ export function parseFlatFrontmatter(
   for (const line of header) {
     const t = line.trim();
     if (t.length === 0 || t.startsWith("#")) continue;
-    const m = /^([a-z_]+)\s*:\s*(.+?)\s*$/.exec(t);
+    const m = /^([a-zA-Z_]+)\s*:\s*(.+?)\s*$/.exec(t);
     if (m === null) return { error: `${fileName}: malformed frontmatter line "${t.slice(0, 40)}"` };
     fields.set(m[1] as string, m[2] as string);
   }

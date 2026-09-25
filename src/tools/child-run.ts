@@ -20,10 +20,11 @@ export function loopContextReady(ctx: ToolContext): ctx is LoopContext {
 
 /**
  * Assemble a child run from the parent's context so `delegate` and
- * `delegate_many` cannot drift on what a child inherits: same jail, model
- * rotation, retry wait, compact threshold, parent run id for the audit chain,
- * and the parent's event sink when it has one. The per-child deadline is the
- * caller's, because a single child and a fan-out size it differently.
+ * `delegate_many` cannot drift on what a child inherits: same jail, the run's
+ * refusals, model rotation, retry wait, compact threshold, parent run id for
+ * the audit chain, and the parent's event sink when it has one. The per-child
+ * deadline is the caller's, because a single child and a fan-out size it
+ * differently.
  */
 export function runChild(
   ctx: LoopContext,
@@ -43,6 +44,7 @@ export function runChild(
     models: ctx.rotationModels,
     retryWait: ctx.retryWait,
     roots: ctx.roots,
+    disallowedTools: ctx.disallowedTools,
     parentRunId: ctx.parentRunId,
     debug: ctx.debug,
     deadlineMs: child.deadlineMs,

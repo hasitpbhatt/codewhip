@@ -146,8 +146,41 @@ Three built-ins ship zero-config: `explore` (find and report with file:line
 evidence), `review` (adversarial findings, P0–P3), `plan` (ordered
 implementation plan). Custom agents live in `.codewhip/agents/<name>.md` —
 flat frontmatter (`description` required, optional `model` served on the
-parent's port, optional `max_steps` ≤ 25) and the body is the child's system
-prompt; a file overrides a same-name built-in.
+parent's port, `max_steps` ≤ 25, `tools`, `disallowedTools`) and the body is the
+child's system prompt; a file overrides a same-name built-in.
+
+`tools:` **narrows and cannot widen**: a child's whole authority is `read` and
+`search`, so naming anything else is a parse error rather than a promise the
+harness breaks on the first call. `disallowedTools:` takes the same grammar as
+`--disallowed-tools` (`webfetch(https://x.com)`, bare names, comma lists; the
+tool token may be capitalized to match a file ported from elsewhere), and both
+fields compile onto the one refusal list the child is born with — alongside
+whatever the run's own `--disallowed-tools` already refused. The eight fields
+this harness cannot honour — `permissionMode`, `skills`, `mcpServers`, `hooks`,
+`memory`, `background`, `effort`, `isolation` — are refused **by name, with the
+reason**, as is any unknown key: a field that parses and then silently does
+nothing is the failure mode worth more than a load error. `codewhip agents`
+shows what each entry actually gets:
+
+```
+$ codewhip agents          # real output; peeker.md is `tools: Read`,
+                           # ported.md carries `permissionMode: acceptEdits`
+agents: 1 file(s) SKIPPED (fix or remove — they never load):
+  ! ported.md: permissionMode is not honoured — a child is always plan-mode: read-only, no grants to widen
+
+agents: 4 delegable (read-only subagents; spawn via delegate / delegate_many):
+  explore      [builtin] max_steps=10
+    Investigates code and reports findings with file:line evidence (read-only).
+  peeker       [file] max_steps=10 tools=read
+    Reads exactly one file and reports it.
+  plan         [builtin] max_steps=10
+    Produces an ordered implementation plan grounded in the real code (read-only).
+  review       [builtin] max_steps=10
+    Adversarial code review: correctness bugs, edge cases, security issues (read-only).
+```
+
+`peeker` is then offered one tool spec, not two — the child's prompt shrinks
+rather than growing a rule.
 
 Why this doesn't dilute the trust model:
 
