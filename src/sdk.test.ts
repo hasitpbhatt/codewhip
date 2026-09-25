@@ -110,7 +110,7 @@ describe("query()", () => {
       prompt: "triage",
       options: { port, provider: "nvidia", model: "m", cwd, tools: [t], yolo: true },
     }));
-    strictEqual(record[0]?.toolCount, 13, "twelve builtins plus the host tool");
+    strictEqual(record[0]?.toolCount, 13, "the twelve keyboard-free builtins plus the host tool");
     strictEqual(JSON.stringify(doc(msgs[0]!).custom_tools), '["lookup_bug"]');
     strictEqual(JSON.stringify(seen), '{"id":7}');
     strictEqual(results(msgs)[0]!.result, "fixed");

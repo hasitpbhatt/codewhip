@@ -20,6 +20,7 @@ import { describeToolFilter, parseToolFilterList, TOOL_FILTER_RULE, type ToolFil
 import { loadSettings, parsePermissionMode, PERMISSION_MODES, type PermissionMode } from "./settings.js";
 import { MAX_REPAIRS, parseSchema } from "./structured.js";
 import { MAX_ROOTS, resolveRoots } from "./tools/jail.js";
+import type { AskUserQuestion, UserQuestion } from "./tools/types.js";
 import { APPEND_MAX_CHARS } from "./system.js";
 import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRecord, type UsageBucket } from "./outcomes.js";
 import { sha256Hex } from "./hash.js";
@@ -917,6 +918,54 @@ function promptApproval(question: string): Promise<ApprovalAnswer> {
   });
 }
 
+/**
+ * The `ask_user` channel: one numbered question on the terminal, the human's
+ * answer read back as the option(s) they picked — or, if what they typed is not
+ * a number in range, as their own words. Choosing is never the same as
+ * approving: whatever the answer says, the consent ladder still grades every
+ * mutation the model goes on to attempt.
+ */
+/** The exact line a human sees. Kept apart from the readline call so the
+ * rendering is a value a test can pin, not a string buried in an effect. */
+export function questionPrompt(q: UserQuestion): string {
+  const hint = q.multiSelect ? "several numbers with commas" : "one number";
+  return `\n${q.question}\n${q.options.map((o, i) => `  ${i + 1}. ${o}`).join("\n")}\n(answer with ${hint}, or type your own words) > `;
+}
+
+function promptQuestion(q: UserQuestion, signal?: AbortSignal): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve(null);
+      return;
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const onAbort = (): void => {
+      rl.close();
+      resolve(null);
+    };
+    signal?.addEventListener("abort", onAbort);
+    const ask = (answer: string): void => {
+      rl.close();
+      if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+      resolve(parseQuestionAnswer(q, answer));
+    };
+    rl.question(questionPrompt(q), ask);
+  });
+}
+
+/** Numbers select options; anything else is the human's own answer, verbatim. */
+export function parseQuestionAnswer(q: UserQuestion, answer: string): string[] | null {
+  const text = answer.trim();
+  if (text.length === 0) return null;
+  const picked = text.split(/[,;\s]+/).map((tok) => Number(tok));
+  if (picked.every((n) => Number.isInteger(n) && n >= 1 && n <= q.options.length)) {
+    const labels = [...new Set(picked.map((n) => q.options[(n as number) - 1] as string))];
+    return q.multiSelect ? labels : labels.slice(0, 1);
+  }
+  const exact = q.options.find((o) => o.toLowerCase() === text.toLowerCase());
+  return [exact ?? text];
+}
+
 type ReplState = {
   history: LoopMsg[];
   provider: ProviderId;
@@ -1394,6 +1443,13 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       else say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
     };
   }
+  // The `ask_user` channel exists exactly where the CLI owns a keyboard prompt:
+  // the readline approval path, on a real TTY, and not headless (the branch
+  // above just cleared `askUserFn`). A TUI run gets none — its bridge renders
+  // approval as a widget and has no question view, so advertising the tool
+  // there would offer a prompt nobody draws.
+  const askQuestionFn: AskUserQuestion | undefined =
+    askUserFn === promptApproval && process.stdin.isTTY === true ? promptQuestion : undefined;
   // A dollar ceiling is only real where the meter can read: refuse up front on
   // an untracked route instead of shipping an option that silently does nothing.
   const usdCap = opts.maxBudgetUsd;
@@ -1469,6 +1525,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       port: makePortForConfig(runCfg, apiKey, opts.timeoutMs, keySource),
       signal: ctrl.signal,
       askUser: askUserFn,
+      ...(askQuestionFn === undefined ? {} : { askUserQuestion: askQuestionFn }),
       remembered: listRules(process.cwd()),
       planMode: mode === "plan",
       permissionMode: mode,

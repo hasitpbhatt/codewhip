@@ -44,7 +44,7 @@ describe("host-provided tools", () => {
         return okOutput("NPE at line 7");
       })],
     });
-    strictEqual(record[0]?.toolCount, 13, "twelve builtins plus the host tool");
+    strictEqual(record[0]?.toolCount, 13, "the twelve keyboard-free builtins plus the host tool");
     strictEqual(calls, 1);
     strictEqual(r.messages.find((m) => m.role === "tool")?.content, "NPE at line 7");
     strictEqual(r.error, undefined);

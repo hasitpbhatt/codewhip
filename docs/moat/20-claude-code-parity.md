@@ -134,13 +134,13 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Task/TodoWrite | ALIAS | `todo` |
 | TaskCreate/Get/List/Update | **HAVE** | per-item tasks whose edges gate claiming: `todo` list/get/replace/update (`src/tools/todo.ts:71`, `:62`), items carry `description`/`activeForm`/`owner`/`blocks`/`blockedBy`, either edge direction stored both ways (`src/tools/todo-store.ts:146`), a dangling edge (`:129`), a cycle (`:131`) and a claim past an open edge (`:133`) all refused — and re-checked on every write, so the file's invariants hold rather than the argument's (`src/tools/todo.ts:47`) |
 | Agent/`Skill` tool | PARTIAL | `delegate`, `delegate_many`; no model-invoked skills |
-| AskUserQuestion | **GAP-3** | the model cannot ask a multiple-choice question back |
+| AskUserQuestion | PARTIAL | `ask_user`: one question per call (not up to four), no `header`/`preview` field, and a numbered readline rather than a selection widget — `src/tools/ask-user.ts:82`, rendered at `src/index.ts:928`; allow-class at `src/policy.ts:430`, refused for a child at `src/loop.ts:877`, advertised only where a keyboard is reachable (`src/tools/registry.ts:316`) |
 | ToolSearch / WaitForMcpServers | **GAP-3** | absent (MCP) |
 | EnterWorktree/ExitWorktree, `isolation: worktree` | **GAP-3** | absent; worktree *escape* is denied today |
 | LSP tool | **GAP-5** | absent |
 | CronCreate/List/Delete, RemoteTrigger, PushNotification, SendUserFile, EndConversation, ReportFindings, Artifact | N/S | cloud/push platform surface |
 | Image input to Read | **GAP-3** | `LoopMsg.content` is `string` (`src/provider-port.ts:18`); `read` refuses binary (`src/tools/read.ts:68`) |
-| Parallel tool execution | **GAP-3** | `src/loop.ts:755` sequential `for`; deferred in `torvalds-architecture-review.md:105` |
+| Parallel tool execution | **GAP-3** | `src/loop.ts:801` sequential `for`; deferred in `torvalds-architecture-review.md:105` |
 | Prompt caching | **GAP-3** | no `cache_control` anywhere in `src/` |
 
 ## E. Subagents and delegation
@@ -148,7 +148,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
 | `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:169`) |
-| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:141` → `src/tools/registry.ts:288`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:211`), and both are compiled onto one list the child is born with (`src/subagents.ts:298`, `:377`); the other eight are refused BY NAME with their reason (`src/subagents.ts:70`) — no field is ever accepted-and-dropped |
+| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:141` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:211`), and both are compiled onto one list the child is born with (`src/subagents.ts:298`, `:377`); the other eight are refused BY NAME with their reason (`src/subagents.ts:70`) — no field is ever accepted-and-dropped |
 | `--agents` JSON, `--agent` | **GAP-3** | absent |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
 | Agent view panel, parallel background agents, `SendMessage`, teammates | **GAP-3** | children are synchronous and depth-capped |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 16**, **GAP 43**,
-i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 21, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 17**, **GAP 42**,
+i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 20, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -599,7 +599,7 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
   harness breaks on the first call; the parse fails instead
   (`src/subagents.ts:141`). `CHILD_TOOL_NAMES` (`src/tools/types.ts:37`) is now
   the single list that both that check and the child's spec builder
-  (`src/tools/registry.ts:288`) read — a second copy is how a file starts naming
+  (`src/tools/registry.ts:301`) read — a second copy is how a file starts naming
   a tool its child cannot use.
 - **Narrowing is expressed as a refusal, not as a second mechanism.**
   `tools: read` compiles to one whole-tool refusal for `search`
@@ -628,6 +628,48 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
   narrowed child is sent one spec fewer, so its receipt goes down. The refusal
   text for an un-honoured field is spent by whoever reads `codewhip agents`, not
   by a model.
+
+### Wave 3e — asking the human (2026-09-25)
+
+`ask_user` is the thirteenth builtin: the model puts one multiple-choice
+question to the human who started the run and their answer arrives as a tool
+result (`src/tools/ask-user.ts:82`, `src/index.ts:928`). The row is PARTIAL, not
+HAVE, because three things in Claude Code's schema are not here: up to four
+questions per call, the `header` chip, and the `preview` body. The capability the
+row named — asking back — ships with tests.
+
+- **An answer is information, not a grant.** `ask_user` is allow-class
+  (`src/policy.ts:430`) precisely because it mutates nothing: it reads one line
+  from a human and returns it as text, and every edit, shell call and fetch the
+  model goes on to attempt still walks the ladder. Grading the *question* as an
+  ask would be circular — consent to ask for consent — and in a headless run,
+  where asks auto-deny, it would make the tool unreachable by construction. It
+  is still deniable: the rule lands after promoted-deny matching and the subject
+  is the question text (`src/policy.ts:295`), so `deny ask_user:Revert the
+  branch?*` in policy.md holds.
+- **The tool is advertised where a human is, and not elsewhere.** One spec is
+  gated on a capability instead of a policy (`src/tools/registry.ts:316`):
+  headless `-p`, an SDK `query()` and a TUI whose bridge draws approval but not
+  questions all get the twelve that can actually run. The principle is the one
+  already used for children and for `--disallowed-tools` — never advertise what
+  the harness will refuse — and `runAskUser` still refuses without a channel, so
+  a fabricated call cannot conjure a keyboard.
+- **One keyboard, one owner.** A child that could prompt would be the parent's
+  consent gate with a second caller, so the loop refuses it before the ladder
+  (`src/loop.ts:877`, `loop:child-no-prompt`) and the deny lands on the child's
+  own audit runId — not the parent's trace, which is what keeps the two runs
+  separable afterwards.
+- **Free text outranks the menu.** A number in range picks an option; anything
+  else — a sentence, an out-of-range digit, an option typed verbatim in another
+  case — becomes the human's own answer (`src/index.ts:954`). A forced choice is
+  a interrogation, and the interesting answers are the ones nobody listed.
+- **Silence is a refusal, never an empty yes.** An interrupted or unanswered
+  question returns `ok: false` naming the question, and a headless call returns
+  the question it could not ask. The model must not be able to read "no
+  response" as permission to proceed.
+- **Cost: one round-trip, and only when it can land.** No prompt text is added
+  anywhere; the usage guidance lives in the spec, which is sent only when the
+  spec is advertised. A run with no human pays nothing for the tool at all.
 
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
@@ -668,11 +710,14 @@ count is the instrument, not the memory of it.
    Subagent frontmatter **advanced GAP → PARTIAL 2026-09-25** (`tools` and
    `disallowedTools` honoured, the other eight refused by name) — GAP 44 → 43,
    the first wave-3 row to move since task-list blockers.
+   `ask_user` **advanced GAP → PARTIAL 2026-09-25** (the model asks one
+   multiple-choice question back; four-questions-per-call, `header` and `preview`
+   are the named deltas) — GAP 43 → 42, wave 3 21 → 20.
    Remaining: parallel tool
    exec, vision input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus
    the `.claude/agents/` path itself,
-   `AskUserQuestion`, web search tool, worktree isolation, MCP client (with
+   web search tool, worktree isolation, MCP client (with
    ruling), effort/thinking.
 4. **Wave 4 — extensibility and install.** skills, http/agent hook types,
    `--bare`, command `!cmd`/`@file`, memory imports and rules dirs,

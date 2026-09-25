@@ -18,6 +18,16 @@ describe("policy", () => {
     strictEqual(permissionSubject("todo", { action: "replace" }, '{"action":"replace","items":['), "todo:replace");
     strictEqual(permissionSubject("todo", { action: "list" }, "preview"), "todo:list");
   });
+  it("ask_user allows by default — an answer is information, not a grant — and a deny line still reaches it", () => {
+    const v = checkPermission("ask_user", "Which parser should I write?");
+    strictEqual(v.decision, "allow");
+    strictEqual(v.ruleId, "default:ask_user:allow");
+    strictEqual(permissionSubject("ask_user", { question: "Revert the branch?" }, 'ask_user {"question"'), "Revert the branch?");
+    // The rule lands after promoted-deny matching, so policy.md outranks it.
+    const denied = checkPermission("ask_user", "Revert the branch?", [{ tool: "ask_user", shape: "Revert the branch?*", line: 3 }]);
+    strictEqual(denied.decision, "deny");
+    strictEqual(denied.ruleId, "policy.md:deny:ask_user:Revert the branch?*");
+  });
   it("denylist blocks rm -rf / and git push --force", () => {
     strictEqual(checkPermission("bash", "rm -rf /").decision, "deny");
     strictEqual(checkPermission("bash", "git push --force").decision, "deny");

@@ -363,6 +363,40 @@ parse time there rather than silently doing nothing.
   `tools: Read` child is measured at one advertised spec, and a child whose file
   says `disallowedTools: Search` is refused inside its own run. Cost: a narrower
   child prompt; nothing added to any system prompt, so receipts are unchanged.
+- **`ask_user`: the model can ask a question back.** Parity-matrix Wave 3e: the
+  `AskUserQuestion` row, which read "the model cannot ask a multiple-choice
+  question back". It is the thirteenth builtin (`src/tools/ask-user.ts`) — one
+  question, 2-6 distinct choices, optional `multiSelect` — and the answer comes
+  back as an ordinary tool result, `the human answered: <what they said>`. Three
+  decisions make it safe to hand an agent:
+  - **It grants nothing.** Allow-class at the ladder (`default:ask_user:allow`),
+    because its whole effect is one keystroke from a human who cannot be coerced
+    by it — the edit, `rm` or fetch the model goes on to attempt still walks the
+    normal consent check. Grading the *question* as an ask would be circular
+    (consent to ask for consent), and in a headless run, where asks auto-deny,
+    it would make the tool unreachable by construction. It is still deniable:
+    the rule sits after promoted-deny matching and its subject is the question
+    text, so `deny ask_user:Revert the branch?*` in `policy.md` holds.
+  - **It exists only where a human is.** The channel is injected by the CLI when
+    it owns a readline prompt on a real TTY; headless `-p`, an SDK `query()` and
+    a TUI run that cannot draw a question get *no spec at all*
+    (`src/tools/registry.ts:316`) — the same "never advertise what the harness
+    refuses" rule already used for children and `--disallowed-tools`. Exec still
+    refuses without a channel, and the refusal echoes the question it could not
+    ask, so silence can never be read as assent.
+  - **One keyboard, one owner.** A child that could prompt would be the parent's
+    consent gate with a second caller: refused before the ladder as
+    `loop:child-no-prompt`, recorded on the child's own audit runId.
+  Free text outranks the menu: a number in range picks an option, anything else —
+  a sentence, an out-of-range digit, an option typed in another case — is the
+  human's own answer verbatim (`src/index.ts:954`), because a forced choice is an
+  interrogation and the interesting answers are the ones nobody listed. 15 tests,
+  including an end-to-end one that reads the child's deny back out of
+  `outcomes.jsonl`. Cost: one extra tool spec in interactive runs only — 843
+  characters of serialized schema (`node -e` over `dist/tools/registry.js`,
+  2026-09-25), re-sent per provider call, against a rough 4 chars/token; headless
+  and SDK runs send nothing, and no prompt text was added anywhere, so receipts
+  are otherwise unchanged.
 
 ### Changed
 

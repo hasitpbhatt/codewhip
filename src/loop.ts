@@ -1,6 +1,6 @@
 import type { ChatPort, LoopMsg } from "./provider-port.js";
 import { TOOLS, hostToolProblem, toolSpecs, type HostToolDef, type ToolDef } from "./tools/registry.js";
-import { isToolName, type ToolName, type ToolResult } from "./tools/types.js";
+import { isToolName, type AskUserQuestion, type ToolName, type ToolResult } from "./tools/types.js";
 import { checkPermission, permissionSubject } from "./policy.js";
 import { loadPromotedDenies } from "./policy-store.js";
 import { argsHash, sha256Hex } from "./hash.js";
@@ -88,6 +88,13 @@ export type LoopArgs = {
   port: ChatPort;
   signal?: AbortSignal;
   askUser?: AskUser;
+  /**
+   * The `ask_user` channel — one multiple-choice question put to the human,
+   * whose answer comes back as a tool result. Set only where a terminal can be
+   * read from (never for `-p`, never for a child run): with no human to ask the
+   * tool refuses and says so, which is the honest answer rather than a hang.
+   */
+  askUserQuestion?: AskUserQuestion;
   /** One bounded Retry-After wait per run (off unless explicitly armed). */
   retryWait?: boolean;
   /**
@@ -293,7 +300,7 @@ export type LoopResult = {
 };
 
 /**
- * A tool call resolves against the twelve builtins first, then this run's
+ * A tool call resolves against the thirteen builtins first, then this run's
  * host tools. Nothing else can enter: the registry is not mutable at run
  * time, so a name either has a checked definition or the call is refused as
  * unknown.
@@ -448,7 +455,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   // Filtered once, not per turn: every provider call in a run must advertise
   // exactly the same toolset, or a failover mid-run changes the contract the
   // transcript was written against.
-  const specs = toolSpecs(depth, args.disallowedTools, [...hosts.values()]);
+  const specs = toolSpecs(depth, args.disallowedTools, [...hosts.values()], args.askUserQuestion !== undefined);
   const messages: LoopMsg[] = [
     { role: "system", content: systemContent },
     ...(args.history ?? []),
@@ -831,7 +838,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       }
       const preview = previewForLog(call.name, parsed);
       // The one question every builtin-only rule asks: is this name one of the
-      // twelve? Null for a host tool, which is then excluded from the policy
+      // thirteen? Null for a host tool, which is then excluded from the policy
       // row, the shape grammar, the flag grammar, the memo and the checkpoint
       // path — all of which are written against builtins.
       const builtinName: ToolName | null = isToolName(def.name) ? def.name : null;
@@ -860,6 +867,18 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         messages.push({ role: "tool", toolCallId: call.id, content: out });
         record("deny", "loop:child-readonly", sha256Hex(out), "policy", out);
         emit("tool", `deny ${call.name} ${preview} (loop:child-readonly)`);
+        continue;
+      }
+      // Reaching the human is an authority, not a read: a child that could
+      // prompt would be the parent's consent gate with a second caller. The
+      // spec is never advertised at depth > 0 and the channel is never
+      // forwarded (`runChild`); this closes the fabricated-call path, since
+      // lookupTool admits any TOOLS key regardless of depth.
+      if (isChild && def.name === "ask_user") {
+        const out = "subagents cannot ask the human — the parent run owns the keyboard";
+        messages.push({ role: "tool", toolCallId: call.id, content: out });
+        record("deny", "loop:child-no-prompt", sha256Hex(out), "policy", out);
+        emit("tool", `deny ${call.name} ${preview} (loop:child-no-prompt)`);
         continue;
       }
       // A host tool is a caller function running with the parent's authority.
@@ -1195,6 +1214,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
                 disallowedTools: args.disallowedTools,
+                ...(args.askUserQuestion === undefined ? {} : { askUserQuestion: args.askUserQuestion }),
                 debug: dbg,
                 parentRunId: runId,
                 runId,

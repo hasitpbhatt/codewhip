@@ -266,10 +266,11 @@ export function matchWorktreeEscape(command: string): string | null {
 /**
  * The string `checkPermission` screens against. For bash this is the
  * FULL command (not the truncated log preview) so denylist/chain patterns
- * past the preview boundary are caught. For everything else the preview
- * is already the right subject — including a host-provided tool, whose
- * subject is whatever its caller was handed and can still be screened by a
- * `deny <tool>:<shape>` line in policy.md.
+ * past the preview boundary are caught. Otherwise the subject is whatever
+ * a `deny <tool>:<shape>` line can meaningfully address — a path for
+ * edit/write, an action for todo, a question for ask_user, and the preview
+ * for everything else, including a host-provided tool, whose subject is
+ * whatever its caller was handed.
  */
 export function permissionSubject(tool: string, parsed: unknown, preview: string): string {
   if (tool === "bash") {
@@ -287,6 +288,13 @@ export function permissionSubject(tool: string, parsed: unknown, preview: string
   if (tool === "todo") {
     const a = (parsed as { action?: unknown }).action;
     if (typeof a === "string") return `todo:${a}`;
+  }
+  // The question is the addressable part of an ask_user call: a policy.md
+  // `deny ask_user:Revert the branch?*` should reach what the human reads, not
+  // the JSON envelope the preview is built from.
+  if (tool === "ask_user") {
+    const q = (parsed as { question?: unknown }).question;
+    if (typeof q === "string") return q;
   }
   return preview;
 }
@@ -408,6 +416,22 @@ export function checkPermission(
       decision: "allow",
       ruleId: "default:todo:allow",
       reason: "todo mutates only harness todo state (.codewhip/todos.json), never the workspace",
+    };
+  }
+  // ask_user touches no file, no shell and no network: its whole effect is one
+  // keystroke from a human who cannot be coerced by it, and the answer arrives
+  // as a tool result the model still has to act on. Making it *ask* would be
+  // circular — consent to ask a question — and in a headless run, where asks
+  // auto-deny, would make the tool unreachable by construction. Allow-class,
+  // and still deniable: this lands after promoted-deny matching, and its
+  // subject is the question, so `deny ask_user:Revert the branch?*` holds.
+  // (Additive ruleId; the ladder and the stored shapes are unchanged, so
+  // POLICY_VERSION does not move.)
+  if (tool === "ask_user") {
+    return {
+      decision: "allow",
+      ruleId: "default:ask_user:allow",
+      reason: "ask_user asks a human and mutates nothing — an answer is information, not a grant",
     };
   }
   const norm = normalize(commandPreview);

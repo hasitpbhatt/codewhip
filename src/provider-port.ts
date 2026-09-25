@@ -26,7 +26,7 @@ export type ToolSpec = {
    * A tool's wire name. `string`, not `ToolName`: the provider has never
    * heard of the builtin list, and a host-provided tool (`src/sdk.ts`) rides
    * these same specs. Every builtin-only decision therefore asks `isToolName`
-   * before it reads a name as one of the twelve.
+   * before it reads a name as one of the thirteen.
    */
   name: string;
   description: string;

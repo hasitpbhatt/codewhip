@@ -43,7 +43,7 @@ export type HookDeps = { spawnHook: (command: string, stdin: string, env: Record
 const KNOWN_TOOLS: Record<ToolName, true> = {
   read: true, search: true, edit: true, write: true, bash: true, webfetch: true,
   delegate: true, delegate_many: true, run_in_background: true, task_output: true,
-  task_stop: true, todo: true,
+  task_stop: true, todo: true, ask_user: true,
 };
 const HOOK_EVENTS: readonly string[] = ["PreToolUse", "PostToolUse", "Stop"];
 const MAX_DEFS = 16;

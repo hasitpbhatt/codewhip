@@ -13,7 +13,7 @@ junior's hands unsupervised. CodeWhip does, and prices every run while it's at
 it.
 
 **Status: H1 done (2026-09-17).** `codewhip run` executes a real agent loop:
-12 tools, 136 providers, a harness-side policy jail, a hash-chained audit log,
+13 tools, 136 providers, a harness-side policy jail, a hash-chained audit log,
 and a cost meter. Not published to npm yet — install from source below.
 
 ## Quickstart

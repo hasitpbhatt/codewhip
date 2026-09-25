@@ -22,6 +22,7 @@ export const TOOL_NAMES = [
   "task_output",
   "task_stop",
   "todo",
+  "ask_user",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -37,7 +38,7 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 export const CHILD_TOOL_NAMES: readonly ToolName[] = ["read", "search"];
 
 /**
- * Is this wire name one of the twelve? The only honest answer to every
+ * Is this wire name one of the thirteen? The only honest answer to every
  * builtin-only question — a policy row, a remembered shape, a
  * `--allowed-tools` grammar, a checkpoint — since a name reaching the loop can
  * also be a host-provided tool (`src/sdk.ts`). Lives here, next to the list it
@@ -51,6 +52,23 @@ export type ToolResult = {
   ok: boolean;
   output: string;
 };
+
+/** One multiple-choice question put to the human who started the run. */
+export type UserQuestion = {
+  question: string;
+  options: readonly string[];
+  /** True when more than one option may be chosen. */
+  multiSelect: boolean;
+};
+
+/**
+ * The question channel, injected only where a human is actually reachable.
+ * Resolves to the chosen option labels (or one free-text answer — the human may
+ * always say something else), or null for no answer: interrupted, or the mode
+ * has no keyboard. Rendering is the asker's business; a caller that owns the
+ * terminal shows numbers, a caller that owns a UI shows buttons.
+ */
+export type AskUserQuestion = (q: UserQuestion, signal?: AbortSignal) => Promise<string[] | null>;
 
 export type Permission = "allow" | "ask" | "deny";
 
@@ -94,6 +112,12 @@ export type ToolContext = {
    * authority to nothing the parent did not already have.
    */
   disallowedTools?: readonly ToolFilter[];
+  /**
+   * The question channel for `ask_user`. Present only when a human is
+   * reachable at a keyboard: absent for headless runs and for children, which
+   * is what makes the tool's refusal the honest answer rather than a hang.
+   */
+  askUserQuestion?: AskUserQuestion;
   /** This run's runId — present when invoked from the loop; lets tools (e.g.
    *  background tasks) write audit entries under the correct run without a
    *  separate plumbing path. */
