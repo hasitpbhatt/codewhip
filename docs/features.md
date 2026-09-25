@@ -97,12 +97,38 @@ you review, then re-run without `--plan` to execute it. The banner prints
 
 ## Task lists
 
-On multi-step work the model keeps a visible checklist with the `todo` tool:
-`replace` the full plan up front, `update` statuses as steps finish, `list` to
-re-read. The list lives in `.codewhip/todos.json` — harness state, never a
-workspace file — so it is allow-by-default (`default:todo:allow`, still
-deniable via a promoted `policy.md` rule), redacted at save, and
+On multi-step work the model keeps a visible plan with the `todo` tool:
+`replace` the full list up front, `update` a status as each step finishes,
+`list` to re-read, `get` one id before picking it up. The list lives in
+`.codewhip/todos.json` — harness state, never a workspace file — so it is
+allow-by-default (`default:todo:allow`, still deniable via a promoted
+`policy.md` rule, per action: `deny todo:get`), redacted at save, and
 parent-run-only (children stay read-only).
+
+An item is `{id, text, status}` plus `description` (what finishing means),
+`activeForm` (the label while it is in progress), `owner`, and `blocks` /
+`blockedBy` — ids it gates, or ids that gate it. Writing either direction is
+enough; the store keeps both, and `list` prints what the graph currently says:
+
+```
+- [>] 1 wiring the tool
+- [ ] 2 add the policy branch · blocked by 1
+- [ ] 3 write tests · @sam
+```
+
+The edges gate, they do not decorate. `blocked` is derived — an item is blocked
+while any predecessor is not `done` — so the file never holds a second status
+that can disagree with its own graph, and `in_progress` on a blocked item is
+refused rather than warned about. An edge naming an id outside the list is
+refused too, because quietly dropping a blocker is a grant; so is a cycle, which
+is named (`dependency cycle: a → c → b → a — no order can satisfy it`) instead of
+deadlocking the list. Every write re-passes the same validator, `update`
+included, so the rules describe the file on disk rather than whichever call
+happened to be well-formed.
+
+`get` is what makes a shared list safe to claim from: the contract, the owner,
+both edge directions with the far end's status, and the one line that decides
+the next move — `ready to claim: 3`. A blocked item answers `ready: no`.
 
 ## Subagents
 
