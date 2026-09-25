@@ -4,6 +4,8 @@ import type { ChatPort } from "./provider-port.js";
 import type { UsageBucket } from "./outcomes.js";
 import type { Debug } from "./debug.js";
 import type { LoopArgs } from "./loop.js";
+import { filtersToolEntirely, parseToolFilterList, type ToolFilter } from "./tool-filter.js";
+import { CHILD_TOOL_NAMES, isToolName, type ToolName } from "./tools/types.js";
 import { listRules } from "./remember-store.js";
 import { parseFlatFrontmatter } from "./frontmatter.js";
 
@@ -23,6 +25,9 @@ import { parseFlatFrontmatter } from "./frontmatter.js";
  *
  * Agent files: `.codewhip/agents/<name>.md` — flat frontmatter + prompt body.
  * Name comes from the filename; a file overrides a built-in of the same name.
+ * Fields: `description` (required), `model`, `max_steps`, `tools` (narrow-only,
+ * over a child's read+search), `disallowedTools` (the run-filter grammar).
+ * Every other field is refused by name rather than ignored — see REFUSED_FIELDS.
  */
 
 export const CHILD_DEFAULT_MAX_STEPS = 10;
@@ -44,6 +49,33 @@ export type AgentDef = {
   maxSteps: number;
   /** Optional model override — served on the parent's port (same provider). */
   model?: string;
+  /**
+   * `tools:` — the subset of a child's authority this agent is OFFERED. Absent
+   * means all of `CHILD_TOOL_NAMES`. The field narrows and never widens: a name
+   * outside the child set is a parse error, because advertising `bash` to a
+   * read-only child would be a promise the harness breaks on the first call.
+   */
+  allowed?: readonly ToolName[];
+  /** `disallowedTools:` — refusals the child is born with, on top of its parent's. */
+  disallowed?: readonly ToolFilter[];
+};
+
+/**
+ * Claude Code's agent-file fields that codewhip does not honour, each with the
+ * reason it cannot be honoured today. They are refused BY NAME — a field that
+ * parses and then silently does nothing is a false sentence in a config file,
+ * and the author learns it at the worst possible moment. Everything else is
+ * refused as "unknown field", so a typo surfaces the same way.
+ */
+const REFUSED_FIELDS: Readonly<Record<string, string>> = {
+  permissionMode: "a child is always plan-mode: read-only, no grants to widen",
+  skills: "a child run loads no skills",
+  mcpServers: "there is no MCP client, and a child has no network at all",
+  hooks: "hooks belong to the run that starts them, not to a roster entry",
+  memory: "a child inherits remembered rules from disk; it has no store of its own",
+  background: "a child is summoned and awaited — background tasks are the parent's tool",
+  effort: "reasoning effort is a per-provider claim this harness cannot verify",
+  isolation: "a child shares the parent's jail; there is no worktree handoff",
 };
 
 const BUILTIN_SOURCES: Array<Omit<AgentDef, "maxSteps"> & { maxSteps?: number }> = [
@@ -89,12 +121,50 @@ const NAME_RX = /^[a-z][a-z0-9_-]{1,31}$/;
 /** Agent-file body cap: a runaway system prompt is a cost amplifier the
  * compactor can't touch (system messages are protected from pruning). */
 const MAX_BODY_CHARS = 8000;
+/** Every field this file type understands that is not `description`. */
+const KNOWN_OPTIONAL_FIELDS = ["model", "max_steps", "tools", "disallowedTools"] as const;
+
+/**
+ * Normalise just the tool TOKEN of each comma-separated entry to lowercase, so
+ * a file ported from Claude Code (`disallowedTools: Write, Edit`) meets this
+ * repo's lowercase filter grammar. Shapes are left byte-for-byte alone: a path
+ * is case-sensitive and a wildcarded one is already refused by the parser.
+ */
+function lowerToolTokens(value: string): string {
+  return value
+    .split(",")
+    .map((p) => p.replace(/^(\s*)([A-Za-z_]+)/, (_all, lead: string, name: string) => lead + name.toLowerCase()))
+    .join(",");
+}
+
+/** `tools:` — a comma list of names, narrowed to what a child can actually be given. */
+function parseToolsField(fileName: string, raw: string): { allowed: ToolName[] } | { error: string } {
+  const seen: ToolName[] = [];
+  for (const part of raw.split(",")) {
+    const name = part.trim().toLowerCase();
+    if (name.length === 0) continue;
+    if (!isToolName(name)) {
+      return { error: `${fileName}: tools: unknown tool "${name}" — a child is offered only ${CHILD_TOOL_NAMES.join(" / ")}` };
+    }
+    if (!CHILD_TOOL_NAMES.includes(name)) {
+      return {
+        error: `${fileName}: tools: "${name}" is not a tool a child can be given — a subagent's whole authority is ${CHILD_TOOL_NAMES.join("+")}, so this field narrows and never widens`,
+      };
+    }
+    if (!seen.includes(name)) seen.push(name);
+  }
+  if (seen.length === 0) {
+    return { error: `${fileName}: tools needs at least one of ${CHILD_TOOL_NAMES.join(", ")}` };
+  }
+  return { allowed: seen };
+}
 
 /**
  * Parse one `.codewhip/agents/<name>.md` source. Flat frontmatter only
- * (`description`, optional `model`, optional `max_steps`); the body is the
- * child system prompt. Returns null with a reason on any malformed input —
- * callers skip invalid files rather than guess.
+ * (`description`, optional `model`, `max_steps`, `tools`, `disallowedTools`);
+ * the body is the child system prompt. Any other field is refused by name.
+ * Returns null with a reason on any malformed input — callers skip invalid
+ * files rather than guess.
  */
 export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef } | { error: string } {
   const name = fileName.replace(/\.md$/, "");
@@ -106,6 +176,13 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
     return fm;
   }
   const { fields, body } = fm;
+  for (const key of fields.keys()) {
+    if (key === "description") continue;
+    if ((KNOWN_OPTIONAL_FIELDS as readonly string[]).includes(key)) continue;
+    const why = REFUSED_FIELDS[key];
+    if (why !== undefined) return { error: `${fileName}: ${key} is not honoured — ${why}` };
+    return { error: `${fileName}: unknown field "${key}" (this file type takes ${["description", ...KNOWN_OPTIONAL_FIELDS].join(", ")})` };
+  }
   const description = fields.get("description") ?? "";
   if (description.length === 0 || description.length > 200) {
     return { error: `${fileName}: description required (1..200 chars)` };
@@ -123,6 +200,28 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
   if (model !== undefined && model.trim().length === 0) {
     return { error: `${fileName}: model must be a non-empty string` };
   }
+  let allowed: readonly ToolName[] | undefined;
+  const toolsRaw = fields.get("tools");
+  if (toolsRaw !== undefined) {
+    const parsed = parseToolsField(fileName, toolsRaw);
+    if ("error" in parsed) return parsed;
+    allowed = parsed.allowed;
+  }
+  let disallowed: readonly ToolFilter[] | undefined;
+  const disallowedRaw = fields.get("disallowedTools");
+  if (disallowedRaw !== undefined) {
+    const parsed = parseToolFilterList(lowerToolTokens(disallowedRaw));
+    if (parsed.ok === false) return { error: `${fileName}: disallowedTools — ${parsed.error}` };
+    disallowed = parsed.filters;
+  }
+  // A child with no tools is a run that can only apologize, and `tools: read`
+  // beside `disallowedTools: read` is a file that contradicts itself. Say so at
+  // parse time — the alternative is a delegate call that burns the child's
+  // whole budget discovering it.
+  const offered = (allowed ?? CHILD_TOOL_NAMES).filter((n) => !filtersToolEntirely(disallowed, n));
+  if (offered.length === 0) {
+    return { error: `${fileName}: tools and disallowedTools together leave the child with nothing to call` };
+  }
   if (body.length === 0) {
     return { error: `${fileName}: empty prompt body` };
   }
@@ -136,6 +235,8 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
       systemPrompt: body,
       maxSteps,
       ...(model === undefined ? {} : { model: model.trim() }),
+      ...(allowed === undefined ? {} : { allowed }),
+      ...(disallowed === undefined ? {} : { disallowed }),
     },
   };
 }
@@ -180,6 +281,35 @@ export function findAgent(cwd: string, name: string): AgentDef | null {
   return listAgents(cwd).find((a) => a.name === name) ?? null;
 }
 
+/**
+ * The refusals a child is born with: everything its parent was refused, plus
+ * the agent file's own `disallowedTools`, plus — when the file narrowed
+ * `tools:` — one whole-tool refusal for every child tool it did not name.
+ *
+ * All three arrive on the SAME path the operator's `--disallowed-tools` flag
+ * uses, so there is one mechanism that both un-advertises a spec (toolSpecs)
+ * and refuses a call (the ladder above its rungs) — not a frontmatter-specific
+ * second one to drift. Inheriting the parent's list is what makes "no --yolo,
+ * remembered rule or human yes" true across the delegation boundary rather than
+ * accidentally true: today no filter a child could evade is even expressible
+ * (read/search take no shape, and a child cannot reach the four shapeful
+ * tools), but the day one is, the child must not be the hole.
+ */
+export function childFiltersFor(agent: AgentDef, parent: readonly ToolFilter[] | undefined): ToolFilter[] {
+  const out: ToolFilter[] = [...(parent ?? [])];
+  const add = (filter: ToolFilter): void => {
+    if (!out.some((x) => x.tool === filter.tool && x.shape === filter.shape)) out.push(filter);
+  };
+  for (const f of agent.disallowed ?? []) add(f);
+  const allowed = agent.allowed;
+  if (allowed !== undefined) {
+    for (const name of CHILD_TOOL_NAMES) {
+      if (!allowed.includes(name)) add({ tool: name, shape: null });
+    }
+  }
+  return out;
+}
+
 export type ChildRunOptions = {
   cwd: string;
   agent: AgentDef;
@@ -202,6 +332,9 @@ export type ChildRunOptions = {
   /** Parent's extra jail roots — a child reads the same directories the
    * operator widened the workspace to, never more and never fewer. */
   roots?: readonly string[];
+  /** Parent's `--disallowed-tools` refusals — inherited, because a refusal the
+   * operator scoped to the run is not something a subagent can lift. */
+  disallowedTools?: readonly ToolFilter[];
   /** The delegating parent's runId (outcome attribution / metrics de-dup). */
   parentRunId?: string;
   /** Parent's `--debug` sink — a child's decisions join the same log. */
@@ -239,6 +372,9 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     signal: opts.signal,
     planMode: true,
     depth: opts.depth + 1,
+    // The child's refusals are its parent's refusals plus the agent file's, and
+    // that list is what un-advertises `tools:` at the spec level too.
+    disallowedTools: childFiltersFor(opts.agent, opts.disallowedTools),
     remembered: listRules(opts.cwd),
     systemPrompt: opts.agent.systemPrompt,
     ...(opts.debug === undefined ? {} : { debug: opts.debug }),

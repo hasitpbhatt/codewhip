@@ -1,6 +1,7 @@
 import type { ChatPort } from "../provider-port.js";
 import type { UsageBucket } from "../outcomes.js";
 import type { Debug } from "../debug.js";
+import type { ToolFilter } from "../tool-filter.js";
 
 /**
  * Every tool name, as data — the union is derived from this list, so a new
@@ -24,6 +25,16 @@ export const TOOL_NAMES = [
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
+
+/**
+ * The whole authority a delegated child is *offered*. Two decisions have to
+ * agree on this pair: what `toolSpecs` advertises at depth > 0, and what an
+ * agent file's `tools:` frontmatter may name — a second copy of the list is how
+ * an agent file starts naming tools its child cannot use. The loop's own
+ * per-name child refusals (`loop:child-readonly` and friends) stay the belt for
+ * a call that asks for something unadvertised.
+ */
+export const CHILD_TOOL_NAMES: readonly ToolName[] = ["read", "search"];
 
 /**
  * Is this wire name one of the twelve? The only honest answer to every
@@ -74,6 +85,15 @@ export type ToolContext = {
   /** Parent's `--debug` sink, forwarded so a child's ladder decisions land on
    * the same log that is being read (children are where surprises hide). */
   debug?: Debug;
+  /**
+   * This run's `--disallowed-tools` refusals, forwarded so they cross the
+   * delegation boundary. A run-scoped refusal is defined as ungrantable — "no
+   * --yolo, remembered rule or human yes" — and a child that could re-read what
+   * the operator filtered out would make that sentence false. Grants
+   * (`--allowed-tools`) are deliberately NOT inherited: delegation buys
+   * authority to nothing the parent did not already have.
+   */
+  disallowedTools?: readonly ToolFilter[];
   /** This run's runId — present when invoked from the loop; lets tools (e.g.
    *  background tasks) write audit entries under the correct run without a
    *  separate plumbing path. */

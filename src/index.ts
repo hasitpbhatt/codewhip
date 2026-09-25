@@ -2657,10 +2657,11 @@ function cmdAgents(): void {
   console.log(`agents: ${agents.length} delegable (read-only subagents; spawn via delegate / delegate_many):`);
   for (const a of agents) {
     const src = BUILTIN_AGENT_NAMES.has(a.name) ? "builtin" : "file";
-    console.log(`  ${a.name.padEnd(12)} [${src}] max_steps=${a.maxSteps}${a.model !== undefined ? ` model=${a.model}` : ""}`);
+    const tools = a.allowed === undefined ? "" : ` tools=${a.allowed.join(",")}`;
+    console.log(`  ${a.name.padEnd(12)} [${src}] max_steps=${a.maxSteps}${tools}${a.model !== undefined ? ` model=${a.model}` : ""}`);
     console.log(`    ${a.description}`);
   }
-  console.log("custom: .codewhip/agents/<name>.md — frontmatter: description (required), model, max_steps (1..25); body = the subagent's system prompt. A file overrides a same-name builtin.");
+  console.log("custom: .codewhip/agents/<name>.md — frontmatter: description (required), model, max_steps (1..25), tools (narrow to read/search), disallowedTools; body = the subagent's system prompt. A file overrides a same-name builtin; any other field is refused by name, not ignored.");
 }
 
 /** Inspect and revoke remembered grants (consent must be revocable). */

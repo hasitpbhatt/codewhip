@@ -168,7 +168,11 @@ export function describeToolFilter(filter: ToolFilter): string {
 /**
  * A subagent's entire authority is read+search, so a run that cannot read
  * cannot delegate: delegation would be reading by proxy. Checked against the
- * disallow list rather than threaded into child runs.
+ * disallow list rather than threaded into child runs — because this predicate
+ * only asks about WHOLE tools, and a child is already born unable to reach a
+ * whole-tool refusal (it inherits the list). The shaped slices are a different
+ * story: those are threaded, so `--disallowed-tools "read:secrets.env"` holds
+ * across the boundary too. See `childFiltersFor` in `src/subagents.ts`.
  */
 export function delegationBlind(filters: readonly ToolFilter[] | undefined): boolean {
   return filtersToolEntirely(filters, "read") || filtersToolEntirely(filters, "search");

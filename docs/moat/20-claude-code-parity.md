@@ -147,8 +147,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
-| `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md`, only `description`/`model`/`max_steps` (`src/subagents.ts`) |
-| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | **GAP-3** | not honoured |
+| `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:169`) |
+| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:141` → `src/tools/registry.ts:288`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:211`), and both are compiled onto one list the child is born with (`src/subagents.ts:298`, `:377`); the other eight are refused BY NAME with their reason (`src/subagents.ts:70`) — no field is ever accepted-and-dropped |
 | `--agents` JSON, `--agent` | **GAP-3** | absent |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
 | Agent view panel, parallel background agents, `SendMessage`, teammates | **GAP-3** | children are synchronous and depth-capped |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 15**, **GAP 44**,
-i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 22, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 16**, **GAP 43**,
+i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 21, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -587,6 +587,48 @@ count stays arithmetic rather than flattering. 15 new tests in
   construction. Cost of the feature is the three numbers riding an existing return
   value — no prompt token is added, so receipts are unchanged at `$0` delta.
 
+Wave 3d (what an agent file may say) moved 1 row from GAP to PARTIAL: the ten
+subagent frontmatter fields. HAVE-or-better unchanged at 43, PARTIAL 15 → 16,
+**GAP 44 → 43, wave 3 22 → 21**. It is scored PARTIAL and not HAVE because two
+of the ten fields are honoured while eight are refused — loudly, with a reason,
+at load time — and "loudly refused" is not "does what Claude does". 9 new tests
+(`src/subagents.test.ts`, `src/frontmatter.test.ts`). Five rulings:
+
+- **`tools:` narrows and cannot widen.** A child's whole authority is read and
+  search by construction, so a file naming `bash` would advertise a promise the
+  harness breaks on the first call; the parse fails instead
+  (`src/subagents.ts:141`). `CHILD_TOOL_NAMES` (`src/tools/types.ts:37`) is now
+  the single list that both that check and the child's spec builder
+  (`src/tools/registry.ts:288`) read — a second copy is how a file starts naming
+  a tool its child cannot use.
+- **Narrowing is expressed as a refusal, not as a second mechanism.**
+  `tools: read` compiles to one whole-tool refusal for `search`
+  (`src/subagents.ts:298`) and joins the child's `disallowedTools` — the same
+  list the operator's `--disallowed-tools` fills. So `toolSpecs` un-advertises
+  the spec and the ladder refuses the call through the path that already existed
+  for both, rather than a frontmatter-only one that could drift.
+- **A field that does nothing is a false sentence in a config file.** `permissionMode`,
+  `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort` and
+  `isolation` are each refused by name with the reason it cannot be honoured
+  (`src/subagents.ts:70`), and an unknown key is refused as unknown, so a typo
+  surfaces the same way. The refusal is not a shrug: `codewhip agents` prints the
+  file as SKIPPED with the line needed to fix it. Accepting-and-dropping
+  `permissionMode: acceptEdits` would have been the friendlier behaviour and the
+  worse one — the author would find out from a child that did not do what the
+  file said.
+- **Inheriting the parent's refusals is not a fixed escape, and is not claimed
+  as one.** Checked honestly: no filter a child could evade is even expressible
+  today, because `read`/`search` take no shape (`src/tool-filter.ts:62`) and a
+  child cannot reach the four shapeful tools. What shipped is the difference
+  between a child honouring the run's refusals *by construction*
+  (`src/loop.ts:1197` → `src/tools/child-run.ts:47` → `src/subagents.ts:377`) and
+  by the accident of that grammar — and the reason `tools:` could be built at all
+  without inventing a second authority path.
+- **Cost is a smaller prompt.** Nothing is added to any system prompt; a
+  narrowed child is sent one spec fewer, so its receipt goes down. The refusal
+  text for an un-honoured field is spent by whoever reads `codewhip agents`, not
+  by a model.
+
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
 wave, and no row is downgraded to close a gap. Completion is claimed only when
@@ -623,9 +665,13 @@ count is the instrument, not the memory of it.
    **closed 2026-09-25** (`src/debug.ts`); `.context`/`.usage`/`.cost` over a
    session ledger **closed 2026-09-25** (`src/session-ledger.ts`,
    `src/loop.ts:1324`) — a PARTIAL row, so the wave-3 GAP pile is untouched.
+   Subagent frontmatter **advanced GAP → PARTIAL 2026-09-25** (`tools` and
+   `disallowedTools` honoured, the other eight refused by name) — GAP 44 → 43,
+   the first wave-3 row to move since task-list blockers.
    Remaining: parallel tool
    exec, vision input, prompt caching, hook events 3→33 with
-   `additionalContext`/`matcher`/`if`, subagent frontmatter,
+   `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus
+   the `.claude/agents/` path itself,
    `AskUserQuestion`, web search tool, worktree isolation, MCP client (with
    ruling), effort/thinking.
 4. **Wave 4 — extensibility and install.** skills, http/agent hook types,

@@ -1,5 +1,5 @@
 import { describe, it } from "node:test";
-import { strictEqual, ok } from "node:assert/strict";
+import { deepStrictEqual, strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,11 +7,13 @@ import { agentLoop } from "./loop.js";
 import { makeFakePort, textTurn, toolTurn } from "./testkit/fakePort.js";
 import {
   BUILTIN_AGENTS,
+  childFiltersFor,
   listAgents,
   parseAgentFile,
   findAgent,
   runChildAgent,
   MAX_DELEGATION_DEPTH,
+  type AgentDef,
 } from "./subagents.js";
 import { toolSpecs } from "./tools/registry.js";
 import { readAuditLog, verifyChain } from "./audit.js";
@@ -42,12 +44,12 @@ describe("subagents", () => {
 
   it("parseAgentFile: malformed sources fail closed", () => {
     ok("error" in parseAgentFile("Bad_Name.md", "---\ndescription: x\n---\nbody"));
-    ok("error" in parseAgentFile("a.md", "no frontmatter here"));
-    ok("error" in parseAgentFile("a.md", "---\ndescription: x\n")); // unclosed
-    ok("error" in parseAgentFile("a.md", "---\n---\nbody")); // missing description
-    ok("error" in parseAgentFile("a.md", "---\ndescription: x\n---\n")); // empty body
-    ok("error" in parseAgentFile("a.md", "---\ndescription: x\nmax_steps: 0\n---\nbody")); // bad steps
-    ok("error" in parseAgentFile("a.md", "---\ndescription: x\nmax_steps: nope\n---\nbody"));
+    ok("error" in parseAgentFile("ab.md", "no frontmatter here"));
+    ok("error" in parseAgentFile("ab.md", "---\ndescription: x\n")); // unclosed
+    ok("error" in parseAgentFile("ab.md", "---\n---\nbody")); // missing description
+    ok("error" in parseAgentFile("ab.md", "---\ndescription: x\n---\n")); // empty body
+    ok("error" in parseAgentFile("ab.md", "---\ndescription: x\nmax_steps: 0\n---\nbody")); // bad steps
+    ok("error" in parseAgentFile("ab.md", "---\ndescription: x\nmax_steps: nope\n---\nbody"));
   });
 
   it("built-ins ship zero-config: explore, review, plan with descriptions", () => {
@@ -94,7 +96,110 @@ describe("subagents", () => {
     ok(!names1.includes("delegate") && !names1.includes("edit") && !names1.includes("bash") && !names1.includes("webfetch") && !names1.includes("todo"));
   });
 
+  it("parseAgentFile: tools narrows what a child is offered, and narrows only", () => {
+    const both = parseAgentFile("scout.md", "---\ndescription: d.\ntools: Read, search\n---\nbody");
+    ok("agent" in both, JSON.stringify(both));
+    deepStrictEqual([...(both.agent.allowed ?? [])], ["read", "search"]);
+    const one = parseAgentFile("ab.md", "---\ndescription: d.\ntools: read\n---\nbody");
+    ok("agent" in one, JSON.stringify(one));
+    deepStrictEqual(one.agent.allowed, ["read"]);
+    // A child has no write, no bash and no network: a file cannot hand it one.
+    const widened = parseAgentFile("ab.md", "---\ndescription: d.\ntools: bash\n---\nbody");
+    ok("error" in widened && widened.error.includes("narrows and never widens"), JSON.stringify(widened));
+    const unknown = parseAgentFile("ab.md", "---\ndescription: d.\ntools: grep\n---\nbody");
+    ok("error" in unknown && unknown.error.includes("unknown tool"), JSON.stringify(unknown));
+    // tools: and disallowedTools: that cancel out would buy a child run with
+    // nothing to do but apologize for itself.
+    const empty = parseAgentFile("ab.md", "---\ndescription: d.\ntools: read\ndisallowedTools: read\n---\nbody");
+    ok("error" in empty && empty.error.includes("nothing to call"), JSON.stringify(empty));
+  });
+
+  it("parseAgentFile: disallowedTools speaks the run-filter grammar", () => {
+    const r = parseAgentFile("ab.md", "---\ndescription: d.\ndisallowedTools: Write, Edit(src/a.ts)\n---\nbody");
+    ok("agent" in r, JSON.stringify(r));
+    deepStrictEqual([...(r.agent.disallowed ?? [])], [
+      { tool: "write", shape: null },
+      { tool: "edit", shape: "src/a.ts" },
+    ]);
+    const bad = parseAgentFile("ab.md", "---\ndescription: d.\ndisallowedTools: read(x)\n---\nbody");
+    ok("error" in bad && bad.error.includes("disallowedTools"), JSON.stringify(bad));
+  });
+
+  it("parseAgentFile: the un-honoured Claude Code fields are refused by name, not ignored", () => {
+    for (const key of ["permissionMode", "skills", "mcpServers", "hooks", "memory", "background", "effort", "isolation"]) {
+      const r = parseAgentFile("ab.md", `---\ndescription: d.\n${key}: anything\n---\nbody`);
+      ok("error" in r, `${key} must be refused, not accepted-and-dropped`);
+      ok(r.error.includes(key) && r.error.includes("not honoured"), `${key}: ${r.error}`);
+    }
+    const typo = parseAgentFile("ab.md", "---\ndescription: d\ncolour: blue\n---\nbody");
+    ok("error" in typo && typo.error.includes("unknown field"), JSON.stringify(typo));
+  });
+
+  it("childFiltersFor: a child is born refusing what its parent refuses", () => {
+    const base = { name: "s", description: "d", systemPrompt: "b", maxSteps: 5 };
+    const parent = [{ tool: "bash" as const, shape: "git *" }];
+    deepStrictEqual(childFiltersFor(base, parent), parent);
+    // Narrowing tools: to read is the same authority as refusing search, so it
+    // arrives as the same kind of entry — one mechanism, not a second one.
+    deepStrictEqual(childFiltersFor({ ...base, allowed: ["read"] }, undefined), [
+      { tool: "search", shape: null },
+    ]);
+    deepStrictEqual(childFiltersFor({ ...base, disallowed: [{ tool: "webfetch", shape: "https://x.com" }] }, parent), [
+      { tool: "bash", shape: "git *" },
+      { tool: "webfetch", shape: "https://x.com" },
+    ]);
+    // A file cannot add a second copy of a refusal the operator already made.
+    const dupe = childFiltersFor({ ...base, allowed: ["read"], disallowed: [{ tool: "search", shape: null }] }, [
+      { tool: "search", shape: null },
+    ]);
+    deepStrictEqual(dupe, [{ tool: "search", shape: null }]);
+    ok(childFiltersFor(base, parent) !== parent, "the parent's array is never handed to a child to mutate");
+    const typed: AgentDef = { ...base, allowed: ["read", "search"] };
+    deepStrictEqual(childFiltersFor(typed, undefined), []);
+  });
+
+  it("a tools:-narrowed child is offered one spec, and its refusal is enforced in the child's own run", async () => {
+    const runCwd = tmpDir("codewhip-sub-frontmatter-");
+    try {
+      fs.mkdirSync(path.join(runCwd, ".codewhip", "agents"), { recursive: true });
+      fs.writeFileSync(
+        path.join(runCwd, ".codewhip", "agents", "peeker.md"),
+        "---\ndescription: Reads one file, nothing else.\ntools: Read\n---\nYou are peeker."
+      );
+      fs.writeFileSync(
+        path.join(runCwd, ".codewhip", "agents", "nosearch.md"),
+        "---\ndescription: Cannot search.\ndisallowedTools: Search\n---\nYou are nosearch."
+      );
+      const { port, record, messagesSeen } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "peeker", task: "peek at the repo" })),
+        textTurn("peeked"),
+        toolTurn("delegate", JSON.stringify({ agent: "nosearch", task: "find the flag" })),
+        toolTurn("search", JSON.stringify({ pattern: "flag" })),
+        textTurn("searching is refused for me"),
+        textTurn("both children reported"),
+      ]);
+      const r = await agentLoop({
+        prompt: "delegate twice", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 8, yolo: false,
+        stdinIsTTY: true, port, askUser: stubAsk,
+      });
+      strictEqual(r.error, undefined);
+      // Call order: parent, peeker child, parent, nosearch child, its summary, parent.
+      strictEqual(record[1]?.toolCount, 1, "a tools: read child must not be advertised search either");
+      const refused = messagesSeen
+        .flat()
+        .filter((m) => m.role === "tool")
+        .map((m) => String(m.content));
+      ok(
+        refused.some((s) => s.includes("--disallowed-tools search")),
+        `the child's own filter must fire inside its run: ${refused.join(" | ")}`
+      );
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
   it("delegate: child runs, audit chain carries the child runId, usage folds into the receipt", async () => {
+
     const runCwd = tmpDir("codewhip-sub-delegate-");
     fs.writeFileSync(path.join(runCwd, "f.txt"), "hello\n");
     try {
@@ -458,6 +563,6 @@ describe("subagents", () => {
 
   it("parseAgentFile: prompt body over the cap is rejected", () => {
     const big = "x".repeat(8001);
-    ok("error" in parseAgentFile("a.md", `---\ndescription: x\n---\n${big}`));
+    ok("error" in parseAgentFile("ab.md", `---\ndescription: x\n---\n${big}`));
   });
 });

@@ -908,8 +908,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         continue;
       }
       // A subagent's whole authority is read+search, so a run that filtered
-      // either out cannot delegate — that would be reading by proxy. Checked
-      // here rather than threaded into child runs.
+      // either out cannot delegate — that would be reading by proxy. The
+      // whole-tool case is refused here; the shaped ones are threaded into the
+      // child (`childFiltersFor`), because a child that could re-read what the
+      // operator filtered out would make "no grant lifts this" false.
       if (
         (def.name === "delegate" || def.name === "delegate_many") &&
         delegationBlind(args.disallowedTools)
@@ -1192,6 +1194,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 rotationModels: args.models,
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
+                disallowedTools: args.disallowedTools,
                 debug: dbg,
                 parentRunId: runId,
                 runId,
