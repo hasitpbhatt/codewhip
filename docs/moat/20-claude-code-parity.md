@@ -553,10 +553,12 @@ count is the instrument, not the memory of it.
    `query()`/`tool()`/`canUseTool`, on top of the host-tool substrate in
    `src/tools/registry.ts` and the structured ask in `src/loop.ts`). **Wave 2
    is complete: no row is left in it.**
-3. **Wave 3 — agent capability.** parallel tool exec, vision input, prompt
-   caching, hook events 3→33 with `additionalContext`/`matcher`/`if`,
-   subagent frontmatter, task-list tool, `AskUserQuestion`, web search tool,
-   worktree isolation, MCP client (with ruling), effort/thinking, `--debug`.
+3. **Wave 3 — agent capability.** task-list blockers **closed 2026-09-25**
+   (`src/tools/todo-store.ts`, `src/tools/todo.ts`). Remaining: parallel tool
+   exec, vision input, prompt caching, hook events 3→33 with
+   `additionalContext`/`matcher`/`if`, subagent frontmatter,
+   `AskUserQuestion`, web search tool, worktree isolation, MCP client (with
+   ruling), effort/thinking, `--debug`.
 4. **Wave 4 — extensibility and install.** skills, http/agent hook types,
    `--bare`, command `!cmd`/`@file`, memory imports and rules dirs,
    NotebookEdit, OS sandbox profiles, per-turn checkpoints + transcript rewind,

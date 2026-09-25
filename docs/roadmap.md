@@ -37,17 +37,18 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
 - [x] **Verdict crank** — verdicts (the claimed compounding moat) were written only by manual CLI call. `codewhip verdict --auto <prefix>` proposes accepted/edited/reverted from checkpoint manifests vs the tree (git cross-check, confidence + evidence printed) and records on one keypress; the judgment stays human-attached. *(shipped 2026-09-18)*
 - [x] **Tool-layer honesty fixes** — `read` refuses binary files (null-byte sniff) instead of feeding mojibake to the model; `edit`'s whitespace-insensitive fallback preserves the file's dominant EOL (CRLF files no longer silently flip to mixed endings); `search` skips `target`/`vendor`/`__pycache__`/`build` so build trees stop eating the 2,000-file budget. *(shipped 2026-09-18)*
 - [x] **Torvalds architecture review (5 simulations)** — converged verdict: no full rearchitect; core (ChatPort seam, loop ledgers, chain math, ladder precedence) KEEP. Fixed same pass: the src/lib phantom product deleted (placeholder proxy, broken Workers path, drifted routers), memo redaction bypass, memo staleness after bash, denylist spelling escapes (git.exe/quote-splice/cmd.exe/iex/braces), audit lock spin < stale threshold + silent entry loss (now loud, `audit_dropped` on the outcome), signed genesis marker bounding the pre-key prefix, rotation×/model foreign-id bug (candidates pre-resolved on the head provider), Windows process-tree kill, model-aware compaction (verified `contextWindow` + CJK-weighted estimate + context-overflow 400s join rotation). Deferred with rationale: jail TOCTOU, key rotation, jsonl contract consolidation, parallel tool exec, audit tail caching. *(2026-09-18 — docs/moat/torvalds-architecture-review.md)*
-- [x] **Todo tool** — `todo` list/replace/update over `.codewhip/todos.json`, harness-state allow (`default:todo:allow`), child-denied, redacted at save. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
+- [x] **Todo tool** — `todo` list/get/replace/update over `.codewhip/todos.json`, harness-state allow (`default:todo:allow`), child-denied, redacted at save. Per-item fields (`description`/`activeForm`/`owner`) and `blocks`/`blockedBy` edges that gate claiming — a blocked item cannot be taken, cycles and dangling edges are refused — shipped 2026-09-25 as parity wave 3a. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [x] **Custom slash commands** — `.codewhip/commands/*.md` + `$ARGUMENTS`, REPL `.help` + error-on-unknown, one-shot exact-match expansion. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
 - [x] **Hooks** — `PreToolUse/PostToolUse/Stop` from self-protected `hooks.json`, fail-open-on-infra-failure, redaction-downstream, observe-only Stop. Ruling: `docs/moat/19-qol-parity.md`. *(shipped 2026-09-21)*
-- [x] **Claude Code parity program — waves 1–2 of 5.** Row-level build order
+- [x] **Claude Code parity program — waves 1–2 of 5 closed, wave 3 open.** Row-level build order
   lives in `docs/moat/20-claude-code-parity.md` (the matrix counts itself:
   `npm run parity`); this line is the pointer, not a second plan. Wave 1
   (headless scripting) and Wave 2 (session naming/branching, run-scoped tool
   filters, prompt surface, the permission-mode ladder, multi-root jail,
   `--json-schema`, `--input-format stream-json`, and the programmatic entry
-  `src/sdk.ts`) closed 2026-09-24 — 40 HAVE/ALIAS, 16 PARTIAL, 46 GAP
-  (**39.2%**). Next is Wave 3: agent capability, 24 rows, led by parallel tool
+  `src/sdk.ts`) closed 2026-09-24. Wave 3 (agent capability) opened 2026-09-25
+  with per-item tasks whose blockers gate claiming: 41 HAVE/ALIAS,
+  16 PARTIAL, 45 GAP (**40.2%**), 23 rows left in the wave, led by parallel tool
   exec and hook events 3→33. No row is closed by downgrading it, and the MCP
   client row carries its own ruling before it lands.
 - [ ] **Pick the 90-day frame** — verifiable team delegation vs honest $0 on-ramp; running both produces a brand war (trust pitch vs anonymous free relays). Decision + analysis: `docs/moat/10-competitive-reality.md`.

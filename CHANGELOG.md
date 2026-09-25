@@ -268,6 +268,28 @@ parse time there rather than silently doing nothing.
   unchanged); Python and any other language drive the same engine over NDJSON.
   11 tests (`src/sdk.test.ts`), plus a live run of the built binary on the
   keyless `pollinations:openai-fast` route at $0.0000.
+- **A task list whose blockers bite.** Parity-matrix Wave 3a
+  (`docs/moat/20-claude-code-parity.md`): the `TaskCreate/Get/List/Update` row.
+  `todo` is no longer one flat list — items carry `description` (what finishing
+  means), `activeForm` (the label while in progress), `owner`, and
+  `blocks`/`blockedBy` edges that either side may write because both are stored.
+  The edges gate rather than decorate: claiming a blocked item is refused, an
+  edge naming an id outside the list is refused instead of dropped (a dropped
+  blocker is a grant), a cycle is refused with its path printed, and `blocked`
+  is derived from the graph instead of stored next to it where it could disagree.
+  Every write re-passes the validator — an `update` reads the store, flips one
+  status and writes the whole list back — so the rules hold for the file on
+  disk, not for whichever call happened to be well-formed. `get` is the verb
+  that makes a shared list safe to pick up: it prints the contract, the owner,
+  both edge directions with the far end's status, and what is ready to claim.
+  Split along its own seam to keep the tool under its line bar (graph rules in
+  `src/tools/todo-store.ts`, verbs in `src/tools/todo.ts`), each action still
+  its own policy subject so `deny todo:get` compiles without losing the plan.
+  13 new tests (`src/tools/todo.test.ts`) with the 9 existing kept as a
+  compatibility contract — a store written by an older build still loads.
+  Nothing in the cost path moved: same models, same meter, same receipt line;
+  the prompt is 785 characters (≈200 tokens) longer for the new spec and
+  guidance, which is the whole price of the feature.
 
 ### Changed
 
