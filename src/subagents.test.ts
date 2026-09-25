@@ -7,9 +7,13 @@ import { agentLoop } from "./loop.js";
 import { makeFakePort, textTurn, toolTurn } from "./testkit/fakePort.js";
 import {
   BUILTIN_AGENTS,
-  childFiltersFor,
+  CHILD_DEFAULT_MAX_STEPS,
+  MAX_AGENTS_JSON_CHARS,
+  agentFilters,
   listAgents,
+  mainThreadTurn,
   parseAgentFile,
+  parseAgentsJson,
   findAgent,
   runChildAgent,
   MAX_DELEGATION_DEPTH,
@@ -140,27 +144,27 @@ describe("subagents", () => {
     ok("error" in typo && typo.error.includes("unknown field"), JSON.stringify(typo));
   });
 
-  it("childFiltersFor: a child is born refusing what its parent refuses", () => {
+  it("agentFilters: a child is born refusing what its parent refuses", () => {
     const base = { name: "s", description: "d", systemPrompt: "b", maxSteps: 5 };
     const parent = [{ tool: "bash" as const, shape: "git *" }];
-    deepStrictEqual(childFiltersFor(base, parent), parent);
+    deepStrictEqual(agentFilters(base, parent), parent);
     // Narrowing tools: to read is the same authority as refusing search, so it
     // arrives as the same kind of entry — one mechanism, not a second one.
-    deepStrictEqual(childFiltersFor({ ...base, allowed: ["read"] }, undefined), [
+    deepStrictEqual(agentFilters({ ...base, allowed: ["read"] }, undefined), [
       { tool: "search", shape: null },
     ]);
-    deepStrictEqual(childFiltersFor({ ...base, disallowed: [{ tool: "webfetch", shape: "https://x.com" }] }, parent), [
+    deepStrictEqual(agentFilters({ ...base, disallowed: [{ tool: "webfetch", shape: "https://x.com" }] }, parent), [
       { tool: "bash", shape: "git *" },
       { tool: "webfetch", shape: "https://x.com" },
     ]);
     // A file cannot add a second copy of a refusal the operator already made.
-    const dupe = childFiltersFor({ ...base, allowed: ["read"], disallowed: [{ tool: "search", shape: null }] }, [
+    const dupe = agentFilters({ ...base, allowed: ["read"], disallowed: [{ tool: "search", shape: null }] }, [
       { tool: "search", shape: null },
     ]);
     deepStrictEqual(dupe, [{ tool: "search", shape: null }]);
-    ok(childFiltersFor(base, parent) !== parent, "the parent's array is never handed to a child to mutate");
+    ok(agentFilters(base, parent) !== parent, "the parent's array is never handed to a child to mutate");
     const typed: AgentDef = { ...base, allowed: ["read", "search"] };
-    deepStrictEqual(childFiltersFor(typed, undefined), []);
+    deepStrictEqual(agentFilters(typed, undefined), []);
   });
 
   it("a tools:-narrowed child is offered one spec, and its refusal is enforced in the child's own run", async () => {
@@ -569,5 +573,177 @@ describe("subagents", () => {
   it("parseAgentFile: prompt body over the cap is rejected", () => {
     const big = "x".repeat(8001);
     ok("error" in parseAgentFile("ab.md", `---\ndescription: x\n---\n${big}`));
+  });
+});
+
+/** Wave 3f: one config, a second shape. `--agents` is the JSON spelling of the
+ * same roster, and `--agent` puts an entry on the main thread. */
+describe("--agents JSON roster, and --agent on the main thread", () => {
+  const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    description: "Flagged scout.",
+    prompt: "You are the flagged scout.",
+    ...over,
+  });
+  const json = (over: Record<string, unknown> = {}): string => JSON.stringify({ scout: entry(over) });
+
+  it("a minimal entry becomes a full AgentDef", () => {
+    const r = parseAgentsJson(json());
+    deepStrictEqual(r.errors, []);
+    deepStrictEqual(r.agents, [{
+      name: "scout",
+      description: "Flagged scout.",
+      systemPrompt: "You are the flagged scout.",
+      maxSteps: CHILD_DEFAULT_MAX_STEPS,
+    }]);
+  });
+
+  it("every field works, in either spelling of the budget and either shape of the lists", () => {
+    const full = parseAgentsJson(json({
+      model: "m2",
+      maxTurns: 4,
+      tools: ["Read"],
+      disallowedTools: ["webfetch(https://x.com)"],
+    }));
+    deepStrictEqual(full.errors, []);
+    const a = full.agents[0] as AgentDef;
+    strictEqual(a.model, "m2");
+    strictEqual(a.maxSteps, 4);
+    // A `Read` in JSON meets the same narrow-only child set as `read:` in a file.
+    deepStrictEqual(a.allowed, ["read"]);
+    deepStrictEqual(a.disallowed, [{ tool: "webfetch", shape: "https://x.com" }]);
+    strictEqual(parseAgentsJson(json({ max_steps: 4 })).agents[0]?.maxSteps, 4);
+    const strings = parseAgentsJson(json({ tools: "read, search", disallowedTools: "WebFetch" }));
+    deepStrictEqual(strings.errors, []);
+    deepStrictEqual(strings.agents[0]?.allowed, ["read", "search"]);
+  });
+
+  it("maxTurns and max_steps disagreeing is a refusal, not a coin flip", () => {
+    const r = parseAgentsJson(json({ maxTurns: 4, max_steps: 5 }));
+    strictEqual(r.agents.length, 0);
+    ok(r.errors[0]?.includes("disagree"), JSON.stringify(r.errors));
+    ok("error" in parseAgentFile("ab.md", "---\ndescription: x\nmaxTurns: 40\n---\nbody"));
+  });
+
+  it("the fields this harness cannot honour are refused BY NAME, as in a file", () => {
+    for (const key of ["permissionMode", "skills", "mcpServers", "hooks", "memory", "background", "effort", "isolation"]) {
+      const r = parseAgentsJson(json({ [key]: true }));
+      strictEqual(r.agents.length, 0, key);
+      ok(r.errors[0]?.includes(`${key} is not honoured`), `${key}: ${JSON.stringify(r.errors)}`);
+    }
+    ok(parseAgentsJson(json({ colour: "blue" })).errors[0]?.includes('unknown field "colour"'));
+    const widened = parseAgentsJson(json({ tools: ["bash"] }));
+    ok(widened.errors[0]?.includes("narrows and never widens"), JSON.stringify(widened.errors));
+    const emptied = parseAgentsJson(json({ tools: ["read"], disallowedTools: ["read"] }));
+    ok(emptied.errors[0]?.includes("nothing to call"), JSON.stringify(emptied.errors));
+  });
+
+  it("one bad entry is reported as itself and the rest of the roster still loads", () => {
+    const r = parseAgentsJson(JSON.stringify({
+      good: entry(),
+      "Bad Name": entry(),
+      nodesc: { prompt: "x" },
+      noprompt: { description: "d." },
+    }));
+    deepStrictEqual(r.agents.map((a) => a.name), ["good"]);
+    strictEqual(r.errors.length, 3);
+    ok(r.errors.some((e) => e.includes("invalid agent name")), JSON.stringify(r.errors));
+    ok(r.errors.some((e) => e.includes("description required")), JSON.stringify(r.errors));
+    ok(r.errors.some((e) => e.includes("prompt required")), JSON.stringify(r.errors));
+  });
+
+  it("the payload is a JSON object of entries, within one cap, or nothing at all", () => {
+    for (const bad of ["not json", "[]", "null", '"scout"', "42", '{"s":"body"}']) {
+      const r = parseAgentsJson(bad);
+      strictEqual(r.agents.length, 0, bad);
+      strictEqual(r.errors.length, 1, bad);
+    }
+    strictEqual(parseAgentsJson("{}").agents.length, 0);
+    deepStrictEqual(parseAgentsJson("{}").errors, []);
+    const oversize = parseAgentsJson(" ".repeat(MAX_AGENTS_JSON_CHARS + 1));
+    ok(oversize.errors[0]?.includes("over the"), JSON.stringify(oversize.errors));
+    const longPrompt = parseAgentsJson(json({ prompt: "p".repeat(8001) }));
+    ok(longPrompt.errors[0]?.includes("prompt too long"), JSON.stringify(longPrompt.errors));
+  });
+
+  it("precedence: --agents outranks a file, a file outranks a built-in", () => {
+    const cwd = tmpDir("codewhip-agents-json-");
+    try {
+      fs.mkdirSync(path.join(cwd, ".codewhip", "agents"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, ".codewhip", "agents", "explore.md"),
+        "---\ndescription: File explore.\n---\nFile explore body."
+      );
+      const flagged = parseAgentsJson(JSON.stringify({
+        explore: entry(),
+        "fresh-one": entry({ description: "Only on the flag." }),
+      }));
+      deepStrictEqual(flagged.errors, []);
+      const withFlag = findAgent(cwd, "explore", flagged.agents);
+      strictEqual(withFlag?.description, "Flagged scout.", "the flag is the operator speaking to THIS run");
+      strictEqual(findAgent(cwd, "explore")?.description, "File explore.", "without the flag the file still overrides the built-in");
+      strictEqual(findAgent(cwd, "plan", flagged.agents)?.name, "plan", "built-ins survive an --agents roster");
+      strictEqual(listAgents(cwd, flagged.agents).filter((a) => a.name === "explore").length, 1, "a name means one agent");
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("mainThreadTurn: prompt appends, refusals compile once, model beats a route and loses to --model", () => {
+    const def: AgentDef = {
+      name: "s", description: "d", systemPrompt: "Body.", maxSteps: 5, model: "m2", allowed: ["read"],
+    };
+    const routed = mainThreadTurn(def, { model: "routed", modelExplicit: false, disallowedTools: [] });
+    strictEqual(routed.append, "Body.");
+    strictEqual(routed.model, "m2");
+    strictEqual(routed.rotationOff, true);
+    // `tools` can only name the child set, so on a main thread it refuses
+    // search and NOTHING else — edit/write/bash stay --disallowed-tools' turf.
+    deepStrictEqual(routed.disallowedTools, [{ tool: "search", shape: null }]);
+    const explicit = mainThreadTurn(def, { model: "chosen", modelExplicit: true, disallowedTools: [] });
+    strictEqual(explicit.model, "chosen");
+    strictEqual(explicit.rotationOff, false);
+    const plain = mainThreadTurn(
+      { ...def, model: undefined, allowed: undefined },
+      { model: "m", modelExplicit: false, disallowedTools: [{ tool: "bash", shape: "git *" }] }
+    );
+    strictEqual(plain.model, "m");
+    deepStrictEqual(plain.disallowedTools, [{ tool: "bash", shape: "git *" }]);
+  });
+
+  it("a --agents entry is advertised to the parent and summonable by delegate", async () => {
+    const runCwd = tmpDir("codewhip-agents-flag-");
+    try {
+      const flagged = parseAgentsJson(JSON.stringify({
+        flagged: { description: "Flagged only.", prompt: "You are the flagged child." },
+      }));
+      deepStrictEqual(flagged.errors, []);
+      const { port, messagesSeen } = makeFakePort([
+        toolTurn("delegate", JSON.stringify({ agent: "flagged", task: "go" })),
+        textTurn("flagged report"),
+        textTurn("done"),
+      ]);
+      const r = await agentLoop({
+        prompt: "delegate to the flagged agent", model: "m", label: "nvidia", cwd: runCwd, maxSteps: 6,
+        yolo: false, stdinIsTTY: true, port, askUser: stubAsk, agents: flagged.agents,
+      });
+      strictEqual(r.error, undefined);
+      ok(
+        String(messagesSeen[0]?.[0]?.content).includes("flagged: Flagged only."),
+        "the flag roster rides the parent's system prompt like a file's does"
+      );
+      const childSystem = messagesSeen[1]?.find((msg) => msg.role === "system");
+      ok(
+        String(childSystem?.content).startsWith("You are the flagged child."),
+        `the entry's prompt is the child's base: ${String(childSystem?.content).slice(0, 80)}`
+      );
+      ok(r.text.includes("done"));
+      const backToParent = messagesSeen[2]?.filter((msg) => msg.role === "tool").map((msg) => String(msg.content)) ?? [];
+      ok(
+        backToParent.some((s) => s.includes("flagged report")),
+        `the child's report comes back as a tool result: ${backToParent.join(" | ")}`
+      );
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
   });
 });

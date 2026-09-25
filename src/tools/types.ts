@@ -2,6 +2,7 @@ import type { ChatPort } from "../provider-port.js";
 import type { UsageBucket } from "../outcomes.js";
 import type { Debug } from "../debug.js";
 import type { ToolFilter } from "../tool-filter.js";
+import type { AgentDef } from "../subagents.js";
 
 /**
  * Every tool name, as data — the union is derived from this list, so a new
@@ -118,6 +119,13 @@ export type ToolContext = {
    * is what makes the tool's refusal the honest answer rather than a hang.
    */
   askUserQuestion?: AskUserQuestion;
+  /**
+   * The `--agents` roster: entries the operator named on the command line for
+   * THIS run. Both delegation tools resolve a name through built-ins →
+   * `.codewhip/agents/*.md` → this list, so a flag outranks a committed file
+   * and a name still means exactly one agent.
+   */
+  agents?: readonly AgentDef[];
   /** This run's runId — present when invoked from the loop; lets tools (e.g.
    *  background tasks) write audit entries under the correct run without a
    *  separate plumbing path. */

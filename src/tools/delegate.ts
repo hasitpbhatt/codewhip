@@ -50,7 +50,7 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
   if (!canDelegate(ctx.depth)) {
     return { ok: false, output: "delegate: subagents cannot delegate (depth cap)" };
   }
-  const agent = findAgent(ctx.cwd, args.agent);
+  const agent = findAgent(ctx.cwd, args.agent, ctx.agents);
   if (agent === null) {
     return { ok: false, output: `delegate: unknown agent "${args.agent}"` };
   }

@@ -17,7 +17,7 @@ import type { PermissionMode } from "./settings.js";
 import { jailPath } from "./tools/jail.js";
 import { captureBefore, saveCheckpoint } from "./checkpoints.js";
 import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./compact.js";
-import { listAgentsWithErrors } from "./subagents.js";
+import { listAgentsWithErrors, type AgentDef } from "./subagents.js";
 import { MAX_REPAIRS, repairNote, structuredInstruction, structuredTurn } from "./structured.js";
 import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
 import { NOOP_DEBUG, type Debug } from "./debug.js";
@@ -211,6 +211,13 @@ export type LoopArgs = {
   depth?: number;
   /** Child system prompt override (subagent bodies). Default: the main SYSTEM_PROMPT. */
   systemPrompt?: string;
+  /**
+   * The `--agents` roster — extra entries that outrank `.codewhip/agents/*.md`
+   * for this run. It reaches both the advertised roster and the delegation
+   * tools' name lookup, so a flag-scoped agent is summonable by `delegate`
+   * exactly as a file one is.
+   */
+  agents?: readonly AgentDef[];
   /** Set on child runs: the delegating parent's runId (outcomes attribution —
    * child spend is folded into the parent's record; aggregators de-dup on this). */
   parentRunId?: string;
@@ -416,7 +423,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
     // broken agent file is surfaced, never swallowed silently (emitted once
     // `emit` exists, right after the transcript seed). Roster is capped:
     // a pile of agent files is a per-turn token cost compaction can't touch.
-    const { agents, errors } = listAgentsWithErrors(args.cwd);
+    const { agents, errors } = listAgentsWithErrors(args.cwd, args.agents);
     agentFileErrors = errors;
     roster = agents.slice(0, MAX_ROSTER).map((a) => `- ${a.name}: ${a.description}`).join("\n");
   }
@@ -929,7 +936,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // A subagent's whole authority is read+search, so a run that filtered
       // either out cannot delegate — that would be reading by proxy. The
       // whole-tool case is refused here; the shaped ones are threaded into the
-      // child (`childFiltersFor`), because a child that could re-read what the
+      // child (`agentFilters`), because a child that could re-read what the
       // operator filtered out would make "no grant lifts this" false.
       if (
         (def.name === "delegate" || def.name === "delegate_many") &&
@@ -1214,6 +1221,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
                 disallowedTools: args.disallowedTools,
+                agents: args.agents,
                 ...(args.askUserQuestion === undefined ? {} : { askUserQuestion: args.askUserQuestion }),
                 debug: dbg,
                 parentRunId: runId,

@@ -28,6 +28,9 @@ import { parseFlatFrontmatter } from "./frontmatter.js";
  * Fields: `description` (required), `model`, `max_steps`, `tools` (narrow-only,
  * over a child's read+search), `disallowedTools` (the run-filter grammar).
  * Every other field is refused by name rather than ignored — see REFUSED_FIELDS.
+ * `--agents '<json>'` is the same config in JSON (`prompt` for the body,
+ * `maxTurns` beside `max_steps`) and outranks both files and builtins, because
+ * a flag is the operator speaking to THIS run.
  */
 
 export const CHILD_DEFAULT_MAX_STEPS = 10;
@@ -160,6 +163,178 @@ function parseToolsField(fileName: string, raw: string): { allowed: ToolName[] }
 }
 
 /**
+ * The two checks every roster source shares, whatever shape the entry arrived
+ * in: a prompt that cannot be sent, and a narrowing so tight the child has
+ * nothing to call. A child with no tools is a run that can only apologize, and
+ * `tools: read` beside `disallowedTools: read` is an entry that contradicts
+ * itself — say so when the entry is read, not a delegate call later that burns
+ * the child's whole budget discovering it.
+ */
+function entryProblems(
+  id: string,
+  body: string,
+  allowed: readonly ToolName[] | undefined,
+  disallowed: readonly ToolFilter[] | undefined
+): string | null {
+  const offered = (allowed ?? CHILD_TOOL_NAMES).filter((n) => !filtersToolEntirely(disallowed, n));
+  if (offered.length === 0) return `${id}: tools and disallowedTools together leave the child with nothing to call`;
+  if (body.length === 0) return `${id}: empty prompt`;
+  if (body.length > MAX_BODY_CHARS) return `${id}: prompt too long (${body.length} chars, max ${MAX_BODY_CHARS})`;
+  return null;
+}
+
+/** Cap on the `--agents` payload: it arrives on the command line, so an
+ * unbounded one is an argv-size failure, not a policy question. */
+export const MAX_AGENTS_JSON_CHARS = 64_000;
+/** The fields a JSON entry takes — the file type's fields, in the spelling a
+ * JSON config uses (`prompt` for the body, `maxTurns` beside `max_steps`). */
+const AGENT_JSON_FIELDS = ["description", "prompt", "model", "maxTurns", "max_steps", "tools", "disallowedTools"];
+
+/** Both `tools` and `disallowedTools` accept a JSON array or one comma string. */
+function asStringList(value: unknown): string[] | undefined {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return value as string[];
+  return undefined;
+}
+
+/**
+ * Parse the `--agents` payload: `{"<name>": { description, prompt, model,
+ * maxTurns, tools, disallowedTools }}`. One config in two shapes, so the RULES
+ * are the file parser's — same name grammar, same narrow-only `tools`, same
+ * filter grammar for `disallowedTools`, and the same refused-by-name answers
+ * for the eight fields this harness cannot honour. What differs is only the
+ * spelling of the two fields JSON idiom insists on. Entries that fail are
+ * reported per entry, never guessed at.
+ */
+export function parseAgentsJson(raw: string): { agents: AgentDef[]; errors: string[] } {
+  if (raw.length > MAX_AGENTS_JSON_CHARS) {
+    return { agents: [], errors: [`--agents is ${raw.length} chars, over the ${MAX_AGENTS_JSON_CHARS} cap`] };
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(raw);
+  } catch (err) {
+    return { agents: [], errors: [`--agents is not valid JSON: ${err instanceof Error ? err.message : "error"}`] };
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+    return { agents: [], errors: ['--agents must be one JSON object: {"<name>": { "description": …, "prompt": … }}'] };
+  }
+  const agents: AgentDef[] = [];
+  const errors: string[] = [];
+  for (const [name, value] of Object.entries(doc)) {
+    const at = `--agents "${name}"`;
+    if (!NAME_RX.test(name)) {
+      errors.push(`${at}: invalid agent name (a lowercase letter, then 1..32 of [a-z0-9_-] — the same rule as an agent filename)`);
+      continue;
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      errors.push(`${at}: entry must be an object (${AGENT_JSON_FIELDS.join(", ")})`);
+      continue;
+    }
+    const entry = value as Record<string, unknown>;
+    let refused: string | null = null;
+    for (const key of Object.keys(entry)) {
+      if ((AGENT_JSON_FIELDS as readonly string[]).includes(key)) continue;
+      const why = REFUSED_FIELDS[key];
+      if (refused === null) {
+        refused = why !== undefined ? `${key} is not honoured — ${why}` : `unknown field "${key}" (an entry takes ${AGENT_JSON_FIELDS.join(", ")})`;
+      }
+    }
+    if (refused !== null) {
+      errors.push(`${at}: ${refused}`);
+      continue;
+    }
+    const description = entry["description"];
+    if (typeof description !== "string" || description.length === 0 || description.length > 200) {
+      errors.push(`${at}: description required (1..200 chars)`);
+      continue;
+    }
+    const prompt = entry["prompt"];
+    if (typeof prompt !== "string") {
+      errors.push(`${at}: prompt required (the child's system prompt, 1..${MAX_BODY_CHARS} chars)`);
+      continue;
+    }
+    const turns = entry["maxTurns"] ?? entry["max_steps"];
+    if (turns !== undefined && typeof turns !== "number" && typeof turns !== "string") {
+      errors.push(`${at}: maxTurns must be an integer 1..${CHILD_MAX_STEPS_CAP}`);
+      continue;
+    }
+    let maxSteps = CHILD_DEFAULT_MAX_STEPS;
+    if (turns !== undefined) {
+      const n = Number(turns);
+      if (!Number.isInteger(n) || n < 1 || n > CHILD_MAX_STEPS_CAP) {
+        errors.push(`${at}: maxTurns must be an integer 1..${CHILD_MAX_STEPS_CAP}`);
+        continue;
+      }
+      maxSteps = n;
+    }
+    if (entry["maxTurns"] !== undefined && entry["max_steps"] !== undefined && entry["maxTurns"] !== entry["max_steps"]) {
+      errors.push(`${at}: maxTurns and max_steps disagree (${String(entry["maxTurns"])} vs ${String(entry["max_steps"])}) — say one thing`);
+      continue;
+    }
+    const model = entry["model"];
+    if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
+      errors.push(`${at}: model must be a non-empty string`);
+      continue;
+    }
+    let allowed: readonly ToolName[] | undefined;
+    const toolsRaw = entry["tools"];
+    if (toolsRaw !== undefined) {
+      const list = asStringList(toolsRaw);
+      if (list === undefined) {
+        errors.push(`${at}: tools must be an array of names or one comma-separated string`);
+        continue;
+      }
+      const parsed = parseToolsField(at, list.join(","));
+      if ("error" in parsed) {
+        errors.push(parsed.error);
+        continue;
+      }
+      allowed = parsed.allowed;
+    }
+    let disallowed: readonly ToolFilter[] | undefined;
+    const disallowedRaw = entry["disallowedTools"];
+    if (disallowedRaw !== undefined) {
+      const list = asStringList(disallowedRaw);
+      if (list === undefined) {
+        errors.push(`${at}: disallowedTools must be an array of filters or one comma-separated string`);
+        continue;
+      }
+      const filters: ToolFilter[] = [];
+      let bad: string | null = null;
+      for (const item of list) {
+        const parsed = parseToolFilterList(lowerToolTokens(item));
+        if (parsed.ok === false) {
+          bad = `${at}: disallowedTools — ${parsed.error}`;
+          break;
+        }
+        filters.push(...parsed.filters);
+      }
+      if (bad !== null) {
+        errors.push(bad);
+        continue;
+      }
+      disallowed = filters;
+    }
+    const problem = entryProblems(at, prompt, allowed, disallowed);
+    if (problem !== null) {
+      errors.push(problem);
+      continue;
+    }
+    agents.push({
+      name,
+      description,
+      systemPrompt: prompt,
+      maxSteps,
+      ...(model === undefined ? {} : { model: (model as string).trim() }),
+      ...(allowed === undefined ? {} : { allowed }),
+      ...(disallowed === undefined ? {} : { disallowed }),
+    });
+  }
+  return { agents: agents.sort((a, b) => a.name.localeCompare(b.name)), errors };
+}
+
+/**
  * Parse one `.codewhip/agents/<name>.md` source. Flat frontmatter only
  * (`description`, optional `model`, `max_steps`, `tools`, `disallowedTools`);
  * the body is the child system prompt. Any other field is refused by name.
@@ -214,20 +389,10 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
     if (parsed.ok === false) return { error: `${fileName}: disallowedTools — ${parsed.error}` };
     disallowed = parsed.filters;
   }
-  // A child with no tools is a run that can only apologize, and `tools: read`
-  // beside `disallowedTools: read` is a file that contradicts itself. Say so at
-  // parse time — the alternative is a delegate call that burns the child's
-  // whole budget discovering it.
-  const offered = (allowed ?? CHILD_TOOL_NAMES).filter((n) => !filtersToolEntirely(disallowed, n));
-  if (offered.length === 0) {
-    return { error: `${fileName}: tools and disallowedTools together leave the child with nothing to call` };
-  }
-  if (body.length === 0) {
-    return { error: `${fileName}: empty prompt body` };
-  }
-  if (body.length > MAX_BODY_CHARS) {
-    return { error: `${fileName}: prompt body too long (${body.length} chars, max ${MAX_BODY_CHARS})` };
-  }
+  // A child with no tools is a run that can only apologize, and a body that
+  // cannot be sent is not an agent. Both sources share that one check.
+  const problem = entryProblems(fileName, body, allowed, disallowed);
+  if (problem !== null) return { error: problem };
   return {
     agent: {
       name,
@@ -241,15 +406,25 @@ export function parseAgentFile(fileName: string, raw: string): { agent: AgentDef
   };
 }
 
-/** Built-ins plus `.codewhip/agents/*.md` (files override same-name builtins), name-sorted. */
-export function listAgents(cwd: string): AgentDef[] {
-  return listAgentsWithErrors(cwd).agents;
+/**
+ * The roster for a run: built-ins, then `.codewhip/agents/*.md`, then the
+ * `--agents` flag (`extra`, last because the most specific instruction on the
+ * command line outranks a file someone else committed). Each source overrides
+ * the same name from the one before it, so a name means exactly one agent in
+ * any given run — `agentFilters` and the system-prompt roster both read the
+ * result rather than re-deriving precedence.
+ */
+export function listAgents(cwd: string, extra: readonly AgentDef[] = []): AgentDef[] {
+  return listAgentsWithErrors(cwd, extra).agents;
 }
 
 /** listAgents plus the parse errors it skipped — a typo'd frontmatter must
  * never fail silently (the moment of maximum user investment is a broken
  * agent file, and swallowing it looks like the agent never existed). */
-export function listAgentsWithErrors(cwd: string): { agents: AgentDef[]; errors: string[] } {
+export function listAgentsWithErrors(
+  cwd: string,
+  extra: readonly AgentDef[] = []
+): { agents: AgentDef[]; errors: string[] } {
   const byName = new Map<string, AgentDef>(BUILTIN_AGENTS.map((a) => [a.name, a]));
   const errors: string[] = [];
   const dir = path.join(cwd, ".codewhip", "agents");
@@ -274,11 +449,12 @@ export function listAgentsWithErrors(cwd: string): { agents: AgentDef[]; errors:
       errors.push(parsed.error);
     }
   }
+  for (const a of extra) byName.set(a.name, a);
   return { agents: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)), errors };
 }
 
-export function findAgent(cwd: string, name: string): AgentDef | null {
-  return listAgents(cwd).find((a) => a.name === name) ?? null;
+export function findAgent(cwd: string, name: string, extra: readonly AgentDef[] = []): AgentDef | null {
+  return listAgents(cwd, extra).find((a) => a.name === name) ?? null;
 }
 
 /**
@@ -294,8 +470,14 @@ export function findAgent(cwd: string, name: string): AgentDef | null {
  * accidentally true: today no filter a child could evade is even expressible
  * (read/search take no shape, and a child cannot reach the four shapeful
  * tools), but the day one is, the child must not be the hole.
+ *
+ * `--agent <name>` compiles through here too — a refusal is a refusal whoever
+ * is about to make the call. Note what that reuse does NOT do: `tools` narrows
+ * over the CHILD set only (an entry cannot name `bash` — see parseToolsField),
+ * so on a main thread it can refuse read and search and nothing else. The main
+ * thread's authority stays `--disallowed-tools`'s business.
  */
-export function childFiltersFor(agent: AgentDef, parent: readonly ToolFilter[] | undefined): ToolFilter[] {
+export function agentFilters(agent: AgentDef, parent: readonly ToolFilter[] | undefined): ToolFilter[] {
   const out: ToolFilter[] = [...(parent ?? [])];
   const add = (filter: ToolFilter): void => {
     if (!out.some((x) => x.tool === filter.tool && x.shape === filter.shape)) out.push(filter);
@@ -308,6 +490,46 @@ export function childFiltersFor(agent: AgentDef, parent: readonly ToolFilter[] |
     }
   }
   return out;
+}
+
+export type MainThreadTurn = {
+  /** The entry's own prompt, as the text the run appends last. */
+  append: string;
+  model: string;
+  /** True when the entry's model override outranks the run's, which also means
+   * the run's rotation list no longer describes this model's family. */
+  rotationOff: boolean;
+  disallowedTools: ToolFilter[];
+};
+
+/**
+ * What `--agent <name>` asks of the run that named it, resolved without a
+ * provider or a filesystem so the precedence rules are testable:
+ *
+ * - the entry's prompt is APPENDED to the harness base, not a replacement for
+ *   it. The base is what tells the model which calls get refused and how to
+ *   treat a transient failure; a persona that displaces it produces a run that
+ *   retries its own denylist. (A child replaces its base — a child's whole
+ *   authority is two allow-class tools, so it has no refusal policy to forget.)
+ * - the entry's refusals compile through the same `agentFilters` a child is
+ *   born with, onto the run's own list.
+ * - the entry's model wins over a routed default but loses to an explicit
+ *   `--model`, and taking it switches rotation off for the same reason a
+ *   child's override does: candidates from another family would mis-rotate.
+ * - `maxTurns`/`max_steps` is NOT applied — it is a child's budget, and the
+ *   main thread's is `--max-steps`.
+ */
+export function mainThreadTurn(
+  agent: AgentDef,
+  run: { model: string; modelExplicit: boolean; disallowedTools?: readonly ToolFilter[] }
+): MainThreadTurn {
+  const takesModel = agent.model !== undefined && run.modelExplicit === false;
+  return {
+    append: agent.systemPrompt,
+    model: takesModel ? (agent.model as string) : run.model,
+    rotationOff: takesModel,
+    disallowedTools: agentFilters(agent, run.disallowedTools),
+  };
 }
 
 export type ChildRunOptions = {
@@ -374,7 +596,7 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     depth: opts.depth + 1,
     // The child's refusals are its parent's refusals plus the agent file's, and
     // that list is what un-advertises `tools:` at the spec level too.
-    disallowedTools: childFiltersFor(opts.agent, opts.disallowedTools),
+    disallowedTools: agentFilters(opts.agent, opts.disallowedTools),
     remembered: listRules(opts.cwd),
     systemPrompt: opts.agent.systemPrompt,
     ...(opts.debug === undefined ? {} : { debug: opts.debug }),

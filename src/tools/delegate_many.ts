@@ -79,7 +79,7 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
     if (e.task.length > MAX_TASK_CHARS) {
       return { ok: false, output: `delegate_many: task for "${e.agent}" too long (${e.task.length} chars, max ${MAX_TASK_CHARS})` };
     }
-    const def = findAgent(ctx.cwd, e.agent);
+    const def = findAgent(ctx.cwd, e.agent, ctx.agents);
     if (def === null) {
       return { ok: false, output: `delegate_many: unknown agent "${e.agent}"` };
     }
