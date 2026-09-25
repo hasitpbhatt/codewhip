@@ -176,11 +176,19 @@ function webfetchSpec(): ToolSpec {
 function todoSpec(): ToolSpec {
   return {
     name: "todo",
-    description: "Maintain this run's task checklist in harness state (.codewhip/todos.json; never touches workspace files). Args: action (list|replace|update); items for replace = the FULL new list of {id,text,status:pending|in_progress|done} (unique short ids, <=64 items, at most one in_progress — replaces the store); id+status for update. Plan with replace up front, update per step, list to re-read.",
+    description:
+      "Maintain this run's task list in harness state (.codewhip/todos.json; never touches workspace files). " +
+      "action: list (the plan, one line per item) | get (one item in full: its contract, owner, blockers and what is ready to claim) | " +
+      "replace (the FULL new list) | update (one item's status by id). " +
+      "Item = {id,text,status:pending|in_progress|done} plus optional description (what finishing means), activeForm (present-continuous label while in progress), " +
+      "owner, and blocks/blockedBy (ids this item gates, or gates it). Either edge direction is enough — both are stored. " +
+      "Rules, enforced rather than advised: unique short ids, <=64 items, at most one in_progress, an edge must name an id in the list, " +
+      "a cycle is refused, and a blocked item cannot be claimed until every blocker is done. " +
+      "Plan with replace up front, update per step, get before picking up someone else's item.",
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["list", "replace", "update"] },
+        action: { type: "string", enum: ["list", "get", "replace", "update"] },
         items: { type: "array" },
         id: { type: "string" },
         status: { type: "string" },

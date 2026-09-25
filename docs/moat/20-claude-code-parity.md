@@ -132,7 +132,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | NotebookEdit | **GAP-4** | absent |
 | WebFetch / WebSearch | PARTIAL | `webfetch` exists; **no web search tool** |
 | Task/TodoWrite | ALIAS | `todo` |
-| TaskCreate/Get/List/Update | **GAP-3** | one flat list, not per-item tasks with blockers |
+| TaskCreate/Get/List/Update | **HAVE** | per-item tasks whose edges gate claiming: `todo` list/get/replace/update (`src/tools/todo.ts:71`, `:62`), items carry `description`/`activeForm`/`owner`/`blocks`/`blockedBy`, either edge direction stored both ways (`src/tools/todo-store.ts:146`), a dangling edge (`:129`), a cycle (`:131`) and a claim past an open edge (`:133`) all refused — and re-checked on every write, so the file's invariants hold rather than the argument's (`src/tools/todo.ts:47`) |
 | Agent/`Skill` tool | PARTIAL | `delegate`, `delegate_many`; no model-invoked skills |
 | AskUserQuestion | **GAP-3** | the model cannot ask a multiple-choice question back |
 | ToolSearch / WaitForMcpServers | **GAP-3** | absent (MCP) |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 40**, **PARTIAL 16**, **GAP 46**,
-i.e. **39.2%** at parity or better. Remaining GAP rows by wave: 3 → 24, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 41**, **PARTIAL 16**, **GAP 45**,
+i.e. **40.2%** at parity or better. Remaining GAP rows by wave: 3 → 23, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -490,6 +490,37 @@ subject={"id":42}`, `result: subtype=success turns=2 tools=1`, receipt
 actor:"human", subject:"{\"id\":42}"}]` and a one-sentence answer that quoted
 the tool's output. The declarations ship too (`dist/sdk.d.ts`), so the entry is
 typed from the package, not from the source tree.
+
+Wave 3a (task lists with blockers) closed 1 row: `TaskCreate/Get/List/Update`.
+HAVE-or-better 40 → 41, GAP 46 → 45, wave 3 24 → 23. 13 new tests in
+`src/tools/todo.test.ts`, all 9 pre-existing ones kept as a compatibility
+contract (a store written by an older build still loads). Four rulings:
+
+- **`blocked` is derived, never stored.** A status field for it would be a
+  second source of truth that can disagree with the edges it names, so an item
+  is blocked exactly while one predecessor is not `done`
+  (`src/tools/todo-store.ts:176`). The one thing an edge buys — a claim cannot
+  be made past it — is enforced at the door (`:133`) rather than rendered as a
+  label.
+- **An edge that resolves to nothing is refused, not dropped.** A dropped
+  blocker is a grant: `blockedBy: ["ghost"]` would quietly make an item
+  claimable (`:129`), and a cycle has no satisfying order at all, so it names
+  the path (`:131`) instead of deadlocking the list. Either direction may be
+  written; both are stored (`:146`), because the graph is one object and the
+  caller should not have to know which half of it the renderer reads.
+- **Every write re-passes the validator, including `update`.** It reads the
+  store, changes one status and writes the whole list back through the same
+  parse (`src/tools/todo.ts:47`), so the invariants hold for the file on disk,
+  not just for the arguments of the call that happened to be well-formed. A
+  hand-edited or older-build store cannot smuggle a claim.
+- **Four verbs, one tool, one file.** A task registry with its own process would
+  be a second writer to state the audit chain does not cover, and the store is
+  harness state by ruling (`docs/moat/00-convergence.md:237`), never a
+  deliverable. The tool stayed under its line bar by splitting along its own
+  seam — shape and graph rules in `src/tools/todo-store.ts` (classified core in
+  `src/boundary.test.ts`), verbs in `src/tools/todo.ts` — and each action is its
+  own policy subject (`src/policy.ts:289`), so a team can `deny todo:get`
+  without losing the plan.
 
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by

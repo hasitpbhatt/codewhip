@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isTodoArgs, loadTodos, todoPath, todoTool } from "./todo.js";
 import { TOOLS } from "./registry.js";
+import { permissionSubject } from "../policy.js";
 
 function tmpCwd(): { cwd: string } {
   return { cwd: fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-todo-")) };
@@ -112,11 +113,164 @@ describe("todo tool", () => {
 
   it("isTodoArgs + registry exec guard malformed args without throwing", async () => {
     strictEqual(isTodoArgs({ action: "list" }), true);
+    strictEqual(isTodoArgs({ action: "get" }), true);
     strictEqual(isTodoArgs({ action: "bogus" }), false);
     strictEqual(isTodoArgs(null), false);
     const ctx = tmpCwd();
     const r = await TOOLS.todo.exec(ctx, { action: "nuke" });
     strictEqual(r.ok, false);
     ok(r.output.includes("bad args"), r.output);
+  });
+
+  it("names each action as its own policy subject, so a team can deny one", async () => {
+    strictEqual(permissionSubject("todo", { action: "get", id: "a" }, "todo get"), "todo:get");
+    strictEqual(permissionSubject("todo", { action: "replace" }, "todo replace"), "todo:replace");
+  });
+
+  it("a blocker written in either direction is stored in both", async () => {
+    const ctx = tmpCwd();
+    const back = [
+      { id: "a", text: "first", status: "pending" },
+      { id: "b", text: "second", status: "pending", blockedBy: ["a"] },
+    ];
+    const r = await todoTool(ctx, { action: "replace", items: back });
+    strictEqual(r.ok, true);
+    ok(r.output.includes("- [ ] b second · blocked by a"), r.output);
+    const stored = loadTodos(ctx.cwd);
+    strictEqual(stored[0]?.blocks?.join(","), "b", "a records that it blocks b");
+    strictEqual(stored[1]?.blockedBy?.join(","), "a", "b records what blocks it");
+  });
+
+  it("the forward direction unblocks the dependent, and list shows it", async () => {
+    const ctx = tmpCwd();
+    await todoTool(ctx, {
+      action: "replace",
+      items: [
+        { id: "a", text: "first", status: "pending", blocks: ["b"] },
+        { id: "b", text: "second", status: "pending" },
+      ],
+    });
+    strictEqual(loadTodos(ctx.cwd)[1]?.blockedBy?.join(","), "a");
+    const r = await todoTool(ctx, { action: "update", id: "a", status: "done" });
+    strictEqual(r.ok, true);
+    ok(!r.output.includes("blocked by"), r.output);
+  });
+
+  it("a blocked item cannot be claimed until its blocker is done", async () => {
+    const ctx = tmpCwd();
+    await todoTool(ctx, {
+      action: "replace",
+      items: [
+        { id: "a", text: "first", status: "pending" },
+        { id: "b", text: "second", status: "pending", blockedBy: ["a"] },
+        { id: "c", text: "third", status: "pending" },
+      ],
+    });
+    const refused = await todoTool(ctx, { action: "update", id: "b", status: "in_progress" });
+    strictEqual(refused.ok, false);
+    ok(refused.output.includes("blocked by a"), refused.output);
+    strictEqual(loadTodos(ctx.cwd)[1]?.status, "pending", "the refusal changed nothing");
+    strictEqual((await todoTool(ctx, { action: "update", id: "c", status: "in_progress" })).ok, true);
+    strictEqual((await todoTool(ctx, { action: "update", id: "c", status: "pending" })).ok, true);
+    strictEqual((await todoTool(ctx, { action: "update", id: "a", status: "done" })).ok, true);
+    strictEqual((await todoTool(ctx, { action: "update", id: "b", status: "in_progress" })).ok, true);
+  });
+
+  it("replace refuses an in_progress item that its own edges block", async () => {
+    const ctx = tmpCwd();
+    const r = await todoTool(ctx, {
+      action: "replace",
+      items: [
+        { id: "a", text: "first", status: "pending" },
+        { id: "b", text: "second", status: "in_progress", blockedBy: ["a"] },
+      ],
+    });
+    strictEqual(r.ok, false);
+    ok(r.output.includes("blocked by a"), r.output);
+  });
+
+  it("an edge to an id that is not in the list is refused, not dropped", async () => {
+    const ctx = tmpCwd();
+    const r = await todoTool(ctx, {
+      action: "replace",
+      items: [{ id: "a", text: "first", status: "pending", blockedBy: ["ghost"] }],
+    });
+    strictEqual(r.ok, false);
+    ok(r.output.includes('"ghost"'), r.output);
+  });
+
+  it("a cycle is refused by name instead of deadlocking the list", async () => {
+    const ctx = tmpCwd();
+    const r = await todoTool(ctx, {
+      action: "replace",
+      items: [
+        { id: "a", text: "one", status: "pending", blockedBy: ["c"] },
+        { id: "b", text: "two", status: "pending", blockedBy: ["a"] },
+        { id: "c", text: "three", status: "pending", blockedBy: ["b"] },
+      ],
+    });
+    strictEqual(r.ok, false);
+    ok(r.output.includes("cycle"), r.output);
+    ok(r.output.includes("a → c → b → a"), r.output);
+  });
+
+  it("an item cannot block itself", async () => {
+    const ctx = tmpCwd();
+    const r = await todoTool(ctx, {
+      action: "replace",
+      items: [{ id: "a", text: "one", status: "pending", blockedBy: ["a"] }],
+    });
+    strictEqual(r.ok, false);
+    ok(r.output.includes("block itself"), r.output);
+  });
+
+  it("get reports the contract, the owner and what is ready to claim", async () => {
+    const ctx = tmpCwd();
+    await todoTool(ctx, {
+      action: "replace",
+      items: [
+        { id: "a", text: "write the store", status: "pending", description: "todos.json round-trips", owner: "sam" },
+        { id: "b", text: "wire the tool", status: "pending", blockedBy: ["a"], activeForm: "wiring the tool" },
+        { id: "c", text: "write the tests", status: "pending" },
+      ],
+    });
+    const r = await todoTool(ctx, { action: "get", id: "b" });
+    strictEqual(r.ok, true);
+    ok(r.output.includes("- b [pending] wire the tool"), r.output);
+    ok(r.output.includes("blocked by: a (pending)"), r.output);
+    ok(r.output.includes("ready: no"), r.output);
+    ok(r.output.includes("ready to claim: a, c"), r.output);
+    const a = await todoTool(ctx, { action: "get", id: "a" });
+    ok(a.output.includes("done means: todos.json round-trips"), a.output);
+    ok(a.output.includes("owner: sam"), a.output);
+  });
+
+  it("an in_progress item is labelled by its activeForm", async () => {
+    const ctx = tmpCwd();
+    await todoTool(ctx, {
+      action: "replace",
+      items: [{ id: "a", text: "wire the tool", activeForm: "wiring the tool", status: "in_progress" }],
+    });
+    const r = await todoTool(ctx, { action: "list" });
+    ok(r.output.includes("- [>] a wiring the tool"), r.output);
+  });
+
+  it("description and owner are redacted at save too", async () => {
+    const ctx = tmpCwd();
+    const r = await todoTool(ctx, {
+      action: "replace",
+      items: [{ id: "a", text: "one", status: "pending", description: "TOKEN=sk-secret-value", owner: "sk-secret-value" }],
+    });
+    strictEqual(r.ok, true);
+    strictEqual(fs.readFileSync(todoPath(ctx.cwd), "utf8").includes("sk-secret-value"), false);
+  });
+
+  it("an old three-field list still loads, and gains edges on the next write", async () => {
+    const ctx = tmpCwd();
+    fs.mkdirSync(path.join(ctx.cwd, ".codewhip"), { recursive: true });
+    fs.writeFileSync(todoPath(ctx.cwd), JSON.stringify([{ id: "a", text: "legacy", status: "pending" }]));
+    strictEqual(loadTodos(ctx.cwd).length, 1);
+    const r = await todoTool(ctx, { action: "list" });
+    strictEqual(r.output, "- [ ] a legacy");
   });
 });
