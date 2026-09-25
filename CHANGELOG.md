@@ -397,6 +397,43 @@ parse time there rather than silently doing nothing.
   2026-09-25), re-sent per provider call, against a rough 4 chars/token; headless
   and SDK runs send nothing, and no prompt text was added anywhere, so receipts
   are otherwise unchanged.
+- **Parallel tool execution: independent read-only batches now overlap.** The
+  `Parallel tool execution` row was `GAP-3`, deferred in the Torvalds review as
+  needing per-turn batches "with audit-ordering discipline". A model that returns
+  two or more tool calls in one turn now gets them executed concurrently where
+  that is provably safe, capped at 4 in flight.
+  - **A batch is parallel or the turn is serial, never a mix.** Eligibility is
+    decided by one scan before anything runs (`src/loop.ts:813`–`:864`). The
+    eligible set is `read` plus `webfetch` **only when already granted** — by
+    policy, a matching `--allowed-tools` shape, `--yolo` /
+    `--permission-mode bypassPermissions`, or a remembered origin. A configured
+    hook, a host tool (opaque caller code), a mutating or interactive tool, a
+    duplicate or empty call id, a memo hit, or any call that would still need a
+    keystroke sends the whole turn down the unchanged serial path. A `read` in the
+    same turn as an edit must not observe a half-applied file, and two approvals
+    must never race for one keyboard.
+  - **The audit story is identical to serial.** Each candidate still runs the
+    real `checkPermission`/`matchToolFilter` gates and keeps the exact ruleId
+    and actor the ladder would have recorded, so a yolo `webfetch` lands as
+    `allow:default:webfetch:ask+yolo` / actor `yolo` either way. `seq` is
+    reserved for the whole batch up front, and `tool_result` messages, the trace,
+    `outcomes.jsonl` and the hash chain are appended in **assistant order**, not
+    completion order (`src/loop.ts:906`–`:930`).
+  - **Bounded and failure-isolated.** `runBoundedParallel`
+    (`src/parallel-tools.ts`) is a 4-slot worker pool, so a 40-call turn is 10
+    deep, not 40. Each call keeps its own `withTimeout` and `try/catch`: a crash
+    or timeout becomes that one call's `ToolResult` string and every sibling
+    result still commits. Nothing is re-run — the repeat memo is written on the
+    ordered commit, not inside the worker.
+  - **`read` is in the set for correctness, not speed.** It is a synchronous walk
+    behind an `async` signature, so a read batch buys little wall clock; the real
+    speedup is pre-approved `webfetch`. Both are covered by instrumented tests
+    that assert observed overlap rather than inferring it. This narrow first cut
+    avoids refactoring every denial, hook and approval branch just to widen the
+    set; the seam is that single eligibility scan, so extending it is additive.
+  6 new tests in `src/parallel-tools.test.ts`. Cost: one eligibility scan and one
+  pool per parallel turn — no new prompt tokens, no new dependency, no schema
+  change, so receipts and frozen policy/audit/memory contracts are unchanged.
 - **`--agents '<json>'` and `--agent <name>`: the roster on the command line.**
   Parity-matrix Wave 3f: GAP 42 → 41, wave 3 20 → 19 (PARTIAL, with three named
   deltas — the prompt appends rather than replaces, a `tools` narrowing can only

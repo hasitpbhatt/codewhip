@@ -265,6 +265,34 @@ It shares the existing 8 000-character budget with `--append-system-prompt` and
 sentence in half — and a run that types neither flag pays nothing for any of
 this.
 
+## Parallel tool batches
+
+When a model returns several tool calls in one turn, codewhip can run the safe
+ones at the same time instead of one after another — four in flight, results
+delivered in the order it asked for them.
+
+The rule is deliberately conservative, and the fallback is total: the turn runs
+in parallel only if **every** call is either a `read`, or a `webfetch` that is
+already approved (policy, a matching `--allowed-tools` shape, `--yolo` /
+`--permission-mode bypassPermissions`, or a remembered origin). If any call in
+the turn would mutate the workspace, prompt you, run a hook, be a host-supplied
+tool, repeat a memoized call, or carry a duplicate call id, the **whole turn**
+falls back to the ordinary serial path.
+
+```
+parallel batch: 2 read-only call(s), cap 4          # --debug only
+```
+
+- **Order is preserved, not merely delivered.** Completion order is free;
+  the `tool_result` messages, the trace, `outcomes.jsonl` and the signed audit
+  chain are written in assistant order, and each call carries the exact
+  `ruleId`/actor the permission ladder would have used.
+- **One failure is one failed result.** Each call keeps its own timeout and
+  error handling, so a crash or a timed-out fetch is reported as that call's
+  output and every sibling result still lands.
+- **No prompt cost, no new dependencies**, and no change to the frozen
+  policy/audit/memory schemas.
+
 ## Custom slash commands
 
 Your repeated prompts can become one-liners: `.codewhip/commands/<name>.md` is

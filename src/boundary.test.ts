@@ -107,6 +107,10 @@ const CORE_EXPECTED = new Set([
   "src/loop.ts",
   "src/outcomes.ts",
   "src/pack.ts",
+  // A dependency-free worker pool: the bounded fan-out the loop uses for a
+  // batch of independent read-only tool calls, with the ordering contract
+  // (results keyed to input index) living beside it.
+  "src/parallel-tools.ts",
   "src/policy-store.ts",
   "src/policy.ts",
   "src/provider-port.ts",
