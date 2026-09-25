@@ -135,6 +135,7 @@ test("buildResult maps every stop reason and keeps the receipt verbatim", () => 
     cost_budget: "error_cost_budget",
     error: "error",
     cancelled: "cancelled",
+    hook: "error_hook_stop",
   };
   for (const reason of Object.keys(want) as StopReason[]) {
     const p = buildResult(loopResult({ stopReason: reason }), facts);

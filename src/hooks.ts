@@ -18,12 +18,35 @@ import type { ToolName } from "./tools/types.js";
  * Verdicts: exit 2 (or exit-0 stdout {"decision":"deny"}) denies; any other
  * exit-0 passes; timeout/crash/exit-1 WARN and proceed — an infra failure
  * is absence of signal, not an assertion. Payload (redacted) rides stdin.
+ *
+ * A hook may WITHHOLD a call and never GRANT one. `decision`/`permissionDecision`
+ * values other than `deny` are refused out loud, because a hook that outranked
+ * the consent ladder would make every `ask` in this harness advisory. The same
+ * ruling refuses `updatedInput`: PreToolUse fires after the ladder graded the
+ * call, so rewriting its arguments there runs something nobody approved.
  */
 
 export type HookEvent = "PreToolUse" | "PostToolUse" | "Stop";
 export type HookDef = { event: HookEvent; match: string; command: string };
 export type LoadedHooks = { defs: HookDef[]; errors: string[] };
-export type HookRunResult = { status: "pass" | "deny" | "warn"; reason: string; fired: number };
+export type HookRunResult = {
+  status: "pass" | "deny" | "warn";
+  reason: string;
+  fired: number;
+  /** `additionalContext` from every hook that passed — prompt text, and paid as such. */
+  context: string;
+  /** `systemMessage`: shown to the human who started the run, never sent to a model. */
+  systemMessage: string;
+  /** Non-null when a hook printed `continue: false` — the reason to stop the run. */
+  stop: string | null;
+};
+export type HookEnvelope = {
+  deny: string | null;
+  context: string;
+  systemMessage: string;
+  stop: string | null;
+  notes: string[];
+};
 export type HookPayload = {
   event: HookEvent;
   tool: string;
@@ -50,6 +73,11 @@ const MAX_DEFS = 16;
 const MAX_COMMAND_CHARS = 2000;
 const HOOK_TIMEOUT_MS = 10_000;
 const STDOUT_CAP = 65_536;
+/** Fields a short-circuited verdict carries nothing of. */
+const NO_OUT = { context: "", systemMessage: "", stop: null } as const;
+/** `additionalContext` is prompt text, so it is capped like the prompt tail it joins. */
+const CONTEXT_CAP = 8_000;
+const MESSAGE_CAP = 2_000;
 
 function validDef(item: unknown, file: string, errors: string[]): HookDef | null {
   if (item === null || typeof item !== "object" || Array.isArray(item)) {
@@ -170,8 +198,78 @@ function jsonField(stdout: string, key: string): string | null {
 }
 
 /**
+ * The JSON a hook may print on stdout, in Claude Code's envelope names.
+ *
+ * Deliberately asymmetric: every field that would LOOSEN the harness is refused
+ * by name with the reason, while an unrecognised key is silence. A hook author
+ * who types `permissionDecision: "allow"` must be told that hooks can withhold a
+ * call and not grant one — accepting-and-dropping it would read as agreement.
+ */
+export function parseHookEnvelope(stdout: string): HookEnvelope {
+  const env: HookEnvelope = { deny: null, context: "", systemMessage: "", stop: null, notes: [] };
+  const t = stdout.trim();
+  if (!t.startsWith("{")) return env; // plain stdout is output, not a verdict
+  let doc: unknown;
+  try {
+    doc = JSON.parse(t) as unknown;
+  } catch {
+    env.notes.push("stdout looked like JSON but did not parse — ignored");
+    return env;
+  }
+  const o = doc as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  const decision = str(o["decision"]);
+  if (decision !== null) {
+    if (decision === "deny") env.deny = str(o["reason"]) ?? "denied by hook";
+    else env.notes.push(`decision "${decision}" is not honoured: a hook may deny a call, not grant or re-ask it`);
+  }
+  if ("continue" in o) {
+    if (typeof o["continue"] !== "boolean") env.notes.push("`continue` must be true or false — ignored");
+    else if (o["continue"] === false) env.stop = str(o["stopReason"]) ?? "stopped by hook";
+  }
+  if ("stopReason" in o && env.stop === null) {
+    env.notes.push("`stopReason` only means something with `continue: false` — ignored");
+  }
+  const msg = o["systemMessage"];
+  if (msg !== undefined) {
+    const m = str(msg);
+    if (m === null) env.notes.push("`systemMessage` must be a string — ignored");
+    else env.systemMessage = m.slice(0, MESSAGE_CAP);
+  }
+  const suppress = o["suppressOutput"];
+  if (suppress !== undefined) {
+    env.notes.push("`suppressOutput` has no effect here: hook stdout is never rendered to the model or the transcript");
+  }
+  const hso = o["hookSpecificOutput"];
+  if (hso !== undefined) {
+    if (hso === null || typeof hso !== "object" || Array.isArray(hso)) {
+      env.notes.push("`hookSpecificOutput` must be an object — ignored");
+      return env;
+    }
+    const h = hso as Record<string, unknown>;
+    const ac = h["additionalContext"];
+    if (ac !== undefined) {
+      const a = str(ac);
+      if (a === null) env.notes.push("`additionalContext` must be a string — ignored");
+      else env.context = a.slice(0, CONTEXT_CAP);
+    }
+    const pd = str(h["permissionDecision"]);
+    if (pd !== null) {
+      if (pd === "deny") env.deny = str(h["permissionDecisionReason"]) ?? env.deny ?? "denied by hook";
+      else env.notes.push(`permissionDecision "${pd}" is not honoured: a hook may deny a call, not grant or re-ask it`);
+    }
+    if (h["updatedInput"] !== undefined) {
+      env.notes.push("`updatedInput` is refused: PreToolUse fires after the ladder graded this call, so rewriting its arguments would run something nobody approved");
+    }
+  }
+  return env;
+}
+
+/**
  * Run every hook applicable to (event, tool) sequentially. First explicit
- * deny short-circuits; warnings accumulate but never stop the run.
+ * deny short-circuits; warnings accumulate but never stop the run. Passing
+ * hooks contribute their context and message, and the first `continue: false`
+ * names the reason the run should stop.
  */
 export async function runHooksFor(
   defs: HookDef[],
@@ -182,6 +280,8 @@ export async function runHooksFor(
 ): Promise<HookRunResult> {
   const applicable = defs.filter((d) => d.event === event && (event === "Stop" || d.match === "*" || d.match === tool));
   const spawner = deps?.spawnHook ?? defaultSpawnHook;
+  const acc = { context: "", systemMessage: "", stop: null as string | null, notes: [] as string[] };
+  const join = (a: string, b: string): string => (a.length === 0 ? b : `${a}\n${b}`);
   let fired = 0;
   let warn = "";
   for (const d of applicable) {
@@ -198,18 +298,29 @@ export async function runHooksFor(
     }
     if (res.code === 2) {
       const reason = jsonField(res.stdout, "reason") ?? (res.stderr.trim().slice(0, 500) || "denied by hook");
-      return { status: "deny", reason: redactSecrets(reason), fired };
+      return { ...NO_OUT, status: "deny", reason: redactSecrets(reason), fired };
     }
     if (res.code !== 0) {
       warn = `exited ${res.code} (not an assertion) — proceeding`;
       continue;
     }
-    if (jsonField(res.stdout, "decision") === "deny") {
-      const reason = jsonField(res.stdout, "reason") ?? "denied by hook";
-      return { status: "deny", reason: redactSecrets(reason), fired };
+    const env = parseHookEnvelope(res.stdout);
+    if (env.deny !== null) {
+      return { ...NO_OUT, status: "deny", reason: redactSecrets(env.deny), fired };
     }
+    if (env.context.length > 0) acc.context = join(acc.context, env.context).slice(0, CONTEXT_CAP);
+    if (env.systemMessage.length > 0) acc.systemMessage = join(acc.systemMessage, env.systemMessage).slice(0, MESSAGE_CAP);
+    if (env.stop !== null && acc.stop === null) acc.stop = env.stop.slice(0, 500);
+    for (const n of env.notes) if (!acc.notes.includes(n)) acc.notes.push(n);
   }
-  return warn.length > 0
-    ? { status: "warn", reason: redactSecrets(warn).slice(0, 500), fired }
-    : { status: "pass", reason: "", fired };
+  const notes = acc.notes.join("; ");
+  if (notes.length > 0) warn = warn.length > 0 ? `${warn}; ${notes}` : notes;
+  return {
+    status: warn.length > 0 ? "warn" : "pass",
+    reason: redactSecrets(warn).slice(0, 500),
+    fired,
+    context: redactSecrets(acc.context),
+    systemMessage: redactSecrets(acc.systemMessage),
+    stop: acc.stop === null ? null : redactSecrets(acc.stop),
+  };
 }
