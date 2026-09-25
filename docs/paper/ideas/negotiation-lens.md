@@ -53,12 +53,11 @@ UX panel's "two example future commands" demand into a measured comprehension
 mechanism (this absorbs explain-back consent — see kill 2).
 
 **Why nobody has it — product evidence.** No harness cites prior approvals at
-ask time. The incumbent persists allow rules silently to
-`.claude/settings.local.json` (repo-root since v2.1.211; per
-agenticcontrolplane.com/controls/claude-code and the code.claude.com
-changelog) — prior decisions bind but are never *shown*, and `ask` rules
-override them with no reasoning trail. Anthropic's Auto Mode
-(anthropic.com/engineering/claude-code-auto-mode) reports users approve 93% of
+ask time. The incumbent persists allow rules silently to a per-agent
+`settings.local.json` at the repo root (that file's documented move to the repo
+root, and its changelog) — prior decisions bind but are never *shown*, and `ask`
+rules override them with no reasoning trail. Anthropic's Auto Mode
+(its engineering write-up on the auto-mode feature) reports users approve 93% of
 prompts and responds by replacing the dialogue with a classifier — automation,
 not justification, the opposite direction. FalkorDB's "Context Graphs" markets
 prior decisions and causal chains as agent *memory*, not as binding

@@ -40,7 +40,7 @@ Horizon 2: a credible open alternative to the incumbent closed-trust model monop
    replayable, and signed. A memo (prompt instruction) is not a control;
    the harness enforces, the model obeys.
 4. **Escape competition through authenticity.** We do not clone OpenCode's
-   breadth or Claude's closed box. We own *delegatability* — the moment a
+   breadth or a closed box. We own *delegatability* — the moment a
    senior trusts the tool in a junior's hands unsupervised.
 5. **Play long-term games.** Policy, memory, and audit history accrue per
    customer. Leaving CodeWhip must mean losing scar tissue you can't rebuy.

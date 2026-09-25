@@ -11,10 +11,12 @@ Why a matrix at all: the terminal-agent category has converged on a
 recognisable feature set — a headless scripting surface, a permission ladder,
 a consent-gated edit/shell toolset, subagents, hooks, slash commands, and
 checkpointed undo. Those are facts about the category, not one vendor's
-roadmap, and codewhip is measured against the category. Where a row names a
-concrete surface (`CLAUDE.md`, `.claude/commands/`, a `mcp add` subcommand) it
-is naming a *file or flag other tools also use*, so an operator arriving from
-elsewhere finds the same shape here.
+roadmap, and codewhip is measured against the category. The left-hand
+column therefore names capabilities in the abstract (`update`,
+`doctor`, `mcp add`, a per-vendor project-instruction file, a per-vendor
+command directory): where a row cites a concrete file or flag it is citing
+a *shape other tools also use*, so an operator arriving from elsewhere
+finds the same convention here.
 
 Method: the left-hand column was compiled in September 2026 from the public
 documentation of the major terminal coding agents, cross-read against their
@@ -33,10 +35,12 @@ side was taken from the compiled registry and `src/`, not from docs.
 
 ## Scope ruling — what cannot be a parity row
 
-The incumbent closed-box product's 2026 surface includes vendor-platform capabilities that a
-model-agnostic open-source CLI cannot have *as such*: account OAuth to
-claude.ai, hosted cloud sessions, the Slack/GitHub-App auto-fixers, Claude
-Design, Artifacts browser, mobile QR pairing, Remote Control from claude.ai,
+The incumbent closed-box product's 2026 surface includes vendor-platform
+capabilities that a
+model-agnostic open-source CLI cannot have *as such*: vendor account OAuth,
+hosted cloud sessions, the Slack/GitHub-App auto-fixers, hosted
+Design/Artifacts browser, mobile QR pairing, Remote Control from a vendor
+site,
 self-hosted runner environments, the native-binary installer, and server-side
 `advisor`/`ultrareview` (a paid multi-agent cloud fleet). These are marked
 **N/S** — they are distribution of one company's service, not features of a
@@ -53,7 +57,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Category capability | Status | codewhip evidence |
 |---|---|---|
-| `claude "query"` interactive start | HAVE | `src/index.ts:2948` bare `codewhip` on a TTY opens the REPL, `cmdRepl:1781`; a positional query is the first turn of a run (`:1475`) |
+| Interactive start with a positional query | HAVE | `src/index.ts:2948` bare `codewhip` on a TTY opens the REPL, `cmdRepl:1781`; a positional query is the first turn of a run (`:1475`) |
 | `-p/--print` headless one-shot | HAVE | `-p`/`--headless` (`src/index.ts:676`); `src/run-output.ts` owns stdout, prose moves to stderr. `--print` keeps its older share-markdown meaning — the long name diverges, the short flag does not |
 | `cat file \| codewhip -p "query"` stdin piping | HAVE | `readStdin` (`src/run-output.ts:92`): stdin is the prompt when there is no argv prompt (`src/index.ts:2952`), and is appended as context when there is one (`src/index.ts:2971`) |
 | `--output-format text\|json\|stream-json` | HAVE | `src/run-output.ts:22` parse, `:161` result document, `:208` emit; NDJSON init/event/result on stream-json |
@@ -71,12 +75,12 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--debug`, `--debug-file` | **HAVE** | both arms exist and neither is a verbosity dial on the transcript: they capture the decisions the loop makes and never prints. `--debug` writes to the prose channel (so `-p` keeps stdout as data), `--debug-file <path>` appends to a file (`src/index.ts:592`, `:594`). The sink owns the rules so no call site can forget them: every line is redacted before it lands (`src/debug.ts:120`), an `*.env*` target and any path inside `.codewhip/` are refused because that is where the audit chain, keys and policy this log describes live (`src/debug.ts:41`), and at 8 MiB — or any write error — it warns once and goes quiet, since a broken diagnostic must never kill the run it is explaining (`src/debug.ts:88`). Lines append synchronously: the tail of the run that crashed is the only part anyone reads (`src/debug.ts:104`). 16 sentences sit in the loop, led by the rung that answered a call (`src/loop.ts:1140`) and per-call exec timing with the audit seq (`src/loop.ts:1273`); subagents inherit the parent's sink, because the surprise usually hides in the child (`src/subagents.ts:602`) |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
 | `--betas` API beta headers | **GAP-3** | wire sends none (`src/provider.ts`) |
-| `claude update`, `install [version]` | **GAP-4** | no update path |
-| `claude doctor` (read-only diagnostics) | PARTIAL | `codewhip trust` covers chain/policy/keys/memory, not installation |
-| `claude setup-token` (long-lived CI token) | **GAP-4** | env keys only |
-| `claude gateway` (self-hosted gateway) | ALIAS | `codewhip serve` |
-| `claude import` from other agents | **GAP-5** | absent |
-| `claude logs`/`attach`/`respawn`/`stop`/`rm`/`daemon` — background session supervisor | **GAP-3** | `run_in_background` jails *commands* (`src/tools/background-tasks.ts`); no detachable *agent session* |
+| `update`, `install [version]` | **GAP-4** | no update path |
+| `doctor` (read-only diagnostics) | PARTIAL | `codewhip trust` covers chain/policy/keys/memory, not installation |
+| `setup-token` (long-lived CI token) | **GAP-4** | env keys only |
+| `gateway` (self-hosted gateway) | ALIAS | `codewhip serve` |
+| `import` from other agents | **GAP-5** | absent |
+| `logs`/`attach`/`respawn`/`stop`/`rm`/`daemon` — background session supervisor | **GAP-3** | `run_in_background` jails *commands* (`src/tools/background-tasks.ts`); no detachable *agent session* |
 | `--bg/--background` session start | **GAP-3** | absent |
 | `--no-session-persistence`, `persistSession` | ALIAS | sessions are opt-in by default (`--continue`) |
 | `--from-pr`, `--teleport`, `--cloud`, `--remote-control`, `--environment`, `--ide`, `--chrome`, `--channels` | N/S | platform distribution, not agent capability |
@@ -142,7 +146,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Category capability | Status | codewhip evidence |
 |---|---|---|
-| `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
+| `<tool>/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not the competitor dir), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
 | `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:144` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:386`), and both are compiled onto one list the child is born with (`src/subagents.ts:480`, `:599`); the other eight are refused BY NAME with their reason (`src/subagents.ts:73`) — no field is ever accepted-and-dropped |
 | `--agents` JSON, `--agent` | PARTIAL | `--agents '{"<name>":{"description":…,"prompt":…}}'` is the same roster in JSON (`src/subagents.ts:209`) and outranks `.codewhip/agents/*.md`, which outranks the built-ins (`src/subagents.ts:424`, `src/loop.ts:426`); `--agent <name>` puts an entry on the main thread (`src/index.ts:1145` → `src/subagents.ts:522`). Three deltas: the prompt is appended, never a replacement for the harness base; a `tools` narrowing on the main thread can only refuse read/search (`src/subagents.ts:480`); and there is no mid-session agent switch |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
@@ -164,11 +168,11 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Category capability | Status | codewhip evidence |
 |---|---|---|
-| `.claude/commands/*.md` + `$ARGUMENTS` | HAVE | `.codewhip/commands/*.md` |
+| `<tool>/commands/*.md` + `$ARGUMENTS` | HAVE | `.codewhip/commands/*.md` |
 | `` !`cmd` `` pre-execution, `@file` refs in commands | **GAP-4** | absent |
 | Skills: `SKILL.md`, `when_to_use`, model-initiated, progressive disclosure, `/skills` | **GAP-4** | custom commands are prompt expansion only |
 | Plugins + marketplaces (`plugin.json`, `marketplace.json`, install/enable) | **GAP-5** | `pack` is a policy bundle, not a plugin |
-| MCP client: stdio/SSE/HTTP/ws, `claude mcp add`, scopes local/project/user | **GAP-3** | zero MCP in `src/` — needs a kill-list ruling |
+| MCP client: stdio/SSE/HTTP/ws, `mcp add` subcommand, scopes local/project/user | **GAP-3** | zero MCP in `src/` — needs a kill-list ruling |
 | MCP OAuth (`mcp login/logout`) | **GAP-3** | absent |
 | MCP resources/prompts as tools and slash commands | **GAP-3** | absent |
 | `mcp__server__tool` namespacing into the permission layer | **GAP-3** | must be designed with policy, not bolted on |
@@ -179,10 +183,10 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Category capability | Status | codewhip evidence |
 |---|---|---|
-| CLAUDE.md hierarchy enterprise/project/user | PARTIAL | `AGENTS.md` + `policy.md`; no user-level or enterprise tier (`src/system.ts`) |
-| `@path` imports, `.claude/rules/` with `paths:` | **GAP-4** | no imports; `docs/moat/02-memory.md` planned it |
+| Project-instruction file hierarchy enterprise/project/user | PARTIAL | `AGENTS.md` + `policy.md`; no user-level or enterprise tier (`src/system.ts`) |
+| `@path` imports, a per-tool rules dir with `paths:` | **GAP-4** | no imports; `docs/moat/02-memory.md` planned it |
 | auto memory dir per project, `/memory` | PARTIAL | `src/remember.ts` + `remember-store.ts`; no `/memory` view |
-| `claudeMdExcludes`, `instructionFiles` | **GAP-4** | fixed filename |
+| project-instruction excludes, configurable instruction files | **GAP-4** | fixed filename |
 | Always-allow memory with provenance + curated shapes | **HAVE-plus** | `src/remember-store.ts` — That tool stores no provenance |
 | Policy promotion from repeated declines | **HAVE-plus** | `src/policy-store.ts` |
 
@@ -586,7 +590,7 @@ Wave 3d (what an agent file may say) moved 1 row from GAP to PARTIAL: the ten
 subagent frontmatter fields. HAVE-or-better unchanged at 43, PARTIAL 15 → 16,
 **GAP 44 → 43, wave 3 22 → 21**. It is scored PARTIAL and not HAVE because two
 of the ten fields are honoured while eight are refused — loudly, with a reason,
-at load time — and "loudly refused" is not "does what Claude does". 9 new tests
+at load time — and "loudly refused" is not "does what the category expects". 9 new tests
 (`src/subagents.test.ts`, `src/frontmatter.test.ts`). Five rulings:
 
 - **`tools:` narrows and cannot widen.** A child's whole authority is read and
@@ -861,7 +865,7 @@ count is the instrument, not the memory of it.
    Remaining: vision
    input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus
-   the `.claude/agents/` path itself,
+   the competitor's agents-dir path itself,
    web search tool, worktree isolation, MCP client (with
    ruling), effort/thinking.
 4. **Wave 4 — extensibility and install.** skills, http/agent hook types,

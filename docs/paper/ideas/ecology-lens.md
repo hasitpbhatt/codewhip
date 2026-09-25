@@ -86,7 +86,7 @@ evidence about specific CONTENT, not bilateral, and not consumed to
 modulate the receiving harness's permission ladder per artifact. AWCP
 (arXiv:2602.20493) moves the workspace (temporary delegation of a projected
 workspace) but not the trust. VS Code Workspace Trust is a binary local
-click. Cursor/Claude settings sharing spreads hand-written prompt rules,
+click. Cursor/incumbent settings sharing spreads hand-written prompt rules,
 never adjudicated evidence.
 
 **Why nobody has it — paper evidence.** Authenticated Delegation

@@ -1704,7 +1704,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     const continued = result.messages.slice(1);
     // Which file this run writes: a fresh run owns a new id, a resumed run
     // accumulates into the session it resumed, a fork starts a new file that
-    // records its parent (docs/moat/20-claude-code-parity.md wave 2).
+    // records its parent (docs/moat/20-parity-matrix.md wave 2).
     const ident = sessionIdentity({ currentRunId: pinnedSession ?? result.runId, resumedFrom, fork: opts.forkSession });
     const sessionLabels: SessionLabels = { ...labels, ...(ident.parent === undefined ? {} : { parent: ident.parent }) };
     if (replMode && replState !== undefined) {

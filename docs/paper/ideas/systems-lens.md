@@ -71,7 +71,7 @@ stream produce flips that per-decision review misses?).
 
 **Why nobody has it — product evidence.** No harness re-derives permission
 verdicts. incumbent allow rules live in `settings.local.json`
-(persistent, no re-validation; per code.claude.com/docs/en/permissions and
+(persistent, no re-validation; per the incumbent's permissions docs and
 /en/settings); Cursor/Cline keep static config; nothing replays history
 against the current store. The closest product gestures are Oracle's OCI
 Agent Evaluation Framework (blogs.oracle.com — "replay, canary assurance"
@@ -154,7 +154,7 @@ measure its frequency or operational cost").
 
 **Why nobody has it — product evidence.** Nothing expires or invalidates
 grants on environment change. incumbent allow rules are persistent with
-no built-in expiration (code.claude.com/docs/en/settings; the only
+no built-in expiration (per the incumbent's settings docs; the only
 middle grounds are per-session approvals and the `/fewer-permission-prompts`
 skill that auto-writes MORE persistent rules from session history —
 mindstudio.ai — i.e., the trend is toward cheaper minting, zero
