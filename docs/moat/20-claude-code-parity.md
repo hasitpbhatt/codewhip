@@ -67,13 +67,13 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--max-budget-usd` | HAVE | `src/index.ts:694` parse, `:1447` mid-run `costCheck` over `meteredCost` (`src/router.ts`); refuses an unpriced route rather than going inert (`src/index.ts:1361`) |
 | `--max-turns` | ALIAS | `--max-steps 25` |
 | `--allowedTools` / `--disallowedTools` | HAVE | `src/tool-filter.ts:46` parse, `:146` match; `src/loop.ts:907` grant inside ask, `:863` refuse above the ladder; `src/index.ts:587`/`:595` (both spellings + `=` form) |
-| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:404`; flags at `src/index.ts:603`/`:611`/`:616`, file read pre-flight at `:1202` |
+| `--append-system-prompt[-file]`, `--exclude-dynamic-system-prompt-sections` | HAVE | `composeSystemPrompt` (`src/system.ts:55`), called from `src/loop.ts:434`; flags at `src/index.ts:647`/`:655`/`:676`, file read pre-flight at `:1363` |
 | `--model` / `--fallback-model` | HAVE | `--model`, `--models`, `--failover`, `--free` |
 | `--effort low…max` | **GAP-3** | no thinking-budget control |
-| `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:569`, precedence `:1056`, ladder rungs `src/loop.ts:897`–`:1001`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
-| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:581`, validation before the run `:1059`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:51` → read/edit/write/search → `src/subagents.ts:242`. Was a single-cwd jail before Wave 2c |
+| `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:613`, precedence `:1208`, ladder rungs `src/loop.ts:951`–`:1020`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
+| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:625`, validation before the run `:1209`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:82` → read/edit/write/search → `src/subagents.ts:604`. Was a single-cwd jail before Wave 2c |
 | `--bare` (skip discovery of hooks/skills/commands) | **GAP-4** | absent |
-| `--debug`, `--debug-file` | **HAVE** | both arms exist and neither is a verbosity dial on the transcript: they capture the decisions the loop makes and never prints. `--debug` writes to the prose channel (so `-p` keeps stdout as data), `--debug-file <path>` appends to a file (`src/index.ts:571`, `:573`). The sink owns the rules so no call site can forget them: every line is redacted before it lands (`src/debug.ts:120`), an `*.env*` target and any path inside `.codewhip/` are refused because that is where the audit chain, keys and policy this log describes live (`src/debug.ts:41`), and at 8 MiB — or any write error — it warns once and goes quiet, since a broken diagnostic must never kill the run it is explaining (`src/debug.ts:88`). Lines append synchronously: the tail of the run that crashed is the only part anyone reads (`src/debug.ts:104`). 16 sentences sit in the loop, led by the rung that answered a call (`src/loop.ts:1104`) and per-call exec timing with the audit seq (`src/loop.ts:1234`); subagents inherit the parent's sink, because the surprise usually hides in the child (`src/subagents.ts:208`) |
+| `--debug`, `--debug-file` | **HAVE** | both arms exist and neither is a verbosity dial on the transcript: they capture the decisions the loop makes and never prints. `--debug` writes to the prose channel (so `-p` keeps stdout as data), `--debug-file <path>` appends to a file (`src/index.ts:592`, `:594`). The sink owns the rules so no call site can forget them: every line is redacted before it lands (`src/debug.ts:120`), an `*.env*` target and any path inside `.codewhip/` are refused because that is where the audit chain, keys and policy this log describes live (`src/debug.ts:41`), and at 8 MiB — or any write error — it warns once and goes quiet, since a broken diagnostic must never kill the run it is explaining (`src/debug.ts:88`). Lines append synchronously: the tail of the run that crashed is the only part anyone reads (`src/debug.ts:104`). 16 sentences sit in the loop, led by the rung that answered a call (`src/loop.ts:1140`) and per-call exec timing with the audit seq (`src/loop.ts:1273`); subagents inherit the parent's sink, because the surprise usually hides in the child (`src/subagents.ts:602`) |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
 | `--betas` API beta headers | **GAP-3** | wire sends none (`src/provider.ts`) |
 | `claude update`, `install [version]` | **GAP-4** | no update path |
@@ -96,7 +96,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `/rename`, `/tag`, `tagSession()` | HAVE | `codewhip sessions rename\|tag` (`src/index.ts:1654`) over `labelSession` (`src/sessions.ts:263`); REPL `.rename`/`.tag` at `src/index.ts:1715` |
 | `/clear [name]`, `/compact [instructions]` | PARTIAL | compaction is automatic and model-aware (`src/compact.ts`); no manual `/compact`, no instructions arg |
 | `--autocompact auto\|tokens` | ALIAS | `compactTokens: 0` to disable |
-| `/context`, `/usage`, `/cost` | HAVE | `.context`/`.usage`/`.cost` in the REPL (`src/index.ts:1758`/`:1767`/`:1769`, dispatched by the same matcher as the session verbs at `src/index.ts:1752`) over a session ledger folded once per run (`src/index.ts:1582`, `src/session-ledger.ts:35`); the grid's fixed costs come from the loop's own report (`src/loop.ts:1324`), not a caller's re-estimate |
+| `/context`, `/usage`, `/cost` | HAVE | `.context`/`.usage`/`.cost` in the REPL (`src/index.ts:1896`/`:1904`/`:1906`, dispatched by the same matcher as the session verbs at `src/index.ts:1888`) over a session ledger folded once per run (`src/index.ts:1718`, `src/session-ledger.ts:35`); the grid's fixed costs come from the loop's own report (`src/loop.ts:1334`), not a caller's re-estimate |
 | `/export [file]`, `/copy`, `/recap` | PARTIAL | `--share` + `--print` bundle exists; no transcript export/recap |
 | `/diff` working-tree view | PARTIAL | `captureBefore` preview + TUI diff (`src/tui/view.ts:54`) |
 | `/todos`, `Ctrl+T` checklist | ALIAS | `todo` tool + `.codewhip/todos.json` |
@@ -134,7 +134,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Task/TodoWrite | ALIAS | `todo` |
 | TaskCreate/Get/List/Update | **HAVE** | per-item tasks whose edges gate claiming: `todo` list/get/replace/update (`src/tools/todo.ts:71`, `:62`), items carry `description`/`activeForm`/`owner`/`blocks`/`blockedBy`, either edge direction stored both ways (`src/tools/todo-store.ts:146`), a dangling edge (`:129`), a cycle (`:131`) and a claim past an open edge (`:133`) all refused — and re-checked on every write, so the file's invariants hold rather than the argument's (`src/tools/todo.ts:47`) |
 | Agent/`Skill` tool | PARTIAL | `delegate`, `delegate_many`; no model-invoked skills |
-| AskUserQuestion | PARTIAL | `ask_user`: one question per call (not up to four), no `header`/`preview` field, and a numbered readline rather than a selection widget — `src/tools/ask-user.ts:82`, rendered at `src/index.ts:928`; allow-class at `src/policy.ts:430`, refused for a child at `src/loop.ts:877`, advertised only where a keyboard is reachable (`src/tools/registry.ts:316`) |
+| AskUserQuestion | PARTIAL | `ask_user`: one question per call (not up to four), no `header`/`preview` field, and a numbered readline rather than a selection widget — `src/tools/ask-user.ts:82`, rendered at `src/index.ts:968`; allow-class at `src/policy.ts:430`, refused for a child at `src/loop.ts:884`, advertised only where a keyboard is reachable (`src/tools/registry.ts:316`) |
 | ToolSearch / WaitForMcpServers | **GAP-3** | absent (MCP) |
 | EnterWorktree/ExitWorktree, `isolation: worktree` | **GAP-3** | absent; worktree *escape* is denied today |
 | LSP tool | **GAP-5** | absent |
@@ -147,9 +147,9 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 | Claude Code | Status | codewhip evidence |
 |---|---|---|
-| `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:169`) |
-| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:141` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:211`), and both are compiled onto one list the child is born with (`src/subagents.ts:298`, `:377`); the other eight are refused BY NAME with their reason (`src/subagents.ts:70`) — no field is ever accepted-and-dropped |
-| `--agents` JSON, `--agent` | **GAP-3** | absent |
+| `.claude/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not `.claude/`), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
+| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:144` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:386`), and both are compiled onto one list the child is born with (`src/subagents.ts:480`, `:599`); the other eight are refused BY NAME with their reason (`src/subagents.ts:73`) — no field is ever accepted-and-dropped |
+| `--agents` JSON, `--agent` | PARTIAL | `--agents '{"<name>":{"description":…,"prompt":…}}'` is the same roster in JSON (`src/subagents.ts:209`) and outranks `.codewhip/agents/*.md`, which outranks the built-ins (`src/subagents.ts:424`, `src/loop.ts:426`); `--agent <name>` puts an entry on the main thread (`src/index.ts:1145` → `src/subagents.ts:522`). Three deltas: the prompt is appended, never a replacement for the harness base; a `tools` narrowing on the main thread can only refuse read/search (`src/subagents.ts:480`); and there is no mid-session agent switch |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
 | Agent view panel, parallel background agents, `SendMessage`, teammates | **GAP-3** | children are synchronous and depth-capped |
 | Subagent on global audit chain, budget split, folded receipts | **HAVE-plus** | `src/tools/child-run.ts` |
@@ -212,8 +212,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 17**, **GAP 42**,
-i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 20, 4 → 13,
+**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 18**, **GAP 41**,
+i.e. **42.2%** at parity or better. Remaining GAP rows by wave: 3 → 19, 4 → 13,
 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
@@ -529,7 +529,7 @@ Wave 3b (the harness's own decisions on a channel) closed 1 row:
 - **It logs why, not what.** The transcript already prints every tool call,
   verdict and hop, on stderr and on the audit chain; a flag that repeated that
   would be a verbosity dial. What had no channel was the reasoning that died
-  inside the loop — which rung answered (`src/loop.ts:1104`), why rotation was
+  inside the loop — which rung answered (`src/loop.ts:1140`), why rotation was
   skipped (`:698`), what the transcript weighed at each metering point (`:734`),
   what a hook returned (`:1147`). 16 sentences, chosen because each one is the
   answer to a question an operator has asked out loud.
@@ -547,7 +547,7 @@ Wave 3b (the harness's own decisions on a channel) closed 1 row:
   (`src/debug.ts:88`) — the same rule hooks already follow. Lines append
   synchronously (`src/debug.ts:104`) because the tail of the run that crashed is
   the only part anyone ever reads, and a buffered stream is precisely how that
-  tail is lost. Subagents inherit the parent's sink (`src/subagents.ts:208`):
+  tail is lost. Subagents inherit the parent's sink (`src/subagents.ts:602`):
   delegation is where surprises hide, and a child that cannot be debugged is a
   child that cannot be trusted. The cost is disk and nothing else — no prompt
   token is added, so receipts are unchanged at `$0` delta.
@@ -561,8 +561,8 @@ count stays arithmetic rather than flattering. 15 new tests in
 
 - **The numbers are reported, not recomputed.** `agentLoop` now returns the
   shape it actually put on the wire — system prompt, tool specs and the
-  compaction ceiling it used (`src/loop.ts:1324`) — and the REPL folds usage plus
-  that shape into one session ledger per run (`src/index.ts:1582`). A grid built
+  compaction ceiling it used (`src/loop.ts:1334`) — and the REPL folds usage plus
+  that shape into one session ledger per run (`src/index.ts:1718`). A grid built
   by a second estimate of the prompt would disagree with the run it claims to
   describe, and the disagreement would be invisible.
 - **Every figure that is not a meter reading says so.** The grid header names its
@@ -597,20 +597,20 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
 - **`tools:` narrows and cannot widen.** A child's whole authority is read and
   search by construction, so a file naming `bash` would advertise a promise the
   harness breaks on the first call; the parse fails instead
-  (`src/subagents.ts:141`). `CHILD_TOOL_NAMES` (`src/tools/types.ts:37`) is now
+  (`src/subagents.ts:144`). `CHILD_TOOL_NAMES` (`src/tools/types.ts:39`) is now
   the single list that both that check and the child's spec builder
   (`src/tools/registry.ts:301`) read — a second copy is how a file starts naming
   a tool its child cannot use.
 - **Narrowing is expressed as a refusal, not as a second mechanism.**
   `tools: read` compiles to one whole-tool refusal for `search`
-  (`src/subagents.ts:298`) and joins the child's `disallowedTools` — the same
+  (`src/subagents.ts:480`) and joins the child's `disallowedTools` — the same
   list the operator's `--disallowed-tools` fills. So `toolSpecs` un-advertises
   the spec and the ladder refuses the call through the path that already existed
   for both, rather than a frontmatter-only one that could drift.
 - **A field that does nothing is a false sentence in a config file.** `permissionMode`,
   `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort` and
   `isolation` are each refused by name with the reason it cannot be honoured
-  (`src/subagents.ts:70`), and an unknown key is refused as unknown, so a typo
+  (`src/subagents.ts:73`), and an unknown key is refused as unknown, so a typo
   surfaces the same way. The refusal is not a shrug: `codewhip agents` prints the
   file as SKIPPED with the line needed to fix it. Accepting-and-dropping
   `permissionMode: acceptEdits` would have been the friendlier behaviour and the
@@ -621,7 +621,7 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
   today, because `read`/`search` take no shape (`src/tool-filter.ts:62`) and a
   child cannot reach the four shapeful tools. What shipped is the difference
   between a child honouring the run's refusals *by construction*
-  (`src/loop.ts:1197` → `src/tools/child-run.ts:47` → `src/subagents.ts:377`) and
+  (`src/loop.ts:1223` → `src/tools/child-run.ts:47` → `src/subagents.ts:599`) and
   by the accident of that grammar — and the reason `tools:` could be built at all
   without inventing a second authority path.
 - **Cost is a smaller prompt.** Nothing is added to any system prompt; a
@@ -633,7 +633,7 @@ at load time — and "loudly refused" is not "does what Claude does". 9 new test
 
 `ask_user` is the thirteenth builtin: the model puts one multiple-choice
 question to the human who started the run and their answer arrives as a tool
-result (`src/tools/ask-user.ts:82`, `src/index.ts:928`). The row is PARTIAL, not
+result (`src/tools/ask-user.ts:82`, `src/index.ts:1606`). The row is PARTIAL, not
 HAVE, because three things in Claude Code's schema are not here: up to four
 questions per call, the `header` chip, and the `preview` body. The capability the
 row named — asking back — ships with tests.
@@ -656,12 +656,12 @@ row named — asking back — ships with tests.
   a fabricated call cannot conjure a keyboard.
 - **One keyboard, one owner.** A child that could prompt would be the parent's
   consent gate with a second caller, so the loop refuses it before the ladder
-  (`src/loop.ts:877`, `loop:child-no-prompt`) and the deny lands on the child's
+  (`src/loop.ts:884`, `loop:child-no-prompt`) and the deny lands on the child's
   own audit runId — not the parent's trace, which is what keeps the two runs
   separable afterwards.
 - **Free text outranks the menu.** A number in range picks an option; anything
   else — a sentence, an out-of-range digit, an option typed verbatim in another
-  case — becomes the human's own answer (`src/index.ts:954`). A forced choice is
+  case — becomes the human's own answer (`src/index.ts:995`). A forced choice is
   a interrogation, and the interesting answers are the ones nobody listed.
 - **Silence is a refusal, never an empty yes.** An interrupted or unanswered
   question returns `ok: false` naming the question, and a headless call returns
@@ -670,6 +670,65 @@ row named — asking back — ships with tests.
 - **Cost: one round-trip, and only when it can land.** No prompt text is added
   anywhere; the usage guidance lives in the spec, which is sent only when the
   spec is advertised. A run with no human pays nothing for the tool at all.
+
+### Wave 3f — the roster on the command line (2026-09-25)
+
+`.codewhip/agents/*.md` already made a subagent a committed file. `--agents
+'{"scout":{…}}'` is the same roster typed once, for a run that should not leave
+a trace (`src/subagents.ts:209`), and `--agent scout` puts an entry on the main
+thread instead of a child's (`src/index.ts:670` → `src/subagents.ts:522`). The
+row is PARTIAL: three deltas remain and each is named in the matrix. 14 new
+tests (`src/subagents.test.ts`, `src/agents-flag.test.ts`).
+
+- **Two sources, one compiler.** A `--agents` entry is parsed into the same
+  `AgentDef` and passed through the same `parseToolsField` and `entryProblems`
+  as a file (`src/subagents.ts:173`), so a flag cannot be laxer than a commit:
+  `tools` still narrows only, `maxTurns`/`max_steps` still bound 1–25, and
+  `permissionMode` is still refused BY NAME. One cap does the size work —
+  64 KB of payload (`src/subagents.ts:188`) instead of the 8 000-char prompt cap
+  a file has, because the JSON carries names and descriptions too.
+- **Precedence is a ranking of specificity, and it is visible.** built-ins →
+  files → `--agents` (`src/subagents.ts:424`, merged into the loop's own roster at
+  `src/loop.ts:426`): the thing typed for this run outranks the thing committed,
+  which outranks the thing shipped. The flag list is handed to the delegation
+  tools as `ctx.agents` (`src/tools/types.ts:128`), so `codewhip agents`, the
+  parent's roster line and `delegate` all resolve the same name to the same
+  entry — a flag that only the summariser could see would be a false roster.
+- **An entry that cannot be honoured stops the run before a token is spent.**
+  Both flags resolve at parse time, so malformed JSON, a bad name or a duplicate
+  `--agent` returns `null` from `parseRunArgs` and prints the reason
+  (`src/index.ts:660`), and `--agent nosuch` prints the roster it searched:
+  `codewhip: --agent "nosuch" is not on the roster (explore, plan, review)`,
+  followed by a `$0.0000` receipt. A roster that half-loads surfaces later as
+  `unknown agent "…"`, which is a different bug's error message.
+- **The persona appends; it does not replace.** Claude Code's agent definition is
+  the system prompt. Here the entry's prompt is joined to the harness base
+  (`src/subagents.ts:522`), because the base is what tells the model which calls
+  get refused: replace it and the model retries denys until it learns by
+  collision. Children still replace — their whole authority is two allow-class
+  tools, so there is no refusal policy to forget.
+- **Authority on a main thread is still the operator's.** `--agent` compiles
+  through `agentFilters` like a child (`src/subagents.ts:480`), and that reuse is
+  exact: `tools` narrows over the CHILD set, so on a main thread it can refuse
+  `read` and `search` and nothing else. Widening or muting the ladder stays
+  `--disallowed-tools` / `--permission-mode` business; an agent file is a persona
+  plus a narrowing, never a grant.
+- **Model precedence, and what pinning costs.** An entry's `model` applies only
+  when `--model` was not typed (`src/subagents.ts:522`), and applying it turns
+  rotation off — `--models a,b` are candidates for one routed family, so
+  honouring a pinned model while hopping between them would be a run that lies
+  about which model answered. The banner says all of it: `!! --agent auditor:
+  its 10-char prompt joins the system prompt and re-pays every turn; model pinned
+  to some/model (rotation off — candidates belong to the routed family)`.
+- **`maxTurns` is not applied to a main thread.** A run's step budget is
+  `--max-steps`, the operator's; silently truncating a human's own run at an
+  entry's 12 steps would be a surprise paid for in lost work. It bounds children
+  only, and the row carries that as a delta rather than pretending otherwise.
+- **Cost is prompt text, and it shares one budget.** The persona is appended into
+  the same `APPEND_MAX_CHARS` (8 000) tail as `--append-system-prompt[-file]` and
+  checked before the run, so the cap errors instead of slicing a sentence in half
+  (`src/index.ts:1145`). No new lines are added anywhere else: a run without
+  `--agent` pays nothing for the feature.
 
 Definition of done for this program, so the audit is arithmetic: **every
 in-scope GAP row has shipped behaviour, tests and a CHANGELOG entry**, wave by
@@ -695,9 +754,9 @@ count is the instrument, not the memory of it.
    **closed 2026-09-24** (`src/settings.ts`, `src/tools/jail.ts`,
    `src/loop.ts`, `src/checkpoints.ts`);
    `--json-schema` **closed 2026-09-24** (`src/structured.ts`,
-   `src/loop.ts:731`, `src/run-output.ts`);
+   `src/loop.ts:784`, `src/run-output.ts`);
    `--input-format stream-json` **closed 2026-09-24** (`src/stream-input.ts`,
-   `src/index.ts:1480`);
+   `src/index.ts:1122`);
    the public programmatic entry **closed 2026-09-24** (`src/sdk.ts` —
    `query()`/`tool()`/`canUseTool`, on top of the host-tool substrate in
    `src/tools/registry.ts` and the structured ask in `src/loop.ts`). **Wave 2
@@ -706,13 +765,17 @@ count is the instrument, not the memory of it.
    (`src/tools/todo-store.ts`, `src/tools/todo.ts`); `--debug`/`--debug-file`
    **closed 2026-09-25** (`src/debug.ts`); `.context`/`.usage`/`.cost` over a
    session ledger **closed 2026-09-25** (`src/session-ledger.ts`,
-   `src/loop.ts:1324`) — a PARTIAL row, so the wave-3 GAP pile is untouched.
+   `src/loop.ts:1334`) — a PARTIAL row, so the wave-3 GAP pile is untouched.
    Subagent frontmatter **advanced GAP → PARTIAL 2026-09-25** (`tools` and
    `disallowedTools` honoured, the other eight refused by name) — GAP 44 → 43,
    the first wave-3 row to move since task-list blockers.
    `ask_user` **advanced GAP → PARTIAL 2026-09-25** (the model asks one
    multiple-choice question back; four-questions-per-call, `header` and `preview`
    are the named deltas) — GAP 43 → 42, wave 3 21 → 20.
+   `--agents` JSON + `--agent` **advanced GAP → PARTIAL 2026-09-25** (the file
+   roster in JSON, three-source precedence, and an entry on the main thread;
+   append-not-replace, child-only `tools` narrowing and no mid-session switch are
+   the named deltas) — GAP 42 → 41, wave 3 20 → 19.
    Remaining: parallel tool
    exec, vision input, prompt caching, hook events 3→33 with
    `additionalContext`/`matcher`/`if`, the eight un-honoured agent fields plus
