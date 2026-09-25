@@ -389,7 +389,7 @@ parse time there rather than silently doing nothing.
     `loop:child-no-prompt`, recorded on the child's own audit runId.
   Free text outranks the menu: a number in range picks an option, anything else —
   a sentence, an out-of-range digit, an option typed in another case — is the
-  human's own answer verbatim (`src/index.ts:954`), because a forced choice is an
+  human's own answer verbatim (`src/index.ts:995`), because a forced choice is an
   interrogation and the interesting answers are the ones nobody listed. 15 tests,
   including an end-to-end one that reads the child's deny back out of
   `outcomes.jsonl`. Cost: one extra tool spec in interactive runs only — 843
@@ -397,6 +397,55 @@ parse time there rather than silently doing nothing.
   2026-09-25), re-sent per provider call, against a rough 4 chars/token; headless
   and SDK runs send nothing, and no prompt text was added anywhere, so receipts
   are otherwise unchanged.
+- **`--agents '<json>'` and `--agent <name>`: the roster on the command line.**
+  Parity-matrix Wave 3f: GAP 42 → 41, wave 3 20 → 19 (PARTIAL, with three named
+  deltas — the prompt appends rather than replaces, a `tools` narrowing can only
+  refuse `read`/`search`, and there is no mid-session switch).
+  - `--agents '{"scout":{"description":"…","prompt":"…"}}'` is
+    `.codewhip/agents/*.md` in JSON (`src/subagents.ts:209`) — parsed into the
+    same `AgentDef` through the same `parseToolsField` and `entryProblems`, so a
+    flag cannot be laxer than a commit: `tools` still only narrows, `maxTurns`
+    still bounds 1–25, and `permissionMode`/`hooks`/`mcpServers` are still
+    refused **by name**. One payload cap (64 KB) does the size work a file's
+    8 000-char prompt cap does.
+  - Precedence is built-ins → committed files → `--agents`
+    (`src/subagents.ts:424`), and the flag list is handed to the delegation
+    tools too (`src/tools/types.ts:128`, `src/loop.ts:426`), so `codewhip
+    agents`, the parent's roster line and `delegate` all resolve one name to one
+    entry. A roster the summariser could see but the model could not summon is a
+    false roster.
+  - Anything that cannot be honoured stops the run **before a token is spent**:
+    `--agents nonsense` → `--agents is not valid JSON: Unexpected token 'o',
+    "nonsense" is not valid JSON (see: codewhip help run)`, and `--agent nosuch`
+    → `codewhip: --agent "nosuch" is not on the roster (explore, plan, review)`
+    followed by `receipt: 0 prompt + 0 completion tokens / … / $0.0000`. Both are
+    real output, captured 2026-09-25.
+  - `--agent <name>` puts an entry on the **main thread** (`src/index.ts:670` →
+    `mainThreadTurn` at `src/subagents.ts:522`): its prompt is appended to the
+    harness base, because the base is what tells the model which calls get
+    refused — replace it and the model learns its limits by collision. Children
+    keep replacing it; their whole authority is two allow-class tools.
+  - Two precedences were decided, not inherited. An entry's `model` applies only
+    when `--model` was not typed, and applying it turns **rotation off** —
+    `--models a,b` are candidates for one routed family, so honouring a pinned
+    model while hopping between them describes a run that did not happen.
+    `maxTurns` does **not** bound a main thread: a run's step budget is the
+    operator's `--max-steps`.
+  - `--agent` compiles its refusals through the child's own path
+    (`agentFilters`, renamed from `childFiltersFor` at `src/subagents.ts:480`),
+    which is exactly as strong as it sounds and no stronger: `tools` narrows over
+    the child set, so on a main thread it can mute `read` and `search` and
+    nothing else. Widening stays `--disallowed-tools`/`--permission-mode`
+    business.
+  - 14 tests (9 in `src/subagents.test.ts`, 5 in the new
+    `src/agents-flag.test.ts`). Cost: an appended prompt, which re-pays every
+    turn of one run — so the run says it out loud: `!! --agent auditor: its
+    10-char prompt joins the system prompt and re-pays every turn; model pinned
+    to some/model (rotation off — candidates belong to the routed family); 1
+    refusal(s) added above the ladder`. It shares the existing 8 000-char
+    `APPEND_MAX_CHARS` budget with `--append-system-prompt[-file]` and is checked
+    before the run, so the cap errors instead of slicing a sentence; a run
+    without `--agent` pays nothing.
 
 ### Changed
 

@@ -206,6 +206,65 @@ Why this doesn't dilute the trust model:
 `delegate` call is refused as `deny:loop:max-depth` even if a rogue model asks
 for it.
 
+## The roster without a file: `--agents` and `--agent`
+
+`.codewhip/agents/<name>.md` is the committed roster — the right home for an
+agent a team shares. For a roster that should exist only for this one run, type
+it:
+
+```sh
+codewhip run "audit this migration" \
+  --agents '{"auditor":{"description":"Finds what breaks on upgrade.","prompt":"Report only irreversible changes.","maxTurns":6,"tools":"read"}}'
+codewhip run "recon the tree" --agent scout --agents '{"scout":{"description":"Recon.","prompt":"Cite file:line for everything."}}'
+```
+
+`--agents` is the same roster in JSON and it compiles through the same parser as
+a file (`src/subagents.ts:209`): `tools` narrows and cannot widen, `maxTurns` is
+bounded 1–25, and the eight fields this harness cannot honour (`permissionMode`,
+`hooks`, `mcpServers`, …) are refused **by name** rather than accepted and
+dropped. Precedence is built-ins → files → `--agents`, i.e. the thing typed for
+this run outranks the thing committed, which outranks the thing shipped — and
+the flag list is visible to `delegate` as well as to `codewhip agents`, so a name
+means one agent everywhere.
+
+An entry that cannot be honoured stops the run before a token is spent:
+
+```
+$ codewhip run --agents nonsense -p "go"
+run: --agents is not valid JSON: Unexpected token 'o', "nonsense" is not valid JSON (see: codewhip help run)
+
+$ codewhip run --agent nosuch -p "go"
+codewhip: --agent "nosuch" is not on the roster (explore, plan, review)
+
+receipt: 0 prompt + 0 completion tokens / moonshotai/kimi-k3 / $0.0000 (nvidia free tier)
+```
+(captured 2026-09-25 against `dist/index.js`; `codewhip: -p` keeps stdout as data,
+so both lines arrive on stderr)
+
+`--agent <name>` runs *as* an entry instead of delegating to one. Its prompt is
+**appended** to the harness base, not a replacement for it: the base is what
+tells the model which calls get refused, so a persona that displaces it buys a
+run of retries at the denylist. Children still replace theirs — a child's whole
+authority is two allow-class tools, so there is no refusal policy to forget. Two
+precedences follow from that:
+
+- the entry's `model` applies only when `--model` was not typed, and applying it
+  turns rotation off (`--models a,b` are candidates for one routed family);
+- `maxTurns` bounds children only. A human's own run keeps the step budget the
+  human set with `--max-steps`.
+
+Because the persona is prompt text, it re-pays every turn of the run, and the run
+says so:
+
+```
+!! --agent auditor: its 10-char prompt joins the system prompt and re-pays every turn; model pinned to some/model (rotation off — candidates belong to the routed family); 1 refusal(s) added above the ladder
+```
+
+It shares the existing 8 000-character budget with `--append-system-prompt` and
+`--append-system-prompt-file`, so the cap errors out rather than slicing a
+sentence in half — and a run that types neither flag pays nothing for any of
+this.
+
 ## Custom slash commands
 
 Your repeated prompts can become one-liners: `.codewhip/commands/<name>.md` is
