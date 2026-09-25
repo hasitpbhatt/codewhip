@@ -4,7 +4,7 @@ import { parseRunArgs } from "./index.js";
 import { setOutputFormat } from "./run-output.js";
 
 /**
- * Wave-1 headless flags (docs/moat/20-claude-code-parity.md GAP-1):
+ * Wave-1 headless flags (docs/moat/20-parity-matrix.md GAP-1):
  * `-p`, `--output-format`, `--max-budget-usd`, and the `-` stdin prompt.
  */
 
@@ -71,7 +71,8 @@ test("- marks the prompt as coming from stdin", () => {
   assert.equal(o.prompt, "");
   assert.equal(o.stdinPrompt, true);
   assert.equal(o.headless, true);
-  // `--print` still means the share block (documented collision with Claude Code).
+  // `--print` still means the share block (a documented name collision with
+  // another widely-used agent CLI).
   const s = parse(["--share", "--print", "x"]);
   assert.ok(s !== null);
   assert.equal(s.sharePrint, true);

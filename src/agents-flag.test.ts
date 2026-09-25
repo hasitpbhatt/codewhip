@@ -4,7 +4,7 @@ import { parseRunArgs } from "./index.js";
 import { CHILD_DEFAULT_MAX_STEPS } from "./subagents.js";
 
 /**
- * Wave 3f CLI surface (docs/moat/20-claude-code-parity.md row `--agents` JSON,
+ * Wave 3f CLI surface (docs/moat/20-parity-matrix.md row `--agents` JSON,
  * `--agent`): both flags are resolved at argument-parse time, so a roster that
  * cannot be honoured stops the run before a token is spent. The roster's own
  * rules are tested in `subagents.test.ts`; the shaping of a main-thread agent

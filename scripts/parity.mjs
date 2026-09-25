@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Recount the parity matrix from its own rows and check the Score section
-// against the result. The number in docs/moat/20-claude-code-parity.md is the
+// against the result. The number in docs/moat/20-parity-matrix.md is the
 // program's progress bar, and it was hand-counted wrong once already; a
 // percentage nobody can recompute is an opinion.
 //
@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DOC = process.argv[2] ?? "docs/moat/20-claude-code-parity.md";
+const DOC = process.argv[2] ?? "docs/moat/20-parity-matrix.md";
 const STATUSES = ["HAVE-plus", "HAVE", "ALIAS", "PARTIAL", "N/S", "GAP"];
 const COUNTED = new Set(["HAVE-plus", "HAVE", "ALIAS", "PARTIAL", "GAP"]);
 

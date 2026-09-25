@@ -1,17 +1,18 @@
-# 10 — Competitive reality: where codewhip stands against Claude Code (2026-09-18)
+# 10 — Competitive reality: where codewhip stands against the incumbent (2026-09-18)
 
 > Triggered by the question "are we at a stage where we can compete with
-> Claude Code? be as critical as you can." This is the recorded answer.
+> the leading closed-box terminal agent? be as critical as you can."
+> This is the recorded answer.
 > Additive ruling; no frozen schema in this document is changed.
 
 ## Verdict
 
-**No — codewhip cannot compete with Claude Code today, and trying to compete
-head-on is the wrong goal.** The honest competitive set is the open agent
+**No — codewhip cannot compete head-on with the incumbent today, and trying
+to compete head-on is the wrong goal.** The honest competitive set is the open agent
 CLIs (OpenCode, Crush, Amp, Goose, Gemini CLI); the honest aspiration in
-SOUL.md ("H2: credible open alternative to Claude Code's closed trust
+SOUL.md ("H2: credible open alternative to the incumbent closed-trust model
 monopoly") is a 90-day-per-slice execution problem, not a parity problem.
-Feature parity vs Claude Code audits at roughly 40–50% by count, but the
+Feature parity against the reference terminal audits at roughly 40–50% by count, but the
 skew matters more than the number: governance, auditability, receipts, and
 headless/CI usage are at or above parity, while model steering, agent
 benchmarking, extensibility (hooks/MCP/skills), vision, and git workflow
@@ -31,7 +32,7 @@ aspiration.
    (`tasks/`, 4 polish / 8 implement), machine-graded checkers, results in
    `.codewhip/eval.jsonl`, bars folded into `codewhip metrics`. The bars
    are now measurable; they still need real runs against real providers.
-2. **Model steering was 22 lines.** Claude Code's behavioral quality comes
+2. **Model steering was 22 lines.** The incumbent's behavioral quality comes
    substantially from a large hand-tuned system prompt plus harness/model
    co-design. *Partially shipped:* the system prompt grew env context,
    git conventions, delegation guidance, and an answer shape. Still thin

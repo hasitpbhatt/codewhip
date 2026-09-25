@@ -22,7 +22,7 @@ Concrete rules:
 4. Tool calls are JSON, validated by Zod, timeout 60s default. Failure = tool-result string fed back to model, never a crash.
 5. Cost meter wraps every step: tokens in/out x model price, running total printed on exit. If meter is missing, the loop ships nothing.
 
-Parity bar: OpenCode's TUI/server/event-bus/SQLite is v3, not v1. v1 parity = Claude Code's core: multi-step edits with interrupt and step cap. Nothing more.
+Parity bar: OpenCode's TUI/server/event-bus/SQLite is v3, not v1. v1 parity = the incumbent's core: multi-step edits with interrupt and step cap. Nothing more.
 
 ## v1 tool set + deferred tools
 
@@ -55,7 +55,7 @@ Contract: `--budget $/task` (default $0.50). Preflight: estimate = class rate x 
 2. No desktop app (Tauri/Electron), IDE extension, or TUI theming. Each doubles support surface for zero extra tasks completed.
 3. No MCP server hosting, plugin marketplace, or skills library. Distribution theater before the loop works.
 4. No SQLite/Drizzle/event-bus in v1. JSONL transcripts + prompt cache cover 90%. DB is a scaling reward, not a starting requirement.
-5. No SSO/audit-log/policy-DSL enterprise bundle. Claude Code already sells that to enterprises. We win on $/task, not checkboxes.
+5. No SSO/audit-log/policy-DSL enterprise bundle. The incumbent already sells that to enterprises. We win on $/task, not checkboxes.
 6. No subscription that hides meter. Metered routing is the moat — obscuring it destroys the price signal users pay for.
 7. No eval team, no prompt-engineering guild, no "AI consultancy". If it needs humans per task, it is anti-leverage.
 
@@ -63,6 +63,6 @@ Contract: `--budget $/task` (default $0.50). Preflight: estimate = class rate x 
 
 **naval-memory:** you will argue memory-first — SQLite + event log + semantic recall from day one because "moat = state that compounds." My objection: empty memory compounds nothing. A DB with zero successful tasks is a liability that slows the only thing that matters: shipping the loop that completes task #1. Transcript JSONL is sufficient state for v1; prompt-cache (10x input discount) already IS memory. Build recall after 1,000 paid tasks prove what is worth remembering, not before. Do not block v1 on schema design.
 
-**naval-governor:** you will argue governance-first — permission DSL, audit trails, enterprise policy as the wedge. My objection: governance without volume is a tax nobody pays. Claude Code already has permission gates + enterprise trust + leaked harness anyone can copy; out-governing Anthropic with 0 engineers is fantasy. Minimal allow/ask/deny on `bash`+`edit` stops real damage. Everything else (SSO, signed receipts, redaction pipelines) is labor-leverage theater until routed $/task forces adoption. Users forgive missing audit logs; they never forgive $2.42 for a typo fix.
+**naval-governor:** you will argue governance-first — permission DSL, audit trails, enterprise policy as the wedge. My objection: governance without volume is a tax nobody pays. The incumbent already has permission gates + enterprise trust + a leaked harness anyone can copy; out-governing Anthropic with 0 engineers is fantasy. Minimal allow/ask/deny on `bash`+`edit` stops real damage. Everything else (SSO, signed receipts, redaction pipelines) is labor-leverage theater until routed $/task forces adoption. Users forgive missing audit logs; they never forgive $2.42 for a typo fix.
 
 **naval-scout:** you will argue GTM-first — partnerships, launch content, marketplace distribution before the engine is 10x cheaper. My objection: distribution is rented leverage; routing is owned leverage. Selling a CLI stub that prints "not implemented yet" burns the one asset we cannot rebuy: credibility with developers. No launch, no partnerships, no content flywheel until `run` demonstrably does polish tasks at <$0.05 with meter receipts. When $/task is 30x better, developers ARE the distribution. Until then, marketing is lying with extra steps.

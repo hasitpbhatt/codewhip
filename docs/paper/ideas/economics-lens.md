@@ -20,7 +20,7 @@ co-constructed by model, user, product," with no price signal anywhere in
 the construction). The frontier below is: what happens when the harness
 actually prices things — privileges, risk, trust, bypasses?
 
-Survey method: web searches (2026-09-13) over live products (Claude Code,
+Survey method: web searches (2026-09-13) over live products (the incumbent,
 Cursor, Cline, OpenCode, Aider, Devin, Windsurf, Harness, enterprise
 gateways, insurer offerings, bug-bounty programs) and 2024–2026 papers
 (insurance-of-agents line, principal-agent line, econ-of-LLM line,
@@ -45,7 +45,7 @@ for BOTH the operator (fat-finger `a` now has a visible cost) and the
 agent (privilege escalation competes with the task budget).
 
 **Why nobody has it — product evidence.** No harness prices permissions:
-Claude Code permission modes, Cursor allowlists, Cline auto-approve
+incumbent permission modes, Cursor allowlists, Cline auto-approve
 toggles, OpenCode permission config are all free at the margin; vendors
 bill seats/tokens, never privilege. Harness.io markets "risk-based
 autonomy" LEVELS (qualitative tiers); agentic platforms sell per-action

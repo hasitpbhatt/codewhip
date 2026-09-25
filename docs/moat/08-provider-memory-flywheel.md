@@ -12,7 +12,7 @@ CodeWhip already records every chat/models call with `src/provider-stats.ts` →
 
 2. **Failure fingerprints with repo context.**
    Join provider call with `outcomes.jsonl` runId: `provider,model,task_class,private?, cwd_hash, failure_bucket`. Distinguish `bad_model` for a retired id vs `auth` after key rotation vs `timeout` for a local runtime under memory pressure.  
-   Why uncopyable: OpenCode logs sessions; Claude Code logs internally. Neither exposes a human-verdict-joined failure graph per repo. The join *is* the signal.
+   Why uncopyable: OpenCode logs sessions; the incumbent logs internally. Neither exposes a human-verdict-joined failure graph per repo. The join *is* the signal.
 
 3. **Custom provider lifecycle.**
    Registration metadata (`id, baseUrl, defaultModel, envVar, timeoutMs, rateLimitedHint`) + health history + model catalog drift detection (`models` call returns diff). Detect model retirement, path change, latency regression.  
@@ -92,4 +92,4 @@ Providers are interchangeable. The health map you earned is not.
 - Custom provider add validates loopback/http rules as-is; health monitoring extends validation to periodic `models` probe.
 - Receipts already print `tokens / model mix / $`. Add `provider health` summary to `metrics` output once 100+ calls exist.
 
-This is the data flywheel that makes CodeWhip stickier than OpenCode's sessions and less leaky than Claude Code's cloud memory: local-first, per-team provider intelligence that compounds with every failure you never have to repeat.
+This is the data flywheel that makes CodeWhip stickier than OpenCode's sessions and less leaky than the incumbent's cloud memory: local-first, per-team provider intelligence that compounds with every failure you never have to repeat.

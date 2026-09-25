@@ -4,8 +4,8 @@ import type { ToolDef } from "./registry.js";
 
 /**
  * The `ask_user` tool: the model puts a multiple-choice question to the human
- * who started the run and their answer comes back as a tool result — Claude
- * Code's AskUserQuestion.
+ * who started the run and their answer comes back as a tool result — the
+ * `AskUserQuestion` pattern used by several agent CLIs.
  *
  * Two things make this safe to hand an agent. It grants nothing: it reads one
  * line from the human and returns it as text, so every mutation still walks the

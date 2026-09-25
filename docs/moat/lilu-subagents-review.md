@@ -17,7 +17,7 @@ Compare the field on the only axis that counts:
 
 | | Delegates? | Child runs auditable? | Meter honest? |
 |---|---|---|---|
-| Claude Code | Yes | No — black-box children, no per-child trail on your disk | Vendor's meter, vendor's margin |
+| Closed-box incumbent | Yes | No — black-box children, no per-child trail on your disk | Vendor's meter, vendor's margin |
 | OpenCode | Partial | Permissions are a safeguard, not a sandbox; state doesn't compound | Unmetered bill |
 | **CodeWhip** | **Yes (depth 1)** | **Yes — global hash-chained log, per-child runId, per-child outcome record** | **Folds into the parent's receipt** |
 

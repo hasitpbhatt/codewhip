@@ -19,7 +19,7 @@ three places, and every one of them is an ungoverned learner. (1) The grant
 store learns from one keystroke (remembered allows — instance-based). (2)
 The promotion pipeline learns from decline counts (threshold-gated mining —
 a 20-line counting learner). (3) The industry has just swapped the human for
-a learner entirely: Anthropic's Claude Code Auto Mode (default for
+a learner entirely: Anthropic's Auto Mode (the incumbent's) (default for
 Pro/Max/Team since 2026-08-14) gates every Tier-3 action with a server-side
 two-stage Sonnet classifier, reporting 0.4% FPR, 17% FNR on overeager
 actions, and 5.7% FNR on synthetic exfiltration — with no per-decision score
@@ -32,7 +32,7 @@ other. The frontier below is learned governance that must itself be
 trustworthy: certificates on what was learned, integrity alarms on the
 learning stream, and adjudication between learners.
 
-Survey method: web searches (2026-09-13) over live products (Claude Code
+Survey method: web searches (2026-09-13) over live products (the incumbent
 Auto Mode engineering post + changelog + permission-modes docs, Cursor,
 Cline, OpenCode incl. the classifier-gate feature request, Exabeam Agent
 Behavior Analytics, Cloudanix Cloud UEBA, Obsidian Security, OPA canary
@@ -83,7 +83,7 @@ it does — the first soundness taxonomy for interaction-derived policy with
 adversarial proposals and noisy human labels.
 
 **Why nobody has it — product evidence.** No harness states what a minted
-rule can never do or reach. Claude Code allow rules persist silently in
+rule can never do or reach. incumbent allow rules persist silently in
 `settings.local.json` with no per-rule semantics statement; Cursor/Cline
 allowlists and codewhip's own `remembered.jsonl` likewise record provenance
 but never capability. Auto Mode's "agent-chosen parameters are unauthorized
@@ -396,7 +396,7 @@ source side instead of the probe side.
    product above.
 
 4. **Risk-scored ask routing / audited risk scores as the headline —
-   KILLED (taken at product speed).** Claude Code Auto Mode made a
+   KILLED (taken at product speed).** the incumbent's Auto Mode made a
    classifier the default approver (2026-08-14), with tiering
    (allowlist skips, classifier reviews Tier 3) that IS risk routing;
    AmPermBench (arXiv:2604.04978) already stress-tested it; AgentGuardian

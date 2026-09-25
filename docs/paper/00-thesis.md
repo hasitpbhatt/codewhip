@@ -208,7 +208,7 @@ subject.
    LLM-driven attacker that iterates on refused attempts (AgentDojo-style
    adaptive attacks) — hand-written injections understate the threat.
 4. **Cross-agent harness:** headless drivers for real coding agents
-   (Claude Code -p, OpenCode, Aider) executing the same malicious-repo tasks
+   (the incumbent -p, OpenCode, Aider) executing the same malicious-repo tasks
    twice (restart between) to measure persistence per product.
 5. **Responsible disclosure** to affected vendors; disclosure timeline in
    the paper's ethics section.

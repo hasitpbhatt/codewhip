@@ -64,7 +64,7 @@ export type AgentDef = {
 };
 
 /**
- * Claude Code's agent-file fields that codewhip does not honour, each with the
+ * Agent-file fields that codewhip does not honour, each with the
  * reason it cannot be honoured today. They are refused BY NAME — a field that
  * parses and then silently does nothing is a false sentence in a config file,
  * and the author learns it at the worst possible moment. Everything else is
@@ -129,7 +129,8 @@ const KNOWN_OPTIONAL_FIELDS = ["model", "max_steps", "tools", "disallowedTools"]
 
 /**
  * Normalise just the tool TOKEN of each comma-separated entry to lowercase, so
- * a file ported from Claude Code (`disallowedTools: Write, Edit`) meets this
+ * an agent file carried over from another harness (`disallowedTools: Write,
+ * Edit`) meets this
  * repo's lowercase filter grammar. Shapes are left byte-for-byte alone: a path
  * is case-sensitive and a wildcarded one is already refused by the parser.
  */

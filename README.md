@@ -7,7 +7,7 @@
 > 2am — policy-checked, memory-scoped, replayable, metered.
 
 An **open, model-agnostic, local-first terminal coding agent**. OpenCode
-optimizes for freedom, Claude Code for capability inside a closed box; neither
+optimizes for freedom, closed-box incumbents for capability; neither
 optimizes for *delegatability* — the moment a senior trusts the tool in a
 junior's hands unsupervised. CodeWhip does, and prices every run while it's at
 it.

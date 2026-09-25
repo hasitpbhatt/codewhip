@@ -14,7 +14,7 @@ CodeWhip has the **architecture of trust** but not the **experience of trust**. 
 ## What's Great (The Soul Is Real)
 
 **1. The wedge is chosen correctly.**  
-OpenCode optimizes for freedom. Claude Code optimizes for capability in a closed box. Neither optimizes for *delegatability*—the moment a senior trusts the tool in a junior's hands unsupervised. CodeWhip does. That's a product strategy, not a feature list.
+OpenCode optimizes for freedom. closed-box incumbents optimize for capability. Neither optimizes for *delegatability*—the moment a senior trusts the tool in a junior's hands unsupervised. CodeWhip does. That's a product strategy, not a feature list.
 
 **2. SOUL.md is a binding conscience, not marketing copy.**  
 "Code is permissionless leverage. Accountability is skin in the game. Desire is a contract to be unhappy until you want fewer things." The kill list (no TUI, no MCP catalog, no SQLite in H1, no subscription hiding the meter) is *enforced*. I've seen 50 repos claim focus; this one *has* it.

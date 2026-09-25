@@ -2,7 +2,7 @@
 
 Ground truth: `codewhip@0.1.0`, Node>=18, TS ESM. `src/index.ts` is a stub — `run` prints "agent session not implemented yet". Nothing compounds yet. Good. That means we still get to choose what compounds.
 
-Market (verified Sep 2026): OpenCode ~195k stars, 950 contributors, claims 16M devs/mo, MIT, TUI/desktop/IDE, model-agnostic. Claude Code ~$2.5B ARR (Feb 2026) → ~$8B run-rate (May 2026), >50% enterprise, ~20 hrs/week per dev, closed + subscription-gated, revoked third-party OAuth Jan 2026. Cursor $0 → $2B ARR in ~18 months on $0 marketing: fork VS Code, paid-power-user metric, bottom-up smuggling, custom Tab/Composer model trained on accept/reject data.
+Market (verified Sep 2026): OpenCode ~195k stars, 950 contributors, claims 16M devs/mo, MIT, TUI/desktop/IDE, model-agnostic. The closed-box incumbent ~$2.5B ARR (Feb 2026) → ~$8B run-rate (May 2026), >50% enterprise, ~20 hrs/week per dev, closed + subscription-gated, revoked third-party OAuth Jan 2026. Cursor $0 → $2B ARR in ~18 months on $0 marketing: fork VS Code, paid-power-user metric, bottom-up smuggling, custom Tab/Composer model trained on accept/reject data.
 
 Gap is real: open + model-agnostic + enforcement-grade governance, terminal-native. Nobody owns trusted autonomy in the terminal.
 
@@ -12,17 +12,17 @@ Gap is real: open + model-agnostic + enforcement-grade governance, terminal-nati
 2. **No MCP catalog land-grab.** Connectors are `>>` lowest on the house moat ranking for a reason — commodity, unowned, copied in a weekend. Ship 5 sharp tools (read, edit, bash, search, git), not 500 thin ones.
 3. **No 75-provider matrix on day one.** Provider routing is table stakes, not a wedge. Ship Anthropic + OpenAI + one local (Ollama) behind one interface. Add providers when users scream, not before.
 4. **No model training.** Cursor's Composer bet worked because they had 1M power users generating accept/reject signal first. We have zero users. Training now is burning money to be a worse lab.
-5. **No Claude Code enterprise-sales motion.** No top-down SSO-first, compliance-deck-first playbook. We smuggle in at $0 via `init`, then formalize — Cursor's order of operations, not Anthropic's.
+5. **No incumbent enterprise-sales motion.** No top-down SSO-first, compliance-deck-first playbook. We smuggle in at $0 via `init`, then formalize — Cursor's order of operations, not Anthropic's.
 
 ## Wedge statement + copyability defense
 
 **Wedge: CodeWhip is the terminal agent a team lead can let an intern run on prod-adjacent code at 2am — because every action is policy-checked, memory-scoped, and replayable from a redacted audit link.**
 
-Why this, specifically: OpenCode optimized for freedom (run anywhere, any model). Claude Code optimized for capability (best agent, closed box). Neither optimized for *delegatability* — the moment a senior trusts the tool in a junior's hands unsupervised. That is the uncopyable wedge because it is not a feature, it is a trust record.
+Why this, specifically: OpenCode optimized for freedom (run anywhere, any model). The incumbent optimized for capability (best agent, closed box). Neither optimized for *delegatability* — the moment a senior trusts the tool in a junior's hands unsupervised. That is the uncopyable wedge because it is not a feature, it is a trust record.
 
 Why can't OpenCode copy this in a weekend? They could ship a policy file in a weekend. They cannot ship the *corpus*: thousands of real redacted audit trails showing "this class of action was blocked, this override was justified, this is what safe looks like in a Rails monolith vs. a Terraform repo." Trust data compounds; policy parsers don't. Their brand is freedom — adding enforcement feels like friction to their base and they will underinvest in it.
 
-Why can't Claude Code copy this? They could, technically, in a sprint. They won't, structurally: their moat is closed-model + subscription lock-in ($8B run-rate says don't touch it). An open, portable, model-agnostic audit trail that lets a customer leave is anti-revenue for them. And they will never ship the redacted public share link — enterprise security review would kill it. Openness is the feature they are forbidden from cloning.
+Why can't the incumbent copy this? They could, technically, in a sprint. They won't, structurally: their moat is closed-model + subscription lock-in ($8B run-rate says don't touch it). An open, portable, model-agnostic audit trail that lets a customer leave is anti-revenue for them. And they will never ship the redacted public share link — enterprise security review would kill it. Openness is the feature they are forbidden from cloning.
 
 ## GTM design (init → share → team)
 

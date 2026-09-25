@@ -16,7 +16,7 @@
 | **Governance** | Hash-chained audit log (ed25519), policy jail, non-overridable denylist, path jail, plan mode | **Yes** — every run deposits a verifiable record; trust accrues per repo | Competitors treat governance as theater (allow-by-default) or enterprise upsell. CodeWhip *is* governance. |
 | **Memory** | `.codewhip/remembered.jsonl` (curated shapes + provenance), `outcomes.jsonl` (every run), `verdicts.jsonl` (human judgment) | **Yes** — verdicts → promoted denies → pre-flight blocks; reverts drop; survives model switches | Models are rented; per-repo scar tissue is owned. No lab can download your `policy.md`. |
 | **Metering** | Real token counts + known-price routes; honest "untracked" for unknown; <$0.05 polish gate | **Yes** — cost receipts build budget intuition; free chain is a permanent $0 floor | Competitors hide the meter or fiction-price. CodeWhip prints dollars every run. |
-| **Execution** | 6 tools (<150 lines each), `agentLoop()` with rotation, failover, compaction, repeat guard | **No** — execution is commoditized (OpenCode, Claude Code, any wrapper) | Correctly scoped: execution is the *cost of entry*, not the moat. |
+| **Execution** | 6 tools (<150 lines each), `agentLoop()` with rotation, failover, compaction, repeat guard | **No** — execution is commoditized (OpenCode, the incumbents, any wrapper) | Correctly scoped: execution is the *cost of entry*, not the moat. |
 
 **The moat equation: Memory > Governance > Execution >> Connectors.** This matches `00-convergence.md` ruling 1 exactly.
 
@@ -62,7 +62,7 @@ Every "no" ships as code, not a blog post.
 **Yes.** The wedge — *"terminal agent a team lead can let an intern run on prod-adjacent code at 2am"* — is:
 
 1. **Specific enough to execute** — 6 tools, 5 deny-rules, 3 providers, 1 loop. Shipped.
-2. **Valuable enough to pay for** — the alternative is "don't run agents unsupervised" or "pay $20/seat for Claude Code's closed box."
+2. **Valuable enough to pay for** — the alternative is "don't run agents unsupervised" or "pay $20/seat for closed-box incumbents."
 3. **Defensible for a decade** — the moat is *state that compounds* (audit + memory + verdicts), not model access or connector count.
 
 **The launch gate is correctly set to OPEN pending one proof point: a real priced polish run <$0.05 with receipts.** The mechanism (router, meter, free chain) is live; the receipt is one `codewhip run "fix typo" --class polish` away.

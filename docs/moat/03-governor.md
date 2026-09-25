@@ -1,6 +1,6 @@
 # 03 — Governor: Governance Is the Product
 
-Thesis: a model instruction is a memo. Enforcement is a control system. OpenCode admits its permissions are a "workflow safeguard, not a security sandbox." Claude Code's governance is real but closed and provider-locked. CodeWhip's opening: **policy-as-code + verifiable audit + real sandbox, checked into the repo, enforced by the harness — not the model.**
+Thesis: a model instruction is a memo. Enforcement is a control system. OpenCode admits its permissions are a "workflow safeguard, not a security sandbox." the incumbent's governance is real but closed and provider-locked. CodeWhip's opening: **policy-as-code + verifiable audit + real sandbox, checked into the repo, enforced by the harness — not the model.**
 
 ## 1. Policy schema (`codewhip-policy.yaml`)
 
@@ -65,7 +65,7 @@ Append-only JSONL at `.codewhip/audit.log`. Each line:
 
 ## 4. Auditor story (what we hand compliance)
 
-One command: `codewhip audit --export --since <quarter> --sign`. Output: `audit-bundle.zip` containing (a) JSONL slice with intact hash chain, (b) pinned `codewhip-policy.yaml` snapshot + its sha, (c) signed diff list per change, (d) `--verify` transcript. That maps 1:1 to SOC2 CC7/CC8 evidence: who did what, under which rule, with what approval, reproducibly. Claude Code Enterprise sells this via a closed Compliance API; we sell it as a file the auditor can verify offline without calling our servers. Trust that compounds.
+One command: `codewhip audit --export --since <quarter> --sign`. Output: `audit-bundle.zip` containing (a) JSONL slice with intact hash chain, (b) pinned `codewhip-policy.yaml` snapshot + its sha, (c) signed diff list per change, (d) `--verify` transcript. That maps 1:1 to SOC2 CC7/CC8 evidence: who did what, under which rule, with what approval, reproducibly. The incumbent's enterprise tier sells this via a closed Compliance API; we sell it as a file the auditor can verify offline without calling our servers. Trust that compounds.
 
 ## 5. Open disagreements
 

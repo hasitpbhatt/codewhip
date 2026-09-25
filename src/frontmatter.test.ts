@@ -16,7 +16,7 @@ describe("frontmatter", () => {
     strictEqual(r.body, "the body");
   });
 
-  it("accepts camelCase and snake_case keys alike — Claude Code's names and this repo's", () => {
+  it("accepts camelCase and snake_case keys alike — imported field names and this repo's", () => {
     const r = parseFlatFrontmatter("f.md", "---\ndescription: d\ndisallowedTools: Write\nmax_steps: 3\n---\nb");
     ok(!("error" in r), JSON.stringify(r));
     strictEqual(r.fields.get("disallowedTools"), "Write");

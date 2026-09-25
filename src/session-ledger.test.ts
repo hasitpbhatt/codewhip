@@ -20,7 +20,7 @@ import {
 
 /**
  * The session ledger behind `.context`, `.usage` and `.cost`
- * (docs/moat/20-claude-code-parity.md row 99). Two properties carry it:
+ * (docs/moat/20-parity-matrix.md row 99). Two properties carry it:
  * the numbers are summed per provider:model rather than averaged, and every
  * figure that is not a meter reading says so. The tests below therefore assert
  * on wording as much as on arithmetic — a grid that reads like a receipt while

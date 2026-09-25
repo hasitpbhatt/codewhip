@@ -134,7 +134,7 @@ describe("subagents", () => {
     ok("error" in bad && bad.error.includes("disallowedTools"), JSON.stringify(bad));
   });
 
-  it("parseAgentFile: the un-honoured Claude Code fields are refused by name, not ignored", () => {
+  it("parseAgentFile: the un-honoured agent fields are refused by name, not ignored", () => {
     for (const key of ["permissionMode", "skills", "mcpServers", "hooks", "memory", "background", "effort", "isolation"]) {
       const r = parseAgentFile("ab.md", `---\ndescription: d.\n${key}: anything\n---\nbody`);
       ok("error" in r, `${key} must be refused, not accepted-and-dropped`);

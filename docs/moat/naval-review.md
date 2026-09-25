@@ -72,7 +72,7 @@
 1. **Close the polish gate.** Price sensenova/alibaba/mistral from `PROVIDERS`, run a real polish task, print the <$0.05 receipt. Then launch gate = CLOSED.
 2. **Ship the remaining P1 hygiene (roadmap items 4–8):** pasteable share (`--share --print`), REPL slash commands, pack honesty, reporting honesty, drift/hygiene. No scope creep.
 3. **Freeze H1.** 7 rulings, no ties. Kill list is final — needs evidence to reopen.
-4. **Position on the axis that matters.** README comparison table: metered, audited, undoable, $0-capable vs capability-breadth. No "Claude Code killer" hype. SOUL voice.
+4. **Position on the axis that matters.** README comparison table: metered, audited, undoable, $0-capable vs capability-breadth. No "incumbent killer" hype. SOUL voice.
 
 The wedge is built. The compounding loop works. The trust artifacts are exportable proof. **Ship the last three items, prove the meter, then the product speaks for itself.**
 

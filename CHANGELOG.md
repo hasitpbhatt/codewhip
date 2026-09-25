@@ -17,7 +17,7 @@ parse time there rather than silently doing nothing.
 
 - **Headless scripting: `run -p`, `--output-format text|json|stream-json`,
   stdin piping and `--max-budget-usd`.** Parity-matrix Wave 1
-  (`docs/moat/20-claude-code-parity.md`); closes the four GAP-1 rows.
+  (`docs/moat/20-parity-matrix.md`); closes the four GAP-1 rows.
   - `-p`/`--headless` makes stdout carry **only** the result: every banner,
     receipt line and refusal cause moves to stderr, the REPL never opens, and
     interactive approvals are suppressed (asks are held and denied, so pair it
@@ -230,7 +230,7 @@ parse time there rather than silently doing nothing.
     stdin has exactly one meaning per run.
 - **`npm run parity`: the parity matrix now counts itself.**
   `scripts/parity.mjs` parses the status column of every row in
-  `docs/moat/20-claude-code-parity.md`, recomputes the percentage and the
+  `docs/moat/20-parity-matrix.md`, recomputes the percentage and the
   per-wave totals, and exits non-zero if the Score section no longer matches
   its own rows or if any row carries a status word the parser does not know.
   Both failure modes are historical, not hypothetical: the first Score line was
@@ -252,7 +252,7 @@ parse time there rather than silently doing nothing.
   receipt line still prints `tokens / model mix / $`, and an unmeterable route
   still prints `cost untracked`. 9 tests (`src/host-tools.test.ts`).
 - **The programmatic entry: `query()`, `tool()` and `canUseTool`.**
-  Parity-matrix Wave 2f (`docs/moat/20-claude-code-parity.md`), which closes
+  Parity-matrix Wave 2f (`docs/moat/20-parity-matrix.md`), which closes
   that wave. `src/sdk.ts` is a second mouth on one engine, not a second engine:
   `query()` resolves the route with the CLI's own `resolveRoute` → allowlist →
   `resolveKey` chain, refuses a dollar ceiling on an unpriced route, honours
@@ -269,7 +269,7 @@ parse time there rather than silently doing nothing.
   11 tests (`src/sdk.test.ts`), plus a live run of the built binary on the
   keyless `pollinations:openai-fast` route at $0.0000.
 - **A task list whose blockers bite.** Parity-matrix Wave 3a
-  (`docs/moat/20-claude-code-parity.md`): the `TaskCreate/Get/List/Update` row.
+  (`docs/moat/20-parity-matrix.md`): the `TaskCreate/Get/List/Update` row.
   `todo` is no longer one flat list — items carry `description` (what finishing
   means), `activeForm` (the label while in progress), `owner`, and
   `blocks`/`blockedBy` edges that either side may write because both are stored.
@@ -628,7 +628,7 @@ pointer) except where noted; the free chain is unchanged (43 hops).
 ## [0.3.0] — 2026-09-18
 
 Competitive-reality pass (analysis in `docs/moat/10-competitive-reality.md`):
-the gap list a side-by-side with Claude Code produced, with the highest-value
+the gap list a side-by-side produced, with the highest-value
 items fixed the same day. Cost behavior: unchanged — receipts keep their
 shape; eval adds a machine-graded measurement layer.
 

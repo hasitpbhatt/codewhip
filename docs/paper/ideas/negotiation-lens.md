@@ -18,7 +18,7 @@ precedent, evidence, counter-offers, and an auditable history: the operator
 decides *about a case*, not *at a prompt*. Four mechanisms survive the prior-art
 sweep; two die on it.
 
-Survey method: web searches (2026-09-13) over live products (Claude Code incl.
+Survey method: web searches (2026-09-13) over live products (the incumbent incl.
 Auto Mode and the v2.1.211 settings.local.json change, Cursor, Cline, Warp,
 Tangle, OpenCode, enterprise gateways, IETF drafts) and 2024–2026 papers
 (case-based-reasoning-for-agents line, simulation-in-the-loop line, dry-run/
@@ -53,7 +53,7 @@ UX panel's "two example future commands" demand into a measured comprehension
 mechanism (this absorbs explain-back consent — see kill 2).
 
 **Why nobody has it — product evidence.** No harness cites prior approvals at
-ask time. Claude Code persists allow rules silently to
+ask time. The incumbent persists allow rules silently to
 `.claude/settings.local.json` (repo-root since v2.1.211; per
 agenticcontrolplane.com/controls/claude-code and the code.claude.com
 changelog) — prior decisions bind but are never *shown*, and `ask` rules
@@ -127,7 +127,7 @@ dry-run replay at the approval prompt. Tangle (tangle.tools blog: "LLM Sandbox
 Environment For Agent Runs") records side effects to give reviewers evidence,
 but its own policy table requires approval *before* execution for durable
 actions and shows traces post-hoc — the reviewer never sees a pre-executed
-consequence. Claude Code (plan mode, Auto Mode), Cursor, Cline, Warp show
+consequence. incumbent (plan mode, Auto Mode), Cursor, Cline, Warp show
 plans and proposed-edit diffs — agent-authored descriptions, never executed
 effects. Dry-run preview exists only as a tool-author convention (Terraform
 plan; DB-migration CI dry-runs per samuelfaj.com's agent-migration post — a
@@ -197,7 +197,7 @@ measures the equilibrium between negotiation value and negotiation-as-
 escalation.
 
 **Why nobody has it — product evidence.** No surveyed harness proposes
-alternatives at denial. Claude Code, Cursor, Cline denials are terminal for
+alternatives at denial. incumbent, Cursor, Cline denials are terminal for
 the step; agents may improvise in-band afterwards, unstructured and unpoliced
 — precisely the channel this formalizes and checks. CAMEL-AI's human-in-the-
 loop pattern (camel-ai.org blogs) feeds denial messages back into the agent's
@@ -269,7 +269,7 @@ counter-question in the governance conversation — "what have you taught
 yourself since I last looked?"
 
 **Why nobody has it — product evidence.** No harness ships a permission diff.
-Claude Code allow rules live in settings.local.json — diffable only as a raw
+incumbent allow rules live in settings.local.json — diffable only as a raw
 git file-diff with no coverage semantics, no attribution, no audit command;
 Cursor/Cline keep static config. Enterprise IAM drift tooling exists for
 cloud roles, and Obsidian Security markets the diagnosis qualitatively ("AI

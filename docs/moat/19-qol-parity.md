@@ -1,6 +1,6 @@
 # 19 — QoL parity batch: todo tool, custom slash commands, hooks
 
-Ratified 2026-09-21. Scope: three Claude Code-shaped quality-of-life
+Ratified 2026-09-21. Scope: three widely-used quality-of-life
 features, per the approved plan. Framing constraint honored: kill-list
 rule 3 bans "MCP catalog, plugin marketplace, or skills library" — none
 of these is a marketplace. Hooks are config, commands are prompt
@@ -27,7 +27,7 @@ CORE_EXPECTED (all three are core; none imports surface).
    frontmatter via the shared `src/frontmatter.ts` parser extracted
    verbatim from `parseAgentFile`; one parser, one error grammar).
    `$ARGUMENTS` substitution; a body without the placeholder gets
-   `ARGUMENTS: <rest>` appended (Claude Code convention). REPL:
+   `ARGUMENTS: <rest>` appended (the usual convention). REPL:
    `.help` lists commands; unknown `/name` prints an error and does NOT
    reach the model. One-shot `run`: expansion only on an exact match —
    an unmatched `/foo` prompt runs verbatim, because one-shot prompts
@@ -82,7 +82,7 @@ CORE_EXPECTED (all three are core; none imports surface).
 ## Hooks threat model (outside-the-jail, stated plainly)
 
 Hook commands execute with the user's shell privileges, outside the
-bash-tool jail, BY DESIGN (same stance as Claude Code hooks): they are
+bash-tool jail, BY DESIGN (the same stance as these hooks): they are
 user-authored config, not model-authored tool calls. Containment comes
 from where configs may live and when they load:
 
