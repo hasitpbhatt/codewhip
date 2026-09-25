@@ -86,6 +86,7 @@ const CORE_EXPECTED = new Set([
   "src/commands.ts",
   "src/compact.ts",
   "src/config-dir.ts",
+  "src/debug.ts",
   "src/eval-store.ts",
   "src/eval.ts",
   "src/frontmatter.ts",

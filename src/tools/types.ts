@@ -1,5 +1,6 @@
 import type { ChatPort } from "../provider-port.js";
 import type { UsageBucket } from "../outcomes.js";
+import type { Debug } from "../debug.js";
 
 /**
  * Every tool name, as data — the union is derived from this list, so a new
@@ -70,6 +71,9 @@ export type ToolContext = {
   compactTokens?: number;
   /** Parent's runId — stamped on the child's outcome record for attribution. */
   parentRunId?: string;
+  /** Parent's `--debug` sink, forwarded so a child's ladder decisions land on
+   * the same log that is being read (children are where surprises hide). */
+  debug?: Debug;
   /** This run's runId — present when invoked from the loop; lets tools (e.g.
    *  background tasks) write audit entries under the correct run without a
    *  separate plumbing path. */

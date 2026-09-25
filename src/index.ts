@@ -32,6 +32,7 @@ import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, o
 import { inboundMessages, MAX_MESSAGES, parseInputFormat, type InboundMessage, type InputFormat } from "./stream-input.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
 import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
+import { NOOP_DEBUG, openDebug, rejectDebugPath } from "./debug.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
@@ -178,6 +179,14 @@ type RunOptions = {
   maxBudgetUsd?: number;
   /** Explicit stdin prompt (`run -`). */
   stdinPrompt: boolean;
+  /**
+   * `--debug` / `--debug-file <path>`: the loop's own decisions — which ladder
+   * rung answered, why rotation was skipped, what a hook returned. Off unless
+   * armed; redacted at the sink. `debugFile` set means the path, otherwise the
+   * lines go to the prose channel.
+   */
+  debug: boolean;
+  debugFile?: string;
 };
 
 function printRunOptions(): void {
@@ -191,6 +200,8 @@ function printRunOptions(): void {
   console.log(`  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})`);
   console.log("  --yolo               bypass ask (never the denylist), logged + bannered (default: off)");
   console.log("  --retry-wait         one Retry-After wait (<=60s) on 429 per run (default: off; avoid in CI)");
+  console.log("  --debug              print the harness's decisions (ladder rungs, retries, budgets, hooks) to stderr");
+  console.log("  --debug-file <path>  the same, appended to a file (owner-only, secrets redacted, 8 MiB cap)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout/5xx per run (default: off; may bill pay-go)");
   console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
   console.log("  --auto-failover      like --free but silent: backend hops are recorded in the outcome/audit, not printed (private runs stay head-only; not with --free/--failover)");
@@ -461,6 +472,8 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let timeoutMs: number | undefined;
   let yolo = false;
   let retryWait = false;
+  let debug = false;
+  let debugFile: string | undefined;
   let failover = false;
   let free = false;
   let autoFailover = false;
@@ -555,6 +568,16 @@ function parseRunArgs(args: string[]): RunOptions | null {
       yolo = true;
     } else if (a === "--retry-wait") {
       retryWait = true;
+    } else if (a === "--debug") {
+      debug = true;
+    } else if (a === "--debug-file") {
+      const v = args[i + 1];
+      if (v === undefined) return fail("--debug-file needs a path");
+      i += 1;
+      const bad = rejectDebugPath(v);
+      if (bad !== null) return fail(bad);
+      debug = true;
+      debugFile = v;
     } else if (a === "--failover") {
       if (free || autoFailover) return fail("use --failover or --free/--auto-failover, not both");
       failover = true;
@@ -739,7 +762,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, failover, free, autoFailover, plan, share, sharePrint,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, debug, debugFile, failover, free, autoFailover, plan, share, sharePrint,
     allowedTools, disallowedTools, excludeDynamicSections,
     addDirs,
     ...(permissionMode === undefined ? {} : { permissionMode }),
@@ -1083,6 +1106,17 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   }
   if (opts.retryWait) {
     say("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
+  }
+  let dbg = NOOP_DEBUG;
+  if (opts.debug) {
+    const opened = openDebug({ ...(opts.debugFile === undefined ? {} : { file: opts.debugFile }), to: say });
+    if (opened.ok === false) {
+      console.error(`codewhip: ${opened.error}`);
+      process.exitCode = 2;
+      return;
+    }
+    dbg = opened.debug;
+    say(`!! ${opened.note}`);
   }
   say(`model: ${opts.provider}:${opts.model}`);
   const runCfg = getProviderConfig(opts.provider);
@@ -1439,6 +1473,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       ...(runAppend.length > 0 ? { appendSystemPrompt: runAppend } : {}),
       excludeDynamicSections: opts.excludeDynamicSections,
       retryWait: opts.retryWait,
+      debug: dbg,
       failovers: failoverTargets,
       quietFailover: opts.autoFailover,
       models: opts.models,

@@ -20,6 +20,7 @@ import { compactTranscript, estimateTokens, DEFAULT_COMPACT_TOKENS } from "./com
 import { listAgentsWithErrors } from "./subagents.js";
 import { MAX_REPAIRS, repairNote, structuredInstruction, structuredTurn } from "./structured.js";
 import { runHooksFor, type HookDeps, type LoadedHooks } from "./hooks.js";
+import { NOOP_DEBUG, type Debug } from "./debug.js";
 import type { ProviderId } from "./provider-port.js";
 
 export type ApprovalAnswer = "yes" | "session" | "always" | "no";
@@ -192,6 +193,13 @@ export type LoopArgs = {
   history?: LoopMsg[];
   /** Progress listener (index.ts prints). Never throws into the loop. */
   onEvent?: (event: LoopEvent) => void;
+  /**
+   * `--debug`: the decisions the terminal never sees — which ladder rung
+   * answered, why rotation was skipped, what the transcript weighed at each
+   * metering point, what a hook returned. Off unless armed. The sink owns
+   * redaction; the loop only owns the sentences.
+   */
+  debug?: Debug;
   /** Delegation depth: 0 = top-level run (may delegate), >= 1 = subagent (read-only, no delegate tools). */
   depth?: number;
   /** Child system prompt override (subagent bodies). Default: the main SYSTEM_PROMPT. */
@@ -465,10 +473,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // Listener failures never break the loop.
     }
   };
+  const dbg = args.debug ?? NOOP_DEBUG;
   for (const e of agentFileErrors) {
     emit("policy", `subagent file skipped: ${e}`);
-  }
-  for (const e of hostRejections) {
+  }  for (const e of hostRejections) {
     emit("policy", `host tool refused: ${e}`);
   }
   // Hooks load once at run start (the caller owns the LoadedHooks), so a
@@ -481,6 +489,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
   if (hookDefs.length > 0) {
     emit("hook", `hooks armed: ${hookDefs.length}`);
   }
+  dbg(
+    `run ${runId} ${args.label}:${args.model} depth=${depth} steps<=${args.maxSteps} mode=${mode}` +
+      ` plan=${planMode} yolo=${args.yolo} tokens=${args.tokenBudget ?? "none"} cost=${args.costCheck === undefined ? "none" : "armed"}` +
+      ` tools=${specs.length} hooks=${hookDefs.length} roots=${args.roots?.length ?? 0} history=${args.history?.length ?? 0}` +
+      ` compact>${args.compactTokens ?? DEFAULT_COMPACT_TOKENS}`
+  );
   let hooksFired = 0;
   let hooksDenied = 0;
   let hooksWarned = 0;
@@ -589,9 +603,13 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
             "compact",
             `compacted: ${c.truncated} old tool output(s) truncated, ${c.dropped} exchange(s) elided (est. ${c.tokensBefore} → ${c.tokensAfter} tokens)`
           );
+          dbg(`compaction fired at est=${est} > ${compactLimit}: ${c.tokensBefore} → ${c.tokensAfter} est tokens, ${messages.length} messages kept`);
+        } else {
+          dbg(`est ${est} > ${compactLimit} but nothing was prunable (system + protected tail only)`);
         }
       }
     }
+    dbg(`step ${steps}/${args.maxSteps} on ${current.label}:${current.model} — ${messages.length} messages, est ${estimateTokens(messages)} tokens`);
     // One turn: at most one bounded wait per RUN; each rate-limited/timeout/server
     // retry consumes at most one rotation candidate or one chain target.
     // Retries never consume maxSteps; a failed turn leaves no message behind.
@@ -628,6 +646,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         error = switchedThisTurn
           ? `${attempt.error} — the live /model switch to ${current.label}:${current.model} failed terminally (it was applied at this turn's boundary)`
           : attempt.error;
+        dbg(`terminal failure on ${current.label}:${current.model} (retryable=${String(attempt.retryable)}): ${attempt.error}`);
         break;
       }
       // Timeouts and upstream 5xx join the rotation path: a fresh attempt on a
@@ -637,6 +656,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       const timedOut = attempt.retryable === "timeout";
       const cause =
         timedOut ? "timed out" : attempt.retryable === "server" ? "server error" : "rate limited";
+      dbg(`${cause} on ${current.label}:${current.model} (retryable=${String(attempt.retryable)}, retryAfter=${attempt.retryAfterMs ?? "none"}) — taking the retry path`);
       if (
         !timedOut &&
         args.retryWait === true &&
@@ -646,6 +666,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       ) {
         waitedOnce = true;
         const wait = Math.min(attempt.retryAfterMs, 60000);
+        dbg(`Retry-After ${attempt.retryAfterMs}ms → sleeping ${wait}ms (one wait per run, then the rotation path)`);
         if (!args.quietFailover) emit("retry", `rate limited on ${current.label} — waiting ${Math.round(wait / 1000)}s (once)`);
         const slept = await sleepMs(wait, args.signal);
         if (!slept) {
@@ -673,6 +694,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         current = { label: rotation.label, model: rotation.model, port: rotation.port };
         continue;
       }
+      if (current.label !== args.label) {
+        dbg(`rotation not eligible: the active port is ${current.label}, not the head ${args.label} — its model ids do not belong there`);
+      } else if (rotationTargets.length > 0) {
+        dbg(`rotation exhausted: ${nextRotation}/${rotationTargets.length} same-provider candidates already used this run`);
+      }
       // Cross-provider chain: hops in armed order, one target per
       // rate-limited/timeout/server turn, each target at most once per run.
       const target = args.failovers?.[nextTarget];
@@ -687,6 +713,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         current = { label: target.label, model: target.model, port: target.port };
         continue;
       }
+      dbg(`no hop left: chain has ${args.failovers?.length ?? 0} target(s), ${nextTarget} used; tried ${[...tried].join(", ") || current.model}`);
       const triedList = [...tried].join(", ");
       const switchNote = switchedThisTurn
         ? ` — the live /model switch to ${current.label}:${current.model} failed terminally (it was applied at this turn's boundary)`
@@ -704,6 +731,10 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       break;
     }
     addUsage(turn.promptTokens, turn.completionTokens, turn.usageEstimated === true);
+    dbg(
+      `metered +${turn.promptTokens}p/+${turn.completionTokens}c${turn.usageEstimated === true ? " (estimated)" : ""}` +
+        ` = ${promptTokens + completionTokens} tokens${args.tokenBudget === undefined ? "" : ` of ${args.tokenBudget}`}`
+    );
     if (args.tokenBudget !== undefined && promptTokens + completionTokens > args.tokenBudget) {
       error = `token budget exhausted (${promptTokens + completionTokens}/${args.tokenBudget}) — partial transcript kept`;
       stopReason = "token_budget";
@@ -1070,6 +1101,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       if (!proceed) {
         continue;
       }
+      dbg(`ladder ${def.name} subject="${subject}" verdict=${verdict.decision}:${verdict.ruleId} mode=${mode} → granted by ${grantActor} (${ruleId})`);
       // Repeat guard: an idempotent call already answered unchanged this
       // generation is served from the memo. Permission was still evaluated
       // above, so repeats stay visible on the audit trail, not hidden.
@@ -1112,6 +1144,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
           event: "PreToolUse", tool: def.name, seq, runId, cwd: args.cwd, args: hookArgs,
         }, args.hookDeps);
         hooksFired += hr.fired;
+        dbg(`PreToolUse(${def.name}): fired=${hr.fired} status=${hr.status}${hr.status === "deny" ? ` reason="${hr.reason}"` : ""}`);
         if (hr.status === "deny") {
           hooksDenied += 1;
           const out = `held by PreToolUse hook: ${hr.reason}`;
@@ -1131,6 +1164,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // null and are never snapshotted.
       const beforeImage =
         def.name === "edit" || def.name === "write" ? captureBefore(args.cwd, parsed, args.roots) : null;
+      const execStart = Date.now();
       let result: ToolResult;
       try {
         result = await withTimeout(
@@ -1150,6 +1184,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 rotationModels: args.models,
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
+                debug: dbg,
                 parentRunId: runId,
                 runId,
               },
@@ -1178,6 +1213,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         memo.clear();
       } else if (result.ok && guardOn && builtinName !== null && IDEMPOTENT_TOOLS.has(builtinName)) {
         memo.set(memoKey, { output: redacted, repeats: 0 });
+        dbg(`memo: ${memoKey.slice(0, 60)}… stored (${redacted.length} chars)`);
       }
       // Redact BEFORE the cap slice so a secret straddling the boundary is
       // still masked; the note tells the model the data it saw was scrubbed.
@@ -1195,6 +1231,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       // from it could never apply to a caller function.
       record("allow", ruleId, sha256Hex(redacted.slice(0, 2000)), grantActor, redacted,
         grantActor === "human" && builtinName !== null ? declineShape(builtinName, subject) ?? undefined : undefined);
+      dbg(`exec ${def.name} ${result.ok ? "ok" : "FAILED"} in ${Date.now() - execStart}ms (timeout ${def.timeoutMs}ms) — ${redacted.length} chars${scrubbed ? ", secrets masked" : ""}, seq ${seq}`);
       emit("tool", `${result.ok ? "ok" : "fail"} ${call.name} ${preview} (${ruleId})`);
       // PostToolUse hooks: observe-only, and they see the REDACTED output —
       // hooks are downstream of the redaction invariant, never upstream of it.
@@ -1228,6 +1265,12 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
       emit("hook", `Stop: ${hr.reason}`);
     }
   }
+
+  dbg(
+    `stop ${stopReason}${error === undefined ? "" : ` ("${error}")`} — steps=${steps} calls=${calls.length} repeats=${repeatCalls}` +
+      ` hops=${failoverTrail.length} compact=${compactEvents} checkpoints=${checkpoints} waited=${waitedMs}ms` +
+      ` tokens=${promptTokens}+${completionTokens} audit_seq=${seq} dropped=${auditDropped} hooks=${hooksFired}/${hooksDenied}`
+  );
 
   appendOutcome(args.cwd, {
     v: 1,
