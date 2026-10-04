@@ -121,6 +121,37 @@ export type PromotionCandidate = {
  * bad session spamming declines can't mint a candidate. Skips shapeless
  * declines (no safe generalization) and already-promoted shapes.
  */
+/**
+ * Remove one promoted deny line (the inverse of appendPromotedDeny).
+ *
+ * Policy must be a living document, not a ratchet: a team that promoted the
+ * wrong shape needs an in-product remedy. Only the matching `deny` line goes
+ * — comments, blanks, and unrelated rules are preserved byte for byte, so
+ * a revoke can never widen the policy by accident. Audit-senior: the caller
+ * lands the revocation on the audit trail, same as `remember forget`.
+ */
+export function revokePromotedDeny(cwd: string, tool: string, shape: string): boolean {
+  const file = policyMdPath(cwd);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  const kept = raw.split("\n").filter((line) => {
+    const rule = line.trim().replace(/\s+#.*$/, "");
+    const m = /^deny\s+([A-Za-z0-9_-]+):(\S(?:.*\S)?)\s*$/.exec(rule);
+    return m === null || m[1] !== tool || (m[2] as string).trim() !== shape;
+  });
+  if (kept.length === raw.split("\n").length) return false;
+  try {
+    fs.writeFileSync(file, kept.join("\n"), "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function declineCandidates(cwd: string, threshold = 3, nowMs: number = Date.now(), windowMs: number = 30 * 24 * 3600 * 1000): PromotionCandidate[] {
   const stats = new Map<string, { count: number; runs: Set<string>; newest: number }>();
   for (const r of readOutcomeRecords(cwd)) {

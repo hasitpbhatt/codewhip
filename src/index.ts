@@ -34,7 +34,7 @@ import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { NOOP_DEBUG, openDebug, rejectDebugPath } from "./debug.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
-import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
+import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath, revokePromotedDeny } from "./policy-store.js";
 import { BUILTIN_AGENTS, CHILD_MAX_STEPS_CAP, listAgentsWithErrors, mainThreadTurn, parseAgentsJson, type AgentDef } from "./subagents.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { loadHooks } from "./hooks.js";
@@ -1104,7 +1104,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     say("!! --no-stream armed: whole-body responses (SSE off for this process).");
   }
   if (opts.yolo) {
-    say("!! --yolo is explicit, logged, bannered. The denylist still applies (spelling-normalized) — and the ask ladder, worktree wall, and signed audit remain the enforcement boundary; no string screen is absolute.");
+    say("!! --yolo is explicit, logged, bannered. The denylist still applies (spelling-normalized), promoted policy.md denies still apply, remembered rules still apply — and the ask ladder, worktree wall, and signed audit remain the enforcement boundary; no string screen is absolute.");
   }
   if (opts.retryWait) {
     say("!! --retry-wait armed: one wait up to 60s on 429. Avoid in CI.");
@@ -1121,6 +1121,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     say(`!! ${opened.note}`);
   }
   say(`model: ${opts.provider}:${opts.model}`);
+  // Pre-flight provider health: a flaky provider is known before the loop
+  // starts, not discovered after a run is wasted (post-mortem hint below).
+  {
+    const preFlight = summarizeCalls(readProviderCalls().filter((r) => r.provider === opts.provider)).providers[0];
+    if (preFlight !== undefined && preFlight.total >= 50 && preFlight.successRate < 0.9) {
+      say(`!! provider health: ${opts.provider} at ${Math.round(preFlight.successRate * 100)}% ok over ${preFlight.total} call(s), ${preFlight.failed} failed — consider --failover or --provider <other> (detail: codewhip stats ${opts.provider})`);
+    }
+  }
   const runCfg = getProviderConfig(opts.provider);
   if (runCfg === null) {
     console.error(`codewhip: unknown provider "${opts.provider}" (see: codewhip provider list)`);
@@ -1528,6 +1536,19 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       }
     }
     printMixReceipt(result.usageByModel, opts.provider, opts.model);
+    // Trust receipts print every run (SOUL §6): the chain is the trust
+    // anchor, so its status belongs next to the cost receipt. One shared
+    // interpreter with `trust` and `audit --verify` — two verifiers must
+    // never disagree.
+    {
+      const chainRun = interpretVerification(verifyChain(process.cwd()), process.cwd());
+      if (chainRun.clean) {
+        say("audit: chain INTACT — replayable from a redacted audit link");
+      } else {
+        say(`!! audit: chain ${chainRun.status} — this run's history is not trustworthy (see codewhip audit --verify)`);
+        process.exitCode = 1;
+      }
+    }
     if (result.checkpoints > 0) {
       say(`checkpoints: ${result.checkpoints} file(s) snapshotted — undo: codewhip rollback ${result.runId.slice(0, 8)}`);
     }
@@ -2332,7 +2353,30 @@ function cmdPolicy(args: string[]): void {
     console.log(`policy: approved deny ${tool}:${shape} → ${policyMdPath(cwd)} (pre-flight from next run)`);
     return;
   }
-  console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|list]");
+  if (sub === "revoke") {
+    const raw = args[1] ?? "";
+    const sep = raw.indexOf(":");
+    const tool = raw.slice(0, sep);
+    const shape = raw.slice(sep + 1);
+    if (sep <= 0 || shape.length === 0 || /[\r\n]/.test(raw)) {
+      console.error('usage: codewhip policy revoke "<tool:shape>"  (e.g. "bash:npm publish *")');
+      process.exitCode = 1;
+      return;
+    }
+    if (tool !== "bash" && tool !== "edit" && tool !== "write" && tool !== "webfetch") {
+      console.error(`policy: tool must be bash|edit|write|webfetch (got "${tool}")`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!revokePromotedDeny(process.cwd(), tool, shape)) {
+      console.error(`policy: no promoted deny "${raw}" found (see: codewhip policy list)`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`policy: revoked deny "${raw}" — future runs fall back to the allowlist/ask ladder`);
+    return;
+  }
+  console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|revoke \"<tool:shape>\"|list]");
 }
 
 function cmdPack(args: string[]): void {
