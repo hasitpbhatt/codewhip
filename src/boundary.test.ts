@@ -33,7 +33,7 @@ const SURFACE = new Set([
   "src/immunity/llm-run.ts",
   "src/models.ts",
   "src/onemin.ts",
-  "src/router.ts",
+  "src/costs.ts",
   // The REPL's own read-out: it folds the loop's receipts into session totals
   // and renders `.context`/`.usage`/`.cost` for a human at a keyboard, which
   // means it needs the price table. Nothing in core imports it — the substrate

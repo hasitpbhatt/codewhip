@@ -25,9 +25,8 @@ import { appendOutcome, newRunId, promptHash, readOutcomeRecords, type OutcomeRe
 import { sha256Hex } from "./hash.js";
 import { lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
 import { appendEntry, appendGenesis, auditPath, buildBundle, hasGenesis, interpretVerification, readAuditLog, readLastAuditEntries, readLastAuditRaw, verifyChain, type AuditEntry } from "./audit.js";
-import { getTaskStatuses } from "./tools/background-status.js";
 import { renderShareMarkdown, writeShareBundle } from "./share.js";
-import { costNote, estimateCost, isPolishRun, meteredCost, mixReceiptString, polishGate, polishRunCost, resolveRoute, type TaskClass } from "./router.js";
+import { costNote, estimateCost, isPolishRun, meteredCost, mixReceiptString, polishGate, polishRunCost } from "./costs.js";
 import { buildFailure, buildResult, emitEvent, emitInit, emitResult, headless, outputFormat, parseOutputFormat, readStdin, say, setOutputFormat, STDIN_CONTEXT_WAIT_MS, writeResultText, type OutputFormat, type RunFacts } from "./run-output.js";
 import { inboundMessages, MAX_MESSAGES, parseInputFormat, type InboundMessage, type InputFormat } from "./stream-input.js";
 import { renderMetrics, summarizeCwd } from "./metrics.js";
@@ -156,13 +155,7 @@ type RunOptions = {
   timeoutMs?: number;
   /** Disable SSE streaming (whole-body responses) — escape hatch per run. */
   noStream: boolean;
-  /** Explicit --class routing override (undefined = auto-classify). */
-  taskClass?: TaskClass;
   modelExplicit: boolean;
-  /** Opt into the TUI view (lazy-loads OpenTUI; headless stays default). */
-  tui: boolean;
-  /** Force 80-col screen-reader-safe output (overrides --tui). */
-  noTui: boolean;
   /**
    * Headless (`-p`): stdout is reserved for data, so every human banner moves
    * to stderr, the REPL never opens, and interactive approvals are suppressed
@@ -198,8 +191,7 @@ function printRunOptions(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
   console.log(`  --models <a,b,c>     rotate models in order on rate-limit/timeout/5xx, each once per run (default: off)`);
-  console.log("  --provider <id>      provider id (default: routed by --class; see: codewhip provider list)");
-  console.log("  --class <c>          implement|polish|private — task class for routing (default: auto-classify)");
+  console.log("  --provider <id>      provider id (default: nvidia)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log(`  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})`);
@@ -225,8 +217,6 @@ function printRunOptions(): void {
   console.log("  --tag <tag>          tag the session; repeatable up to 8, listed by codewhip sessions");
   console.log("  --fork-session       with -r: start a new session file from that transcript and record its parent, instead of accumulating into it");
   console.log("  --no-stream          disable SSE streaming (whole-body responses; a provider that rejects streaming falls back on its own)");
-  console.log("  --tui                opt into the terminal UI (lazy-loads OpenTUI; headless stays default; may not be available in all environments)");
-  console.log("  --no-tui             force 80-col screen-reader-safe output (overrides --tui)");
   console.log("  -p, --headless       scriptable one-shot: stdout carries only the result, every banner moves to stderr, the REPL never opens and interactive approvals are suppressed (asks are held and denied — pair with --yolo or a remembered rule to let work through)");
   console.log("  --output-format <f>  text|json|stream-json — implies -p: json prints one result document, stream-json prints NDJSON (init, one line per event, result)");
   console.log("  --input-format <f>   text|stream-json — stream-json makes stdin a stream of {\"type\":\"user\",\"message\":{…}} lines and drives several turns of one session in one process; needs --output-format stream-json (one result line per turn) and takes the prompts from stdin, so no positional prompt. Follow-ups land at the next turn boundary: nothing is injected into a step already running, and no line answers a permission prompt (asks stay held and denied, as under any -p run)");
@@ -447,7 +437,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let modelsArg: string[] | null = null;
   let provider: ProviderId = "nvidia";
   let providerExplicit = false;
-  let taskClass: TaskClass | undefined;
   let tokenBudget = 250000;
   let maxSteps = 25;
   let timeoutMs: number | undefined;
@@ -471,8 +460,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let share = false;
   let sharePrint = false;
   let noStream = false;
-  let tui = false;
-  let noTui = false;
   let cont = false;
   let continuePrefix: string | undefined;
   let sessionName: string | undefined;
@@ -518,13 +505,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
       if (!modelExplicit) {
         model = cfg.defaultModel;
       }
-    } else if (a === "--class") {
-      const v = args[i + 1];
-      if (v !== "implement" && v !== "polish" && v !== "private") {
-        return fail("--class must be implement|polish|private");
-      }
-      taskClass = v;
-      i++;
     } else if (a === "--token-budget") {
       const v = args[i + 1];
       if (v === undefined) return fail("--token-budget needs a value");
@@ -651,10 +631,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
       share = true;
     } else if (a === "--print") {
       sharePrint = true;
-    } else if (a === "--tui") {
-      tui = true;
-    } else if (a === "--no-tui") {
-      noTui = true;
     } else if (a === "--continue" || a === "-r" || a === "--resume" || a.startsWith("--continue=") || a.startsWith("--resume=") || a.startsWith("-r=")) {
       cont = true;
       const eq = a.indexOf("=");
@@ -733,7 +709,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
   }
   if (forkSession && !cont) return fail("--fork-session needs -r/--continue <session> to fork from");
   // `-p`/`--output-format` owns stdout, so the mode that grabs it for itself loses.
-  if (headlessFlag && tui) return fail("--output-format/-p cannot combine with --tui (stdout is reserved for data)");
   // A mode flag that contradicts its own shorthand is a typo, and a typo about
   // who approves a tool call must not silently resolve to either reading.
   if (permissionMode !== undefined) {
@@ -759,12 +734,10 @@ function parseRunArgs(args: string[]): RunOptions | null {
     ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
     ...(jsonSchema === undefined ? {} : { jsonSchema }),
     ...(jsonSchemaFile === undefined ? {} : { jsonSchemaFile }),
-    taskClass, timeoutMs, noStream,
+    timeoutMs, noStream,
     modelExplicit: modelExplicit || modelsArg !== null,
     continue: cont,
     persist: cont || sessionName !== undefined || sessionTags.length > 0,
-    tui,
-    noTui,
     headless: headlessFlag,
     outputFormat: formatArg ?? "text",
     inputFormat: inputFormatArg,
@@ -1079,24 +1052,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         `${added > 0 ? `; ${added} refusal(s) added above the ladder` : ""}`
     );
   }
-  const routed = resolveRoute({
-    prompt: opts.prompt,
-    taskClass: opts.taskClass,
-    provider: opts.providerExplicit ? opts.provider : undefined,
-    model: opts.modelExplicit ? opts.model : undefined,
-    defaultProvider: "nvidia",
-    defaultModel: PROVIDERS.nvidia.defaultModel,
-  });
-  if ("error" in routed) {
-    console.error(`codewhip: ${routed.error}`);
-    process.exitCode = 1;
-    logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:private-without-consent", routed.error);
-    printStubReceipt(opts.model, opts.provider);
-    return;
-  }
-  const route = routed;
-  opts = { ...opts, provider: route.provider, model: route.model };
-  say(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.note})`);
+  const pid = opts.providerExplicit ? opts.provider : "nvidia";
+  const mid = opts.modelExplicit ? opts.model : PROVIDERS.nvidia.defaultModel;
+  opts = { ...opts, provider: pid, model: mid };
+  say(`route: ${pid}:${mid}`);
   // Flags and settings meet once, here, into one mode: `--permission-mode`
   // outranks the `--plan`/`--yolo` shorthands, which outrank
   // `permissions.defaultMode`. Roots are validated before the run starts — a
@@ -1326,68 +1285,11 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   };
   process.on("SIGINT", onSigint);
 
-  // TUI bridge: lazy-import on --tui; headless uses the existing readline
-  // promptApproval + console.log onEvent. --no-tui forces headless.
   let askUserFn: AskUser | undefined;
   let onEventFn: (e: LoopEvent) => void;
-  let tuiBridge: { stop: () => void } | null = null;
-  let tuiModel: { setRunId: (id: string) => void } | null = null;
-  // Live /model switch (TUI only): the bridge validates and stages a port;
-  // the loop consumes it at the next turn boundary. Headless runs ignore it.
-  let pendingSwitch: FailoverTarget | null = null;
-  const takePendingSwitch = (): FailoverTarget | null => {
-    const t = pendingSwitch;
-    pendingSwitch = null;
-    return t;
-  };
-  if (opts.tui && !opts.noTui) {
-    say("!! --tui armed: terminal UI enabled (lazy OpenTUI import; headless unaffected if pkg absent).");
-    try {
-      const tuiMod = await import("./tui/bridge.js");
-      const { TuiModel } = await import("./tui/model.js");
-      const model = new TuiModel();
-      tuiModel = model;
-      const bridge = tuiMod.createTuiBridge({
-        model,
-        signal: ctrl.signal,
-        cwd: process.cwd(),
-        pollBackground: () => getTaskStatuses().map((t) => ({
-          id: t.id,
-          label: t.command.slice(0, 40),
-          status: t.status,
-          preview: t.outputPreview,
-        })),
-        switchModel: (provider, modelId) => {
-          const cfg = getProviderConfig(provider);
-          if (cfg === undefined || cfg === null) {
-            return `/model: unknown provider "${provider}" (see: codewhip provider list)`;
-          }
-          const { key, source } = resolveKey(cfg.id);
-          if (key.length === 0) {
-            return `/model: no key for ${cfg.id} — codewhip auth login ${cfg.id}, or pick a provider with one`;
-          }
-          const nextModel = modelId ?? cfg.defaultModel;
-          pendingSwitch = { label: cfg.id, model: nextModel, port: makePortForConfig(cfg, key, opts.timeoutMs, source) };
-          return `model: switching to ${cfg.id}:${nextModel} from the next turn (receipts will show the mix)`;
-        },
-      });
-      bridge.start();
-      tuiBridge = bridge;
-      askUserFn = bridge.askUser;
-      onEventFn = (e: LoopEvent) => bridge.onEvent(e);
-    } catch {
-      say("!! --tui armed but OpenTUI unavailable — falling back to headless prompts.");
-      askUserFn = promptApproval;
-      onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
-    }
-  } else if (opts.noTui) {
-    say("!! --no-tui armed: forced 80-col screen-reader-safe output (no TUI).");
-    askUserFn = promptApproval;
-    onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
-  } else {
-    askUserFn = promptApproval;
-    onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
-  }
+  // Headless-only — TUI removed.
+  askUserFn = promptApproval;
+  onEventFn = (e) => say(`${e.kind === "tool" ? "▸" : e.kind === "policy" ? "◈" : "◆"} ${e.text}`);
   // Headless (`-p`): stdout is reserved for data, so run chatter becomes NDJSON
   // events (stream-json) or stderr prose, and no interactive approval is ever
   // offered — the loop then holds-and-denies every ask, the same safe default a
@@ -1420,7 +1322,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     version: pkg.version,
     provider: opts.provider,
     model: opts.model,
-    task_class: route.taskClass,
     output_format: opts.outputFormat,
     ...(opts.inputFormat === "text" ? {} : { input_format: opts.inputFormat }),
     // The mode is the truth about who answers an ask; "yolo"/"ask" are kept as
@@ -1439,7 +1340,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   });
   // Carried into the machine document so a scripted run reports the same
   // gate/share facts a human sees on stderr.
-  let gateOut: { pass: boolean; reason: string } | undefined;
   let shareOut: { path: string; sha256: string } | undefined;
 
   try {
@@ -1458,7 +1358,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     const factsFor = (r: LoopResult, durationMs: number, sessionId?: string): RunFacts => ({
       provider: opts.provider,
       model: opts.model,
-      taskClass: route.taskClass,
+      taskClass: "implement",
       durationMs,
       receipt: mixReceiptString(r.usageByModel, opts.provider, opts.model),
       costUsd: meteredCost(r.usageByModel),
@@ -1473,7 +1373,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       prompt,
       model: opts.model,
       label: opts.provider,
-      taskClass: route.taskClass,
+      taskClass: "implement",
       cwd: process.cwd(),
       maxSteps: opts.maxSteps,
       yolo: opts.yolo,
@@ -1496,7 +1396,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       debug: dbg,
       failovers: failoverTargets,
       models: opts.models,
-      takePendingSwitch,
       tokenBudget,
       costCheck: usdCap === undefined ? undefined : (buckets) => {
         let metered = spentCost;
@@ -1575,7 +1474,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       }
     }
     // Set runId on the TUI model for the rollback footer.
-    tuiModel?.setRunId(result.runId);
     // Thread the transcript forward: single-shot saves below; REPL feeds it
     // back in-memory and saves once on .exit (no per-line files).
     const continued = result.messages.slice(1);
@@ -1638,11 +1536,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
         say(`health: ${opts.provider} ${Math.round(ph.successRate * 100)}% ok over ${ph.total} call(s), ${ph.failed} failed — detail: codewhip stats ${opts.provider}`);
       }
     }
-    if (route.taskClass === "polish") {
-      const gate = polishGate(estimateCost(opts.provider, opts.model, result.promptTokens, result.completionTokens));
-      gateOut = gate;
-      say(`polish gate: ${gate.pass ? "PASS" : "OPEN"} — ${gate.reason}`);
-    }
     if (opts.share) {
       const receipt = mixReceiptString(result.usageByModel, opts.provider, opts.model);
       const shared = writeShareBundle(process.cwd(), {
@@ -1693,12 +1586,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     if (opts.headless) {
       emitResult(buildResult(result, {
         ...factsFor(result, Date.now() - startedAt, opts.persist ? ident.sessionId : undefined),
-        ...(gateOut === undefined ? {} : { polishGate: gateOut }),
         ...(shareOut === undefined ? {} : { share: shareOut }),
       }));
     }
   } finally {
-    tuiBridge?.stop();
     process.removeListener("SIGINT", onSigint);
   }
 }

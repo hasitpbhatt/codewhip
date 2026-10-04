@@ -31,7 +31,7 @@ Then, in any repo you want the agent to work on:
 ```sh
 codewhip init                         # 30s: AGENTS.md + codewhip-policy.yaml + signing key
 codewhip demo --deny                  # offline: 5 disasters refused. $0, no key, no network
-codewhip run "fix the failing test" --free    # keyless first success (free chain, never bills)
+codewhip run "fix the failing test" --provider nvidia  # explicit provider (needs a key)
 codewhip auth login nvidia            # the default provider needs a key (free at build.nvidia.com)
 codewhip run "refactor auth" --token-budget 250000
 codewhip trust                        # chain, policy, keys, memory state in one command
@@ -80,11 +80,10 @@ inert — a limit that cannot be measured is not a limit.
   The log stores **hashes only** — never raw args or output — so redaction at
   write holds by construction. `--verify` re-walks the chain, `--replay`
   renders it, `--export` writes a signed content-addressed bundle.
-- **Router** three task classes: implement → nvidia free tier, polish → kilo
-  priced $0, private → a local runtime *you* registered. Classification is
-  automatic with the reason printed; `--class`/`--provider`/`--model` always
-  override. A private prompt routes only to a loopback provider and refuses
-  cloud routing unless you name one — informed consent, not a guess.
+- **Router** explicit provider only: `--provider nvidia` (or any from
+  `codewhip provider list`). A private prompt routes only to a loopback
+  provider you registered and refuses cloud routing unless you name one —
+  informed consent, not a guess.
 - **Sandbox** v1 is a Node path jail (realpath, symlink-aware) plus the
   denylist. That is a harness jail, **not OS isolation** — v2 swaps the
   executor (E2B/Firecracker) behind the frozen policy/audit schema.
@@ -115,12 +114,12 @@ One line each; the full contract for every item is in
 
 ## Providers
 
-The registry holds **136 builtins**; keys live in an owner-only file (or env,
-which wins) and `codewhip auth status` never prints one. `--free` arms the
-free-provider chain: on rate-limit, timeout or 5xx it hops, walking only tiers
-that **never bill pay-go** — chain membership requires a non-billing tier,
-which is why one-time signup credits sit outside it. `--auto-failover` is the
-same chain with a quiet terminal.
+The registry holds **134 builtins**; keys live in an owner-only file (or env,
+which wins) and `codewhip auth status` never prints one. Every provider is
+explicit: name it with `--provider <id>` (or `--provider:model <id>`) and
+store its key with `codewhip auth login <id>`. There is no auto-routing and no free chain — you pick the destination,
+the meter prices it honestly, and the receipt says `cost untracked`
+when the route has no known price.
 
 Full table, key URLs, rate-limit caveats and the reasons providers were
 *removed*: [`docs/providers.md`](docs/providers.md). Two that apply to you
@@ -142,11 +141,11 @@ Node >= 22 for development, >= 20 to run the built CLI. Contributor setup,
 
 ## Roadmap
 
-- **H1 (parity + trust)** — done: loop, jail, audit chain, memory, router,
-  share, packs, CI action.
+- **H1 (parity + trust)** — done: loop, jail, audit chain, memory, explicit
+  provider routing, share, packs, CI action.
 - **H2** — sandbox profiles, pack registry with SSO/retention, graph memory
   only on proven pain, auditor bundle v2. Terminal trust compounds first;
-  TUI/desktop/IDE after that.
+  desktop/IDE after that.
 - **The bet** — induce per-repo least-privilege tool permissions from one-bit
   human verdicts, so the thing that compounds is a corpus no lab can download.
   Protocol and results: [`docs/moat/18-verdict-privilege-experiments.md`](docs/moat/18-verdict-privilege-experiments.md).

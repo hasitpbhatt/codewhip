@@ -43,13 +43,6 @@ test("--output-format implies -p and accepts space and = forms", () => {
   assert.equal(parse(["--output-format", "x"]), null, "needs a value");
 });
 
-test("headless output cannot share stdout with the TUI", () => {
-  assert.equal(parse(["-p", "--tui", "x"]), null);
-  assert.equal(parse(["--output-format", "json", "--tui", "x"]), null);
-  // --no-tui only ever meant "plain stdout", so it stays legal alongside -p.
-  assert.notEqual(parse(["-p", "--no-tui", "x"]), null);
-});
-
 test("--max-budget-usd validates the amount", () => {
   const o = parse(["-p", "--max-budget-usd", "0.5", "x"]);
   assert.ok(o !== null);
@@ -58,11 +51,6 @@ test("--max-budget-usd validates the amount", () => {
     assert.equal(parse(["--max-budget-usd", bad, "x"]), null, `rejects ${bad}`);
   }
   assert.equal(parse(["--max-budget-usd"]), null, "needs a value");
-});
-
-test("--max-budget-usd is refused on the never-billing free chain", () => {
-  assert.equal(parse(["--free", "--max-budget-usd", "1", "x"]), null);
-  assert.equal(parse(["--auto-failover", "--max-budget-usd", "1", "x"]), null);
 });
 
 test("- marks the prompt as coming from stdin", () => {

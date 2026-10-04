@@ -50,12 +50,12 @@ P1 — trust that spreads:
 - [ ] Graph memory only on proven pain (>500 outcomes + weekly multi-hop queries): edges derived from `outcomes.jsonl`, Mem0/Zep/Letta evaluated then, never replacing flat files.
 - [ ] Full provider matrix + auto-fallback + latency optimization; local-model parity path.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc); redacted public share index as trust corpus.
-- [ ] TUI/desktop/IDE only after terminal trusted-runs compound.
+- [ ] desktop/IDE only after terminal trusted-runs compound.
 
 ## Kill list (final)
 
 1. No custom model hosting, fine-tunes, or model training before 1M+ verdicts.
-2. No desktop app / IDE fork / TUI theming in H1 — terminal (SSH-able, CI-runnable) only.
+2. No desktop app / IDE fork in H1 — terminal (SSH-able, CI-runnable) only.
 3. No MCP catalog, plugin marketplace, or skills library in H1.
 4. No SQLite/Drizzle/event-bus/vector/graph DB in H1 — JSONL + flat markdown only.
 5. No SSO/audit-enterprise bundle, policy-DSL sales motion, or compliance-deck-first GTM in H1.
@@ -206,7 +206,7 @@ P1 — trust that spreads:
   the force check demanded the literal word — the pre-existing test used an
   absolute path and denied via worktree containment, masking the hole
   (vacuous assertion, since fixed with relative-target tests). Post-fix:
-  0/55 escape, 0/12 autoimmune. Registry/serve/TUI frozen as product surface,
+  0/55 escape, 0/12 autoimmune. Registry/serve frozen as product surface,
   zero research dependency.
 - 2026-09-20 (same track) — Audit closure + first experiment. Verdicts wired
   into the miner (decline weight by run verdict: reverted/rejected 2, edited

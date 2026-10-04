@@ -58,7 +58,7 @@ LM Studio `:1234`), where the traffic provably cannot leave the machine. Any
 other host over plain `http://` is still refused — that would put your key on
 the wire in clear text. A loopback provider gets a placeholder credential,
 because every call path refuses an empty key while a local runtime wants none.
-These are also what the router's `private` class routes to, so the id must
+These are also what a `private` prompt (containing secret/key/credential markers) routes to — the id must
 differ from any builtin: `ollama` is already the *remote* ollama-cloud service,
 so use e.g. `ollama-local`.
 
@@ -319,9 +319,7 @@ The two surfaces differ on purpose: one-shot `run` expands only on an exact
 command-file match — a prompt like `"/api returns 500"` starts with `/` and
 must still run verbatim — while in the REPL a leading `/` is unambiguous
 intent, so an unknown `/name` prints an error and never reaches the model.
-Broken files error in both (silence about a file you wrote would be fiction);
-the TUI can't submit commands mid-run (v1 limitation,
-[`moat/19-qol-parity.md`](moat/19-qol-parity.md)).
+Broken files error in both (silence about a file you wrote would be fiction).
 
 ## Hooks: your shell at the harness seams
 
@@ -475,7 +473,7 @@ execution and therefore owns its own safety story. Provider health is still
 recorded in `codewhip stats`.
 
 `GET /stats` (restored 2026-09-16) is aggregated provider/model health only —
-the same `summarizeCalls` view auto-routing reads. Per-request history stays
+the same `summarizeCalls` view the loop reads. Per-request history stays
 unserved (removed in `d8f784f`), and the bearer gate covers `/stats` the same
 way it covers `/playground`.
 
@@ -484,7 +482,6 @@ way it covers `/playground`.
 ```sh
 codewhip run "..." --retry-wait    # one Retry-After wait (<=60s) on 429 per run; avoid in CI
 codewhip run "..." --failover      # one switch to the next provider with a stored key on 429 per run
-codewhip run "..." --auto-failover # same $0-only chain as --free, but hops are recorded not printed
 codewhip run "..." --provider mistral --models mistral-small-latest,mistral-medium-latest,ministral-14b-latest
 ```
 
@@ -492,7 +489,7 @@ The last form walks models in order on 429, each once per run (order: wait,
 rotate, failover).
 
 Waits (`--retry-wait`) are 429-only; moves (same-provider `--models` rotation,
-`--failover`/`--free`/`--auto-failover` hops) trigger on rate-limit, timeout,
+`--failover` hops) trigger on rate-limit, timeout,
 and upstream 5xx — a slow or struggling model is better served by another
 target than by waiting. Auth and other transport errors never trigger either:
 retrying them only repeats the failure. `--failover` needs the other
@@ -610,23 +607,6 @@ real function of that input, not a live model run. `/context`, `/usage` and
   files. It also costs nothing to answer: no prompt token is spent, which is
   why enabling these three changes no receipt.
 
-## TUI
-
-`codewhip run --tui` opts into the terminal UI. The rich renderer needs the
-optional peer `@opentui/core` (`npm i @opentui/core`) on a runtime its native
-core supports (Bun >=1.3 or Node >=26.4; win32/linux/darwin x64+arm64
-prebuilds). Headless stays the default, and every other environment — any OS
-without a prebuild, Node < 26.4, no install — falls back automatically to a
-readline-safe view that still shows the approval card, transcript tail and
-footer. The TUI never breaks a run; `--no-tui` forces 80-col output.
-
-Inside `--tui`, three commands steer the live run without restarting it:
-
-- `/model <provider>[:<model>]` — switch provider/model at the next turn
-  boundary (receipts split per model, so the switch stays metered);
-- `/free` — show the free chain and which hops are currently usable;
-- `/plan` — plan mode is run-scoped, so this only reports that: re-run with
-  `--plan` for a read-only run.
 
 ## Asking you a question (`ask_user`)
 
@@ -654,7 +634,7 @@ Real rendering, produced by `node -e` over `questionPrompt` in `dist/index.js`
   Answering a question never grants a permission, and a team can still refuse
   the question itself: its subject is the question text, so
   `deny ask_user:Revert the branch?*` in `policy.md` holds.
-- **Only where a human is.** Headless `-p`, an SDK `query()` and a TUI run that
+- **Only where a human is.** Headless `-p`, an SDK `query()` and a headless run that
   cannot draw a question never see the tool at all — the spec is not advertised,
   so no model wastes a call on it. A subagent is refused outright
   (`loop:child-no-prompt`): one keyboard has one owner, and the parent run holds
@@ -735,8 +715,8 @@ Because the same fields drive it, `--max-budget-usd` is a real ceiling rather
 than a decorative one: the metered cost is re-read after every hop, so a failover
 onto an expensive model trips it too. If a hop turns out to be unpriced the run
 stops with `error` instead of continuing past a limit it can no longer measure,
-and on the never-billing free chain the flag is refused at parse time. Both
-`-p` and `--tui` are parse errors — two writers cannot own stdout.
+The flag is refused up front when the route has no known price — a ceiling that
+cannot be measured is not a ceiling. `-p` is headless-only.
 
 Interactive approvals are off under `-p`: an `ask` is held and denied, so
 `--yolo`, a remembered rule or `--plan` has to carry the run. This is the
@@ -804,7 +784,7 @@ before every turn, and yields the identical `init` / `event` / `result`
 documents `--output-format stream-json` writes: the same `usage` with the
 `estimated` flag preserved, `total_cost_usd` **`null`** on an unpriced hop, and
 the same `receipt` line. A dollar ceiling is refused up front on a route whose
-cost the router cannot meter — the option never goes inert.
+cost untracked — the option never goes inert.
 
 `canUseTool(tool, input, ctx)` is mounted on exactly one rung of the consent
 ladder: `ask`. It can refuse more than the harness and cannot refuse less —
@@ -852,7 +832,7 @@ PR commenting is deliberately unwired in v1 — review the trail first.
 ## Measuring it: eval, metrics, verdict
 
 ```sh
-codewhip eval --free              # 12 fixture tasks, machine-graded, recorded to .codewhip/eval.jsonl
+codewhip eval --provider nvidia              # 12 fixture tasks, machine-graded, recorded to .codewhip/eval.jsonl
 codewhip metrics                  # per-class bars: >=70% polish / >=50% implement (MET/NOT MET)
 codewhip verdict --auto e029e31f  # propose accepted/edited/reverted from checkpoints vs the tree
 ```

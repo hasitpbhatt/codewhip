@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { makePortForConfig, PROVIDERS, type ProviderId } from "./provider.js";
+import { makePortForConfig, type ProviderId } from "./provider.js";
 import type { ChatPort } from "./provider-port.js";
 import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
 import { resolveKey } from "./auth.js";
 import { isModelAllowed } from "./model-allowlist.js";
-import { costNote, estimateCost, meteredCost, mixReceiptString, resolveRoute, type TaskClass } from "./router.js";
+import { costNote, estimateCost, meteredCost, mixReceiptString } from "./costs.js";
 import { agentLoop, type AskContext, type ApprovalAnswer, type LoopEvent, type LoopResult } from "./loop.js";
 import type { LoopMsg } from "./provider-port.js";
 import { loadSettings, type PermissionMode } from "./settings.js";
@@ -93,7 +93,6 @@ export type QueryOptions = {
   cwd?: string;
   /** Step ceiling for one turn — the CLI's `--max-steps`, same 1..100 bound. */
   maxTurns?: number;
-  taskClass?: TaskClass;
   permissionMode?: PermissionMode;
   plan?: boolean;
   yolo?: boolean;
@@ -197,7 +196,7 @@ type Prepared = {
   cwd: string;
   provider: ProviderId;
   model: string;
-  taskClass: TaskClass;
+  taskClass: string;
   port: ChatPort;
   mode: PermissionMode;
   roots: readonly string[];
@@ -243,18 +242,8 @@ function prepare(options: QueryOptions, promptText: string, signal: AbortSignal)
     throw new SdkError(`model "${model}" names no provider — pass "provider:model" or set provider`);
   }
 
-  const routed = resolveRoute({
-    prompt: promptText,
-    taskClass: options.taskClass,
-    provider: provider as ProviderId | undefined,
-    model,
-    defaultProvider: "nvidia",
-    defaultModel: PROVIDERS.nvidia.defaultModel,
-    ...(options.dir === undefined ? {} : { dir: options.dir }),
-  });
-  if ("error" in routed) throw new SdkError(`route refused: ${routed.error}`);
-  const pid = routed.provider;
-  const mid = routed.model;
+  const pid = provider as ProviderId;
+  const mid = model ?? "nvidia";
 
   let port = options.port;
   let contextWindow: number | undefined;
@@ -289,7 +278,7 @@ function prepare(options: QueryOptions, promptText: string, signal: AbortSignal)
     cwd,
     provider: pid,
     model: mid,
-    taskClass: routed.taskClass,
+    taskClass: "implement",
     port,
     mode,
     roots,

@@ -1,33 +1,17 @@
 # Provider reference
 
-The registry holds **136 builtins** (`codewhip provider list`). This document
-is the detail behind the README's one-paragraph summary: the free chain, which
-providers sit outside it and why, and the honest caveats on free tiers.
+The registry holds **134 builtins** (`codewhip provider list`). This document
+is the detail behind the README's one-paragraph summary: which providers are keyed or keyless, and the honest caveats on free tiers.
 
 Curation rules (how a provider earns a row, and how it gets removed):
 [`moat/17-provider-curation-policy.md`](moat/17-provider-curation-policy.md).
 
-## The free chain
+## Picking a provider
 
-`codewhip run "..." --free` arms the whole chain on one run: on a rate-limit, a
-timeout, or an upstream 5xx the loop hops down the chain in order (same
-semantics as `--failover`, each provider at most once per run). It only walks
-free providers it can authenticate, and it **never bills pay-go**. The head is
-your explicit `--provider` (must be a free-catalog id) or the first free
-candidate with a usable key; the keyless tiers lead the chain, keyless `llm7`
-is the floor, so a run still moves when every stored key is gone. `--free` and
-`--failover` are mutually exclusive, and naming a non-free provider is refused:
-`--free runs the free chain only`.
-
-`codewhip run "..." --auto-failover` is the same $0-only chain with a quiet
-terminal: backend hops are recorded in the outcome/audit (and the receipt still
-splits per model) but not printed — total exhaustion still reports what was
-tried. Private runs stay head-only: explicit-provider consent covers one cloud
-target, so there is nothing silent to hop to.
-
-`codewhip free` lists the chain read-only (no key, no network): what each
-gateway offers, whether it needs a key, its limits as verified on 2026-09-11,
-and where to get the key. Keyless rows print first.
+Every run names its destination explicitly: `--provider <id>` (or
+`--provider:model <id>:<model>`). There is no auto-routing and no free-chain — the meter prices what you picked and says `cost untracked`
+for anything it cannot price. Store a key first with
+`codewhip auth login <id>` (env var wins when set, which is CI-friendly).
 
 ## Keyless and free-key gateways
 
@@ -50,27 +34,23 @@ and where to get the key. Keyless rows print first.
 | fabryka | free key, then $0.20/$0.60 per 1M in/out (single reasoning model, concurrency 1) | `FABRYKA_API_KEY` | https://router.fabryka.ai |
 
 The bare default (`run` with no flags) routes to nvidia and needs its key — for
-a $0 start with no keys use `run "…" --free` (free chain, never bills) or
-`--provider llm7` (anonymous, rate-limited). Env wins when set (CI-friendly).
+a $0 start with no keys use `--provider llm7` (anonymous, rate-limited). Env wins when set (CI-friendly).
 
 A further **18 free-key tiers** joined the registry on 2026-09-13 (harvested
 from freellm.net and peer directories, each cross-checked against a second
 source): `cloudflare`, `modelscope`, `ovhcloud`, `ollama`, `cohere`,
 `siliconflow`, `aionlabs`, `agnes`, `requesty`, `inference`, `hetzner`,
 `venice`, `scaleway`, `friendli`, `nscale`, `nebius`, `ai21`, `coze`. All 18
-require a key — none runs keyless — so they join a `--free` run only once you
-add one. Their `defaultModel` values are catalog-derived rather than
+require a key — none runs keyless — so they run only once you add one. Their `defaultModel` values are catalog-derived rather than
 live-probed (confirm with `codewhip models <id>`), and `cloudflare`
 additionally needs `CLOUDFLARE_ACCOUNT_ID`, because Workers AI scopes its API
 by account id.
 
-## Outside the free chain
+## Trial-credit and paid gateways
 
-Each stays out for a stated money reason, since `--free` promises never to bill
-pay-go. That promise is structural: chain membership requires a non-billing
-tier, which is why the one-time grants were removed 2026-09-18.
+Signup grants are not permanent free tiers; pay-go gateways bill from the first call.
 
-| Provider | Why out of the chain | Reach it |
+| Provider | Why not in free tier | Reach it |
 |---|---|---|
 | `1min` | credit-metered from the first call; also the only non-OpenAI builtin (see below) | `--provider 1min`, key `ONEMIN_API_KEY` |
 | `hcnsec` | New API relay; free allowance is a console quota, not a fixed grant | `--provider hcnsec`, key `HCNSEC_API_KEY` at `https://api.hcnsec.cn/console` |
@@ -80,7 +60,7 @@ tier, which is why the one-time grants were removed 2026-09-18.
 | `wrouter` (AccelsRouter) | trial credit for new accounts | `--provider wrouter`, key `WROUTER_API_KEY` at `https://router.accels.tech/register` |
 | `arouter` (ARouter) | keyed gateway, no verified free tier | `--provider arouter`, key `AROUTER_API_KEY` at `https://api.arouter.ai` |
 
-Relays and aggregators see every prompt in plaintext — **never send secrets
+Relays and aggregator gateways see every prompt in plaintext — **never send secrets
 through them**. A relay's served set shifts, so relay rows default to the
 gateway's own routing id (`auto`, `default`) rather than a pinned model that
 would 404.
@@ -89,16 +69,14 @@ would 404.
 
 Three rows were repaired on 2026-09-13 because they had stopped being truthful:
 `cerebras` (now needs a verified card, grant expires in 30 days) and `chutes`
-(pay-per-token since 2026-03) both left the free chain — a `--free` run must
-never bill — and `lepton` was removed outright (Lepton AI ceased operations
+(pay-per-token since 2026-03) both left the free tiers — and `lepton` was removed outright (Lepton AI ceased operations
 2025-05-20; `api.lepton.ai` no longer resolves). `cerebras` and `chutes` stay
 usable via `--provider`; they are simply no longer *free*.
 
 `empero` has been in a **declared maintenance window** since at least
 2026-09-11; re-probed 2026-09-14 it returns a consistent 503 with
 `code: "maintenance"` and the message "we are switching the free endpoint to
-new models". It stays in the free chain because it does not bill and the chain
-simply rotates past a failing hop — but its own notice says the served
+new models". Its own notice says the served
 **models are changing**, so both its `defaultModel` and its `$0` price entry
 need re-verifying when it returns.
 

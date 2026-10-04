@@ -1,6 +1,6 @@
 import type { LoopMsg } from "./provider-port.js";
 import { estimateTokens } from "./compact.js";
-import { costNote, estimateCost, meteredCost } from "./router.js";
+import { costNote, estimateCost, meteredCost } from "./costs.js";
 import type { UsageBucket } from "./outcomes.js";
 
 /**

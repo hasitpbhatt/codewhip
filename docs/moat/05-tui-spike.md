@@ -1,5 +1,9 @@
 # TUI spike — converged conclusion (OpenTUI, headless default)
 
+> **Removed 2026-09-25.** The TUI spike was shipped behind `--tui` and later
+> removed; `src/tui/` no longer exists. This document is retained as the
+> research record that informed the decision.
+
 RESEARCH ONLY, no code. Decisive; no ties. Inputs: Linus (harness jail),
 Naval-leverage (compounding), Norman (panic legibility), Memory (persistence).
 

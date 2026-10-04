@@ -36,8 +36,7 @@ npm unlink -g codewhip           # undo
 filesystems — on Replit, CI, or any machine where `-g` fails, skip it and run
 `node dist/index.js …` from the repo root instead (same binary, no link). On
 Replit specifically the key file (`~/.config/codewhip`) is also ephemeral: set
-provider keys as Replit Secrets, since env vars win over stored keys, or stay
-on `--free`.
+provider keys as Replit Secrets, since env vars win over stored keys.
 
 Since the link resolves through `dist/`, rebuild after each `src/` change —
 easiest is one watcher terminal:
@@ -59,7 +58,6 @@ src/loop.ts             agentLoop(): stream → permission → exec → append, 
 src/policy.ts           harness policy: denylist, chaining-deny, ask/allow defaults
 src/policy-store.ts     policy.md promoted denies (declines → candidates → approve)
 src/pack.ts             team policy packs shipped locally (list/pull)
-src/router.ts           3-class task router (implement/polish/private) + polish gate
 src/metrics.ts          `codewhip metrics`: blocks/100, $/task, memory/week from outcomes
 src/remember.ts         curated memorable shapes (no redirects/chains)
 src/remember-store.ts   .codewhip/remembered.jsonl (provenance: ts/runId/preview_hash)
