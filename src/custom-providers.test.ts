@@ -100,7 +100,7 @@ describe("custom-providers", () => {
     strictEqual(listLocalProviders(local).map((c) => c.id).join(","), "ollama-local");
   });
   it("a loopback runtime resolves a key with nothing stored (no credential needed)", () => {
-    // index.ts:597 and serve.ts:342 both refuse an empty key, so without the
+    // index.ts:597 refuses an empty key, so without the
     // placeholder a local provider would resolve a route and then abort.
     const local = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-anon-"));
     addCustomProvider({ ...BASE, id: "ollama-local", baseUrl: "http://127.0.0.1:11434", envVar: "OLLAMA_LOCAL_ANON_API_KEY" }, local);

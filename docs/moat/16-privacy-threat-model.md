@@ -21,7 +21,7 @@ protections exist.
 ## What never happens
 
 - **No telemetry, no phone-home.** No analytics endpoints, no
-  tracking pixels, no external JS. The serve proxy has no external
+  tracking pixels, no external JS. The UI has no external
   script references — all UI is inline HTML/JS.
 - **No data sharing.** Usage stats stay local. Nothing is sent to a
   third party except the API calls themselves.

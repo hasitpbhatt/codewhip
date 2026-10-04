@@ -107,7 +107,7 @@ function normalize(input: CustomProviderInput): ProviderConfig | { error: string
   const brand = (input.brand ?? id).trim() || id;
   const cfg: ProviderConfig = { id, brand, baseUrl, chatPath, modelsPath, defaultModel, envVar, keyUrl, timeoutMs };
   // A local runtime needs no credential, but every call path refuses an empty
-  // key (index.ts:597, serve.ts:342) — so a keyless local provider would
+  // key (index.ts:597) — so a keyless local provider would
   // resolve and then abort. Registering the placeholder is what makes the
   // zero-config promise true. env/file still win, so a secured runtime that
   // does want a token is unaffected, and nothing is billed either way.

@@ -9,7 +9,7 @@ import path from "node:path";
  * The repo carries one architectural rule (the research-track boundary):
  * core modules — the agent loop, tools, policy, audit, outcomes, verdicts,
  * checkpoints, compaction, budgeting — must never depend on the product
- * surface (CLI, TUI, OpenAI-proxy serve, provider registry/wire stack,
+ * surface (CLI, TUI, provider registry/wire stack,
  * reporting). Surface may import core, never the reverse. This keeps the
  * research substrate importable without the 136-provider table.
  *
@@ -23,7 +23,6 @@ const SURFACE = new Set([
   // canUseTool) that resolves providers, keys and the consent gate — all
   // surface-side — and then calls into core. Core never imports it.
   "src/sdk.ts",
-  "src/serve.ts",
   "src/auth.ts",
   "src/demo.ts",
   "src/provider.ts",
@@ -86,6 +85,7 @@ test("every src file is classified core or surface", () => {
 /** Explicit core allowlist so a new file forces a boundary decision. */
 const CORE_EXPECTED = new Set([
   "src/audit.ts",
+  "src/bootstrap.ts",
   "src/budget.ts",
   "src/checkpoints.ts",
   "src/commands.ts",

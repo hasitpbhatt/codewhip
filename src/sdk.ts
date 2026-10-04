@@ -262,7 +262,7 @@ function prepare(options: QueryOptions, promptText: string, signal: AbortSignal)
     const cfg = getProviderConfig(pid);
     if (cfg === null) throw new SdkError(`unknown provider "${pid}" (see: codewhip provider list)`);
     contextWindow = cfg.contextWindow;
-    // The same consent gate `serve` and the CLI enforce: no exact enabled
+    // The same consent gate the CLI enforces: no exact enabled
     // entry, no run. Loopback locals are exempt (registering one is consent).
     if (!isLoopbackBaseUrl(cfg.baseUrl) && !isModelAllowed(pid, mid, options.dir)) {
       throw new SdkError(`model "${pid}:${mid}" is not enabled — run: codewhip provider enable ${pid}:${mid}`);

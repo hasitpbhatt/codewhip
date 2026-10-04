@@ -138,8 +138,7 @@ change without touching the others:
    of *exact* `provider:model` ids and an absent or corrupt file means
    nothing is enabled. There are no wildcards — "enable all of a
    provider" writes the current live ids, so a catalog change can
-   never silently re-open access. Enforced at the call sites (serve
-   chat + auto-pick + /v1/models listing; CLI run pre-flight,
+   never silently re-open access. Enforced at the call sites (CLI run  + /v1/models listing; CLI run pre-flight,
    `--models` rotation, `--free` chain, `--failover`, and the
    `routeFor`/`pickRandomHealthy` auto routes). Loopback locals are
    exempt in v1: registering one is the consent.
@@ -185,7 +184,7 @@ When `resolveKey()` returns `{ source: "anonymous" }` for a provider, the
 - **llm7**: anonymous "unused" key rejected by the API.
 
 **This guard lives in `src/provider.ts:openAiPort`** — the `keySource`
-parameter must be passed from `serve.ts` → `makePortForConfig` →
+parameter must be passed from `index.ts` → `makePortForConfig` →
 `openAiPort`, and the `Authorization` header must be conditionally
 included only when `keySource !== "anonymous"`.
 

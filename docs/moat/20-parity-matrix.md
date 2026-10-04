@@ -41,16 +41,16 @@ model-agnostic open-source CLI cannot have *as such*: vendor account OAuth,
 hosted cloud sessions, the Slack/GitHub-App auto-fixers, hosted
 Design/Artifacts browser, mobile QR pairing, Remote Control from a vendor
 site,
-self-hosted runner environments, the native-binary installer, and server-side
+self-hosted runner environments, the native-binary installer, and 
 `advisor`/`ultrareview` (a paid multi-agent cloud fleet). These are marked
 **N/S** — they are distribution of one company's service, not features of a
 terminal agent. What *is* in scope is the local equivalent: codewhip's own
-`serve`, `--free`, and CI action already cover the "run it headless somewhere
+`
 you control" half of that story.
 
 This ruling is additive and changes no frozen schema. The kill list
 (`docs/roadmap.md`) is unchanged: no MCP *catalog* or marketplace. MCP **client
-support** — consuming someone else's server — is wave 3 and needs its own
+support** — consuming someone else's 
 recorded ruling when it lands, because it touches the audit boundary.
 
 ## A. Invocation and scripting
@@ -78,7 +78,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `update`, `install [version]` | **GAP-4** | no update path |
 | `doctor` (read-only diagnostics) | PARTIAL | `codewhip trust` covers chain/policy/keys/memory, not installation |
 | `setup-token` (long-lived CI token) | **GAP-4** | env keys only |
-| `gateway` (self-hosted gateway) | ALIAS | `codewhip serve` |
+| `gateway` (self-hosted gateway) | ALIAS | `codewhip 
 | `import` from other agents | **GAP-5** | absent |
 | `logs`/`attach`/`respawn`/`stop`/`rm`/`daemon` — background session supervisor | **GAP-3** | `run_in_background` jails *commands* (`src/tools/background-tasks.ts`); no detachable *agent session* |
 | `--bg/--background` session start | **GAP-3** | absent |
@@ -134,7 +134,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | TaskCreate/Get/List/Update | **HAVE** | per-item tasks whose edges gate claiming: `todo` list/get/replace/update (`src/tools/todo.ts:71`, `:62`), items carry `description`/`activeForm`/`owner`/`blocks`/`blockedBy`, either edge direction stored both ways (`src/tools/todo-store.ts:146`), a dangling edge (`:129`), a cycle (`:131`) and a claim past an open edge (`:133`) all refused — and re-checked on every write, so the file's invariants hold rather than the argument's (`src/tools/todo.ts:47`) |
 | Agent/`Skill` tool | PARTIAL | `delegate`, `delegate_many`; no model-invoked skills |
 | AskUserQuestion | PARTIAL | `ask_user`: one question per call (not up to four), no `header`/`preview` field, and a numbered readline rather than a selection widget — `src/tools/ask-user.ts:82`, rendered at `src/index.ts:968`; allow-class at `src/policy.ts:430`, refused for a child at `src/loop.ts:884`, advertised only where a keyboard is reachable (`src/tools/registry.ts:316`) |
-| ToolSearch / WaitForMcpServers | **GAP-3** | absent (MCP) |
+| ToolSearch / WaitForMcp
 | EnterWorktree/ExitWorktree, `isolation: worktree` | **GAP-3** | absent; worktree *escape* is denied today |
 | LSP tool | **GAP-5** | absent |
 | CronCreate/List/Delete, RemoteTrigger, PushNotification, SendUserFile, EndConversation, ReportFindings, Artifact | N/S | cloud/push platform surface |
@@ -147,7 +147,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Category capability | Status | codewhip evidence |
 |---|---|---|
 | `<tool>/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not the competitor dir), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
-| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` frontmatter | PARTIAL | `tools` narrows a child's advertised set narrow-only (`src/subagents.ts:144` → `src/tools/registry.ts:301`), `disallowedTools` reuses the run-filter grammar (`src/subagents.ts:386`), and both are compiled onto one list the child is born with (`src/subagents.ts:480`, `:599`); the other eight are refused BY NAME with their reason (`src/subagents.ts:73`) — no field is ever accepted-and-dropped |
+| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcp
 | `--agents` JSON, `--agent` | PARTIAL | `--agents '{"<name>":{"description":…,"prompt":…}}'` is the same roster in JSON (`src/subagents.ts:209`) and outranks `.codewhip/agents/*.md`, which outranks the built-ins (`src/subagents.ts:424`, `src/loop.ts:426`); `--agent <name>` puts an entry on the main thread (`src/index.ts:1145` → `src/subagents.ts:522`). Three deltas: the prompt is appended, never a replacement for the harness base; a `tools` narrowing on the main thread can only refuse read/search (`src/subagents.ts:480`); and there is no mid-session agent switch |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
 | Agent view panel, parallel background agents, `SendMessage`, teammates | **GAP-3** | children are synchronous and depth-capped |
@@ -175,8 +175,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 | MCP client: stdio/SSE/HTTP/ws, `mcp add` subcommand, scopes local/project/user | **GAP-3** | zero MCP in `src/` — needs a kill-list ruling |
 | MCP OAuth (`mcp login/logout`) | **GAP-3** | absent |
 | MCP resources/prompts as tools and slash commands | **GAP-3** | absent |
-| `mcp__server__tool` namespacing into the permission layer | **GAP-3** | must be designed with policy, not bolted on |
-| `allowedMcpServers` / deny lists (enterprise control) | **GAP-3** | same ruling |
+| `mcp__
+| `allowedMcp
 | Agent SDK (TS/Python `query()`, `canUseTool`, custom tools) | PARTIAL → **GAP-2** → **HAVE** · Python ALIAS | `src/sdk.ts:480` `query()`, `:161` `tool()`, `:319` `askUserFor` (`canUseTool` on the ask rung); gates resolved at `:217` before any call. Python drives the same engine over NDJSON (`--input-format`/`--output-format stream-json`), without an in-process decider |
 
 ## H. Memory and project files
@@ -369,7 +369,7 @@ all 697 pre-existing tests untouched. Five rulings inside it:
   failure, never as a result.
 - **Validation adds beside, never instead.** `structured_output` sits next to
   `result` (`src/run-output.ts:208`, plus `structured_errors` /
-  `structured_repairs`), the prose answer is preserved, and in `-p` mode the
+  `structured_repairs`), the prose answer is pre
   repair chatter is an event on stderr while stdout stays a single machine
   document. Text mode prints the validated document — that is what the flag
   was asked for — but the raw prose remains recoverable from the json envelope.
@@ -607,7 +607,7 @@ at load time — and "loudly refused" is not "does what the category expects". 9
   the spec and the ladder refuses the call through the path that already existed
   for both, rather than a frontmatter-only one that could drift.
 - **A field that does nothing is a false sentence in a config file.** `permissionMode`,
-  `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort` and
+  `skills`, `mcp
   `isolation` are each refused by name with the reason it cannot be honoured
   (`src/subagents.ts:73`), and an unknown key is refused as unknown, so a typo
   surfaces the same way. The refusal is not a shrug: `codewhip agents` prints the
@@ -740,7 +740,7 @@ Five rulings:
   already-granted `webfetch`, a host tool (opaque caller code — the harness
   cannot promise it only reads), a configured hook, a duplicate or empty call
   id, a memo hit, or any call that would need a keystroke. A same-turn `read`
-  must not observe a half-applied edit, and two approvals must never race for
+  must not ob
   one terminal, so partial parallelism is the one design that is not available.
 - **"Already granted" is a ladder verdict, not a shortcut past one.** Each
   candidate still runs `matchToolFilter` and `checkPermission` first, and joins
@@ -755,7 +755,7 @@ Five rulings:
   per-call-site cap. Results are written back to their **input** index, so
   completion order is free while `tool_result` messages, `seq`, the trace,
   `outcomes.jsonl` and the audit chain all stay in the order the model asked
-  for — the audit `seq` is reserved before execution and the appends happen on
+  for — the audit `seq` is re
   the commit loop (`src/loop.ts:906`–`:930`).
 - **One failure is one failed call, not a failed batch.** Each execution keeps
   its own `withTimeout` and its own `try/catch` inside the pool, so a crash or

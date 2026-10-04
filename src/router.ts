@@ -76,7 +76,7 @@ export const STALE_HEALTH_MS = 24 * 60 * 60 * 1000;
  * Share of CLI random-mode auto picks spent on candidates the health gate
  * excluded but that remain eligible and past their failure TTL — the epsilon
  * in explore/exploit, so a failed route is re-discovered instead of never
- * tried again. serve explores structurally: its health weights keep gated
+ * tried again. auto explores structurally: its health weights keep gated
  * models in the pool at reduced probability instead of hard-excluding.
  */
 export const EXPLORE_RATE = 0.1;
@@ -91,7 +91,7 @@ export function healthRate(mh: ModelHealth): number {
 }
 
 /**
- * The auto-pick health gate (CLI random mode + serve `model: "auto"` — one
+ * The auto-pick health gate (CLI random mode + auto `model: "auto"` — one
  * rule, so the two cannot drift). No record or thin history passes (no data
  * is not failure); stale records pass (unproven again, STALE_HEALTH_MS);
  * otherwise the recency-aware rate must clear `floor`.
@@ -134,7 +134,7 @@ export const TTL_MS = {
 };
 
 /**
- * Exported for `serve` auto-pick: the serve proxy reuses the same TTL
+ * Exported for `auto` health-pick: reuses the same TTL
  * deactivation so `model: "auto"` never routes at a model the CLI just
  * watched fail. Single source for the TTL table lives here.
  * Also returns true when the model is permanently blocked (410 received).
@@ -154,7 +154,7 @@ export function isRecentlyFailed(providerId: string, model: string): boolean {
 
 /**
  * Paid-key protection shared by every auto path (CLI `CODEWHIP_AUTO_RANDOM=1`
- * and serve `model: "auto"` / `--provider auto`). Auto only spends keys that
+ * and auto `model: "auto"` / `--provider auto`). Auto only spends keys that
  * are free by construction:
  * - `anonymous` source — keyless free tiers (llm7, kilo, opencode, …), or
  * - a route with a known $0 price — a user key there only raises rate limits.

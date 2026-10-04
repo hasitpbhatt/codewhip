@@ -44,7 +44,6 @@ import { removeRule } from "./remember-store.js";
 import { contextGrid, costLines, EMPTY_LEDGER, mergeUsage, usageLines, withShape, type Ledger } from "./session-ledger.js";
 import { isVerdict, proposeVerdict, resolveRunPrefix, setVerdict, type Verdict } from "./verdict.js";
 import { defaultPacksDir, listPacks, pullPack } from "./pack.js";
-import type { ServeOptions } from "./serve.js";
 import {
   clearKey,
   configDir,
@@ -305,25 +304,6 @@ function printCommandHelp(topic: string): boolean {
       console.log("  Feeds .codewhip/eval.jsonl → codewhip metrics reports the task-success bars (≥70% polish / ≥50% implement).");
       console.log("  Exit 0 only when every selected task passes — CI-usable. --keep keeps temp dirs for debugging.");
       return true;
-    case "serve":
-      console.log("codewhip serve [--port 8787] [--host 127.0.0.1] [--provider llm7] [--model <id>] [--token <secret>] [--no-auth-ui] [--ping-models]");
-      console.log("  Exposes the provider registry as an OpenAI-compatible HTTP server:");
-      console.log("    POST /v1/chat/completions   stream and non-stream; model = \"<provider>:<model>\" or \"auto\"");
-      console.log("  \"auto\" only spends free keys (anonymous tiers + known-$0 routes with TTL health filter).");
-      console.log("  A paid key on an untracked-cost route is never auto-touched unless CODEWHIP_AUTO_INCLUDE_UNTRACKED=1.");
-      console.log("    GET  /v1/models             every provider as \"<provider>:<default-model>\"");
-      console.log("    GET  /health");
-      console.log("    GET  /playground            model playground UI");
-      console.log("    GET  /auth                  provider key manager UI (on by default; --no-auth-ui to disable)");
-      console.log("    POST /auth/_custom          register a custom endpoint (same as: codewhip provider add)");
-      console.log("    DELETE /auth/_custom/<id>   remove one (same as: codewhip provider remove <id>)");
-      console.log("  Defaults to llm7 (keyless) so it works with no setup. Any OpenAI client can point at it,");
-      console.log("  including the ones that cannot speak to a non-OpenAI provider such as 1min.");
-      console.log("  Binds 127.0.0.1 unless --host is given; a non-loopback bind REQUIRES --token.");
-      console.log("  This proxies models only — it runs no tools, applies no policy, and writes no audit entries.");
-      console.log("  The auth UI stores/clears provider keys and registers custom endpoints from the browser");
-      console.log("  (env vars still win; keys are never echoed). Registered endpoints join /v1/models at once.");
-      return true;
     case "audit":
       console.log("codewhip audit [--verify|--last <n>|--replay <runId>|--export <file>] — inspect the hash-chained log.");
       console.log("  --verify proves the chain (needs .codewhip/key); hashes cover redacted content only.");
@@ -388,7 +368,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider serve rollback sessions audit metrics stats trust verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider rollback sessions audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -405,7 +385,6 @@ function printHelp(): void {
   console.log("  models [provider]    list served models with agency tags (default: nvidia)");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
   console.log("  free                 list the free-provider chain (keyless rows first, limits, key consoles)");
-  console.log("  serve                expose the providers as an OpenAI-compatible HTTP server (--port/--token)");
   console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
   console.log("  sessions             list saved conversation transcripts (newest first; --continue to resume)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
@@ -1253,8 +1232,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
-  // Consent gate: no exact provider:model entry, no run — the same rule serve
-  // enforces. Loopback locals are exempt (registration is the consent there).
+  // Consent gate: no exact provider:model entry, no run. Loopback locals are exempt (registration is the consent there).
   if (!isLoopbackBaseUrl(runCfg.baseUrl) && !isModelAllowed(opts.provider, opts.model)) {
     console.error(`codewhip: model "${opts.provider}:${opts.model}" is not enabled — run: codewhip provider enable ${opts.provider}:${opts.model} (see: codewhip provider allowed)`);
     process.exitCode = 1;
@@ -2422,7 +2400,6 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
         ? `provider: disabled ${result.removed.join(", ")}`
         : "provider: nothing was enabled (nothing changed)");
     }
-    console.log("  a running `codewhip serve` honors this within its 60s catalog cache (chat gating is immediate)");
     return;
   }
   if (sub === "allowed") {
@@ -3032,62 +3009,6 @@ function cmdTrust(args: string[]): void {
   console.log(lines.join("\n"));
 }
 
-async function cmdServe(args: string[]): Promise<void> {
-  const flag = (name: string): string | undefined => {
-    const i = args.indexOf(name);
-    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
-  };
-  const rawPort = flag("--port") ?? "8787";
-  const port = Number(rawPort);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    console.error(`serve: bad --port "${rawPort}" (need an integer 0..65535)`);
-    process.exitCode = 1;
-    return;
-  }
-  // llm7 is the default on purpose: it is keyless, so `codewhip serve` works
-  // with no setup at all. Point it anywhere else with --provider, or pass
-  // --provider auto for a health-weighted pick per request (free keys only —
-  // paid keys on untracked-cost routes are never auto-touched; recent
-  // failures deactivated by TTL).
-  const provider = flag("--provider") ?? "llm7";
-  const cfg = provider === "auto" ? null : getProviderConfig(provider);
-  if (provider !== "auto" && cfg === null) {
-    console.error(`serve: unknown provider "${provider}" (see: codewhip provider list)`);
-    process.exitCode = 1;
-    return;
-  }
-  const opts: ServeOptions = {
-    port,
-    host: flag("--host") ?? "127.0.0.1",
-    provider,
-    model: flag("--model") ?? cfg?.defaultModel ?? "auto",
-  };
-  const token = flag("--token");
-  if (token !== undefined) opts.token = token;
-  opts.authUi = args.indexOf("--no-auth-ui") === -1;
-  opts.pingModels = args.includes("--ping-models");
-  const { createShutdown, startServe } = await import("./serve.js");
-  try {
-    const server = startServe(opts);
-    // Idempotent by construction — see createShutdown. Repeated signals must
-    // not stack close listeners, and idle keep-alive sockets must not hold the
-    // process open (that hang is what makes an operator press Ctrl-C again).
-    const controller = createShutdown(server, (code) => process.exit(code));
-    const onSignal = (): void => {
-      if (!controller.isShuttingDown()) {
-        console.log("");
-        console.log("serve: shutting down (press Ctrl-C again to force)");
-      }
-      controller.shutdown();
-    };
-    process.on("SIGINT", onSignal);
-    process.on("SIGTERM", onSignal);
-  } catch (err) {
-    console.error(`serve: ${err instanceof Error ? err.message : "failed to start"}`);
-    process.exitCode = 1;
-  }
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? "help";
@@ -3263,10 +3184,6 @@ async function main(): Promise<void> {
   }
   if (command === "free") {
     cmdFree();
-    return;
-  }
-  if (command === "serve") {
-    await cmdServe(args.slice(1));
     return;
   }
   console.error(`unknown command: ${command}`);
