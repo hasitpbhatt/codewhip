@@ -4,8 +4,7 @@
 
 CodeWhip is a model-agnostic terminal coding agent. It is built
 around a strict policy engine, an append-only signed audit chain,
-metered receipts, and a `--free` provider chain that guarantees it
-never bills the user for pay-go.
+metered receipts, and a never bills the user for pay-go.
 
 ## Single maintainer (bus factor 1)
 
@@ -46,8 +45,7 @@ All maintainers and contributors agree to:
   It must never be presented as an endorsement of proprietary
   platforms. When adding a provider, the `rateLimitedHint`
   and comments must be honest about what the user actually gets.
-- **Free means free.** `--free` never bills. A provider whose
-  "free" tier requires a card leaves `FREE_CHAIN`.
+- **No force pushes.** History is append-only for audit integrity. Reverts are done as new commits, not rewrites.
 - **No force pushes.** History is append-only for audit
   integrity. Reverts are done as new commits, not rewrites.
 - **Transparency.** All governance decisions are recorded in
@@ -67,8 +65,7 @@ All maintainers and contributors agree to:
 |------|---------|
 | `src/provider-registry.ts` | Single source of truth for providers |
 | `src/provider-stats.ts` | Health tracking, outcome classification |
-| `src/router.ts` | Routing, TTL cooling, health gating |
-| `src/audit.ts` | Hash-chained signed audit log |
+| | `src/audit.ts` | Hash-chained signed audit log |
 | `src/loop.ts` | Agent loop with policy enforcement |
 | `src/policy.ts` | Harness-side policy denylist |
 | `docs/moat/00-convergence.md` | Frozen policy/audit/memory schemas |

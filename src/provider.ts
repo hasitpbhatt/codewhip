@@ -14,18 +14,11 @@ import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
 import { blockModel, isBlocked } from "./provider-blocklist.js";
 import { parseRetryAfter, resolveBaseUrl, unresolvedBaseUrlVars } from "./wire-util.js";
 /**
-/**
  * Provider types and constants. There are no builtin providers.
  * Every provider is user-registered with `codewhip provider add <id>
  * --base-url <https origin> --env-var <VAR>`: a custom base URL and
  * the bearer token it needs. Registry types live in src/provider-registry.ts.
  */
-import {
-  DEFAULT_CHAT_TIMEOUT_MS,
-  MAX_CHAT_TIMEOUT_MS,
-  MIN_CHAT_TIMEOUT_MS,
-  type ProviderConfig,
-} from "./provider-registry.js";
 export {
   DEFAULT_CHAT_TIMEOUT_MS,
   MAX_CHAT_TIMEOUT_MS,
@@ -37,6 +30,7 @@ export type {
   ProviderConfig,
   ProviderId,
 } from "./provider-registry.js";
+import { type ProviderConfig } from "./provider-registry.js";
 
 const MAX_BODY_CHARS = 500;
 
@@ -667,7 +661,7 @@ const outcome = outcomeForStatus(res.status, respBody);
 }
 
 /** Tool-calling adapter for an explicit config (builtins and customs alike). */
-export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, keySource?: string): ChatPort {
+export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, _keySource?: string): ChatPort {
   // One branch, keyed by the row's own discriminator — a non-OpenAI provider
   // never has to be special-cased by id at every call site.
   return openAiPort(cfg, apiKey, timeoutMs);

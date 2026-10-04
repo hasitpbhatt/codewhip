@@ -13,7 +13,7 @@ junior's hands unsupervised. CodeWhip does, and prices every run while it's at
 it.
 
 **Status: H1 done (2026-09-17).** `codewhip run` executes a real agent loop:
-13 tools, 136 providers, a harness-side policy jail, a hash-chained audit log,
+13 tools, custom providers only, a harness-side policy jail, a hash-chained audit log,
 and a cost meter. Not published to npm yet — install from source below.
 
 ## Quickstart
@@ -114,7 +114,7 @@ One line each; the full contract for every item is in
 
 ## Providers
 
-The registry holds **134 builtins**; keys live in an owner-only file (or env,
+There are **no builtin providers**; keys live in an owner-only file (or env,
 which wins) and `codewhip auth status` never prints one. Every provider is
 explicit: name it with `--provider <id>` (or `--provider:model <id>`) and
 store its key with `codewhip auth login <id>`. There is no auto-routing and no free chain — you pick the destination,

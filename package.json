@@ -1,7 +1,7 @@
 {
   "name": "codewhip",
   "version": "0.4.0",
-  "description": "Model-agnostic terminal coding agent — policy-checked loop, signed audit trail, metered receipts, free-provider chain",
+  "description": "Model-agnostic terminal coding agent — policy-checked loop, signed audit trail, metered receipts, custom providers",
   "author": "Hasit Bhatt",
   "repository": {
     "type": "git",
@@ -40,7 +40,6 @@
     "bench": "tsx src/bench/cli.ts",
     "parity": "node scripts/parity.mjs",
     "immunity": "tsx src/immunity/cli.ts",
-    "serve": "node dist/serve.js",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "keywords": [
@@ -50,7 +49,6 @@
     "agent",
     "openai",
     "llm",
-    "router",
     "audit",
     "policy",
     "typescript",

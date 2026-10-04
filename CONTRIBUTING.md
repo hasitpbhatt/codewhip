@@ -67,7 +67,7 @@ src/auth.ts             provider keys (login/logout/status; env wins, file 0600)
 src/config-dir.ts       global key/config dir (%APPDATA% | ~/.config)
 src/custom-providers.ts user-registered OpenAI-compatible providers
 src/models.ts           served-model listing with agency tags
-src/provider-registry.ts builtin registry (+ free-chain.ts; provider.ts re-exports)
+src/provider-registry.ts provider types (no builtins; all providers are custom)
 src/onemin.ts           1min.ai port: prompt flattening + emulated tool calls (not OpenAI-shaped)
 src/serve.ts            `codewhip serve`: OpenAI-compatible HTTP front end over the registry
 src/wire-util.ts        shared wire helpers ({ENV} base-URL placeholders, Retry-After)

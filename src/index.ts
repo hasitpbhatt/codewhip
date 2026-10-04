@@ -2036,8 +2036,8 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
   const sub = args[0] ?? "list";
   if (sub === "list") {
     const all = listAllProviderConfigs();
-    const nCustom = all.filter((c) => true).length;
-    console.log(`provider: ${all.length} known (${all.length - nCustom} builtin + ${nCustom} custom):`);
+    const nCustom = all.length;
+    console.log(`provider: ${all.length} known (${nCustom} custom):`);
     for (const c of all) {
       const { source } = resolveKey(c.id);
       const tag = "custom";

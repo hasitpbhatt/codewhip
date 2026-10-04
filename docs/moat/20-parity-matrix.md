@@ -211,9 +211,9 @@ recorded ruling when it lands, because it touches the audit boundary.
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
 column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 44**, **PARTIAL 20**, **GAP 38**,
-i.e. **43.1%** at parity or better. Remaining GAP rows by wave: 3 → 16, 4 → 13,
-5 → 9. Wave 2 is closed.
+ **97 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 19**, **GAP 35**,
+ i.e. **44.3%** at parity or better. Remaining GAP rows by wave: 3 → 13, 4 → 13,
+ 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
