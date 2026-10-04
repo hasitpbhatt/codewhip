@@ -7,8 +7,7 @@ import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
 import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
-import { allowedModelsFor, disableEntries, enableEntries, isModelAllowed, loadAllowedEntries, providerIsEnabled } from "./model-allowlist.js";
-import { freeChainCandidates, freeChainIds, listFreeProviders } from "./free-providers.js";
+import { allowedModelsFor, disableEntries, enableEntries, isModelAllowed, loadAllowedEntries } from "./model-allowlist.js";
 import { listModels } from "./models.js";
 import { summarizeCalls, readProviderCalls, renderProviderHealth } from "./provider-stats.js";
 import { agentLoop, type ApprovalAnswer, type AskUser, type LoopEvent, type LoopResult, type FailoverTarget } from "./loop.js";
@@ -78,15 +77,6 @@ type RunOptions = {
   yolo: boolean;
   retryWait: boolean;
   failover: boolean;
-  /** Arm the free-provider chain (mutually exclusive with --failover). */
-  free: boolean;
-  /**
-   * Silent auto-failover: same $0-only chain as --free, but backend hops are
-   * recorded (outcome/audit/receipt) rather than printed. Private runs stay
-   * head-only (consent covers one target). Mutually exclusive with
-   * --free/--failover/--models.
-   */
-  autoFailover: boolean;
   /** Run-scoped read-only: edit/write/bash denied, output is the plan. */
   plan: boolean;
   /** `--permission-mode`: which rung an ask terminates on. Unset means the
@@ -218,8 +208,6 @@ function printRunOptions(): void {
   console.log("  --debug              print the harness's decisions (ladder rungs, retries, budgets, hooks) to stderr");
   console.log("  --debug-file <path>  the same, appended to a file (owner-only, secrets redacted, 8 MiB cap)");
   console.log("  --failover           one switch to the next provider with a stored key on rate-limit/timeout/5xx per run (default: off; may bill pay-go)");
-  console.log("  --free               arm the free-provider chain: hop provider on rate-limit/timeout/5xx, each free hop once per run, never bills pay-go (see: codewhip free; not with --failover)");
-  console.log("  --auto-failover      like --free but silent: backend hops are recorded in the outcome/audit, not printed (private runs stay head-only; not with --free/--failover)");
   console.log("  --plan               read-only run: edit/write/bash/delegate denied for the whole run (even with --yolo); the output is the plan");
   console.log(`  --allowed-tools <f>  session rung of the ladder: these shapes pass an ask with no prompt, this run only — nothing is written to disk. ${TOOL_FILTER_RULE}. Never a policy deny, --plan, or a .codewhip path (also --allowedTools)`);
   console.log("  --disallowed-tools <f>  refused above the ladder: no --yolo, remembered rule or human yes grants these, and a bare tool name is not even advertised to the model (also --disallowedTools)");
@@ -243,7 +231,7 @@ function printRunOptions(): void {
   console.log("  --output-format <f>  text|json|stream-json — implies -p: json prints one result document, stream-json prints NDJSON (init, one line per event, result)");
   console.log("  --input-format <f>   text|stream-json — stream-json makes stdin a stream of {\"type\":\"user\",\"message\":{…}} lines and drives several turns of one session in one process; needs --output-format stream-json (one result line per turn) and takes the prompts from stdin, so no positional prompt. Follow-ups land at the next turn boundary: nothing is injected into a step already running, and no line answers a permission prompt (asks stay held and denied, as under any -p run)");
   console.log("  run -                read the prompt from stdin. Piped stdin alongside a prompt is appended to it as context: cat diff.patch | codewhip run -p \"review this\"");
-  console.log("  --max-budget-usd <n> stop the run when metered cost crosses n on a priced route (refused on untracked routes rather than inert; not with --free/--auto-failover, which never bill)");
+  console.log("  --max-budget-usd <n> stop the run when metered cost crosses n on a priced route (refused on untracked routes rather than inert)");
 }
 
 function printKeysHelp(): void {
@@ -253,7 +241,7 @@ function printKeysHelp(): void {
   const cfgs = listAllProviderConfigs();
   console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
   console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
-  console.log("  keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited — see: codewhip free). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+  console.log("  keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
 }
 
 /** One-command topics for `codewhip help <command>` / `codewhip <command> --help`. Returns false for unknown topics. */
@@ -294,12 +282,8 @@ function printCommandHelp(topic: string): boolean {
       console.log("codewhip provider disable <p:m>   — take one exact model away");
       console.log("codewhip provider allowed         — the enabled models");
       return true;
-    case "free":
-      console.log("codewhip free — list the free-provider chain (read-only: no key, no network).");
-      console.log('  Keyless rows first. Arm the chain on a run: codewhip run "<prompt>" --free.');
-      return true;
     case "eval":
-      console.log("codewhip eval [--task <name>] [--provider <p>] [--model <m>] [--free] [--max-steps 25] [--timeout-sec 600] [--keep]");
+      console.log("codewhip eval [--task <name>] [--provider <p>] [--model <m>] [--max-steps 25] [--timeout-sec 600] [--keep]");
       console.log("  Runs the agent against the fixture tasks in tasks/ (disposable temp dirs) and machine-grades each with its checker.");
       console.log("  Feeds .codewhip/eval.jsonl → codewhip metrics reports the task-success bars (≥70% polish / ≥50% implement).");
       console.log("  Exit 0 only when every selected task passes — CI-usable. --keep keeps temp dirs for debugging.");
@@ -368,7 +352,7 @@ function printCommandHelp(topic: string): boolean {
 }
 
 function printHelpTopicError(topic: string): void {
-  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models free provider rollback sessions audit metrics stats trust verdict demo policy pack)`);
+  console.error(`help: no topic "${topic}" (topics: init run auth agents remember models provider rollback sessions audit metrics stats trust verdict demo policy pack)`);
   process.exitCode = 1;
 }
 
@@ -384,7 +368,6 @@ function printHelp(): void {
   console.log("  auth                 store provider keys (login/logout/status [provider])");
   console.log("  models [provider]    list served models with agency tags (default: nvidia)");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
-  console.log("  free                 list the free-provider chain (keyless rows first, limits, key consoles)");
   console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
   console.log("  sessions             list saved conversation transcripts (newest first; --continue to resume)");
   console.log("  audit                inspect the hash-chained audit log (--verify/--last/--replay/--export)");
@@ -404,7 +387,7 @@ function printHelp(): void {
   printRunOptions();
   console.log("");
   printKeysHelp();
-  console.log("Receipts: every run prints `tokens / provider:model / cost` (nvidia + the free chain = $0; other providers print cost untracked).");
+  console.log("Receipts: every run prints `tokens / provider:model / cost`.");
   console.log(`Model: agentLoop() live (read/search/edit/write/bash/webfetch + read-only subagents) — policy-checked, metered.`);
 }
 
@@ -473,8 +456,6 @@ function parseRunArgs(args: string[]): RunOptions | null {
   let debug = false;
   let debugFile: string | undefined;
   let failover = false;
-  let free = false;
-  let autoFailover = false;
   let plan = false;
   const allowedTools: ToolFilter[] = [];
   const disallowedTools: ToolFilter[] = [];
@@ -579,14 +560,7 @@ function parseRunArgs(args: string[]): RunOptions | null {
       debug = true;
       debugFile = v;
     } else if (a === "--failover") {
-      if (free || autoFailover) return fail("use --failover or --free/--auto-failover, not both");
       failover = true;
-    } else if (a === "--free") {
-      if (failover || autoFailover) return fail("use --free or --failover/--auto-failover, not both");
-      free = true;
-    } else if (a === "--auto-failover") {
-      if (failover || free) return fail("use --auto-failover or --free/--failover, not both");
-      autoFailover = true;
     } else if (a === "--plan") {
       plan = true;
     } else if (a === "--permission-mode" || a.startsWith("--permission-mode=")) {
@@ -770,15 +744,12 @@ function parseRunArgs(args: string[]): RunOptions | null {
       return fail(`--yolo and --permission-mode ${permissionMode} disagree on the run's ladder — drop one`);
     }
   }
-  if (maxBudgetUsd !== undefined && (free || autoFailover)) {
-    return fail("--max-budget-usd is meaningless on the free chain (it never bills pay-go) — cap tokens with --token-budget");
-  }
   if (headlessFlag) setOutputFormat(formatArg ?? "text");
   return {
     prompt: positional.join(" "),
     model: modelsArg?.[0] ?? model,
     models: modelsArg ?? [],
-    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, debug, debugFile, failover, free, autoFailover, plan, share, sharePrint,
+    provider, providerExplicit, tokenBudget, maxSteps, yolo, retryWait, debug, debugFile, failover, plan, share, sharePrint,
     allowedTools, disallowedTools, excludeDynamicSections,
     ...(agentsArg === undefined ? {} : { agents: agentsArg }),
     ...(agentName === undefined ? {} : { agent: agentName }),
@@ -1049,50 +1020,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
-  // --free / --auto-failover arm the free chain: head = the explicit
-  // --provider (must be a free-catalog id) or the first free candidate with
-  // a usable key (env, stored file, or the row's anonymousKey — kilo/opencode/
-  // empero/llm7 are keyless). Chain = the remaining keyed candidates, catalog
-  // order. Both never bill pay-go; --auto-failover additionally silences the
-  // hop chatter (recorded, not printed).
-  let freeChain: FailoverTarget[] = [];
-  if (opts.free || opts.autoFailover) {
-    const allFree = freeChainIds();
-    // Consent gate: the chain only walks providers with ≥1 enabled model.
-    const candidates = allFree.filter((id) => providerIsEnabled(id));
-    if (candidates.length === 0 && allFree.length > 0) {
-      console.error("codewhip: --free found no enabled free provider — every free-chain provider is disabled by the allowlist. Enable models with: codewhip provider enable <provider>:<model> (see: codewhip provider allowed)");
-      process.exitCode = 1;
-      printStubReceipt(opts.model, opts.provider);
-      return;
-    }
-    // Chain hops run on each provider's DEFAULT model, so that exact id must
-    // be enabled — a provider with one non-default model enabled would 403
-    // mid-hop.
-    const hopUsable = (id: string): boolean =>
-      resolveKey(id).key.length > 0 && isModelAllowed(id, getProviderConfig(id)?.defaultModel ?? "");
-    const head = opts.providerExplicit ? opts.provider : candidates.find(hopUsable);
-    if (head === undefined || !candidates.some((c) => c === head)) {
-      console.error(
-        opts.providerExplicit
-          ? `codewhip: --free runs the free chain only — "${opts.provider}" is not in it (see: codewhip free)`
-          : "codewhip: --free found no runnable free provider (no key + enabled default model; see: codewhip free, codewhip provider allowed)"
-      );
-      process.exitCode = 1;
-      printStubReceipt(opts.model, opts.provider);
-      return;
-    }
-    const headModel = opts.modelExplicit ? opts.model : getProviderConfig(head)?.defaultModel ?? opts.model;
-    freeChain = candidates
-      .filter((id) => id !== head && hopUsable(id))
-      .flatMap((id) => {
-        const cfg = getProviderConfig(id);
-        if (cfg === null) return [];
-        const { key, source } = resolveKey(id);
-        return [{ label: cfg.id, model: cfg.defaultModel, port: makePortForConfig(cfg, key, undefined, source) }];
-      });
-    opts = { ...opts, provider: head, model: headModel };
-  }
   // `--input-format stream-json`: the first user message on stdin *is* the
   // prompt, so it is read before routing (which classifies prompt text) and
   // before a token is spent. The generator stays open for the follow-ups.
@@ -1155,8 +1082,8 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   const routed = resolveRoute({
     prompt: opts.prompt,
     taskClass: opts.taskClass,
-    provider: opts.providerExplicit || opts.free || opts.autoFailover ? opts.provider : undefined,
-    model: opts.modelExplicit || opts.free || opts.autoFailover ? opts.model : undefined,
+    provider: opts.providerExplicit ? opts.provider : undefined,
+    model: opts.modelExplicit ? opts.model : undefined,
     defaultProvider: "nvidia",
     defaultModel: PROVIDERS.nvidia.defaultModel,
   });
@@ -1167,13 +1094,9 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     printStubReceipt(opts.model, opts.provider);
     return;
   }
-  const route = opts.free && !opts.providerExplicit
-    ? { ...routed, note: "--free chain head (first free candidate with a usable key)" }
-    : opts.autoFailover && !opts.providerExplicit
-      ? { ...routed, note: "--auto-failover chain head (first free candidate with a usable key)" }
-      : routed;
+  const route = routed;
   opts = { ...opts, provider: route.provider, model: route.model };
-  say(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.auto ? "auto" : "manual"}: ${route.note})`);
+  say(`route: ${route.taskClass} → ${route.provider}:${route.model} (${route.note})`);
   // Flags and settings meet once, here, into one mode: `--permission-mode`
   // outranks the `--plan`/`--yolo` shorthands, which outrank
   // `permissions.defaultMode`. Roots are validated before the run starts — a
@@ -1285,24 +1208,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     }
   }
   let failoverTargets: FailoverTarget[] = [];
-  if (opts.free || opts.autoFailover) {
-    failoverTargets = freeChain;
-    if (route.taskClass === "private") {
-      // Explicit-provider consent covers ONE cloud target: silent hops to
-      // other providers would exceed it, so private runs stay head-only.
-      // (Private without an explicit provider was already refused above.)
-      failoverTargets = [];
-      say("!! private run: head provider only — no silent hops (consent covers one target)");
-    } else if (failoverTargets.length > 0) {
-      say(opts.autoFailover
-        ? `!! --auto-failover armed: ${failoverTargets.length} silent $0 fallback(s) — hops recorded in the outcome/audit, not printed (exhaustion still reports what was tried)`
-        : `!! --free armed: on rate-limit/timeout/5xx walk ${failoverTargets.map((t) => `${t.label}:${t.model}`).join(" -> ")} (free chain: never bills pay-go)`);
-    } else {
-      say(opts.autoFailover
-        ? "!! --auto-failover armed: head only — no other free provider has a key yet (see: codewhip free)"
-        : "!! --free armed: head only — no other free provider has a key yet (see: codewhip free) (free chain: never bills pay-go)");
-    }
-  } else if (opts.failover) {
+  if (opts.failover) {
     const defaultModel = runCfg.defaultModel;
     if (opts.model !== defaultModel) {
       console.error("codewhip: --failover needs the default model first (drop --model/--models, or lead the chain with it)");
@@ -1464,12 +1370,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
           pendingSwitch = { label: cfg.id, model: nextModel, port: makePortForConfig(cfg, key, opts.timeoutMs, source) };
           return `model: switching to ${cfg.id}:${nextModel} from the next turn (receipts will show the mix)`;
         },
-        describeFree: () => {
-          const all = listFreeProviders();
-          const usable = freeChainCandidates();
-          const keyless = all.filter((r) => r.keyNeeded === "no").length;
-          return `free chain: ${usable.length}/${all.length} hops usable now (${keyless} keyless) — \`codewhip free\` lists them; rerun with --free to start on one`;
-        },
       });
       bridge.start();
       tuiBridge = bridge;
@@ -1595,7 +1495,6 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       retryWait: opts.retryWait,
       debug: dbg,
       failovers: failoverTargets,
-      quietFailover: opts.autoFailover,
       models: opts.models,
       takePendingSwitch,
       tokenBudget,
@@ -2129,22 +2028,6 @@ async function cmdModels(args: string[]): Promise<void> {
   }
 }
 
-/** Read-only free-catalog listing (no key, no network). Keyless rows first. */
-function cmdFree(): void {
-  const rows = listFreeProviders();
-  const ordered = [...rows.filter((r) => r.keyNeeded === "no"), ...rows.filter((r) => r.keyNeeded === "free-key")];
-  console.log(`free providers (${rows.length}, verified 2026-09-11, keyless first — arm on a run: codewhip run "<prompt>" --free):`);
-  for (const r of ordered) {
-    console.log(`  ${r.id.padEnd(11)} [${r.keyNeeded === "no" ? "keyless" : "free-key"}] ${r.freeOffer}`);
-    if (r.keyNeeded === "no") {
-      console.log(`    no key needed — optional: $env:${r.envVar} = "…" or: codewhip auth login ${r.id} · ${r.keyUrl}`);
-    } else {
-      console.log(`    key: $env:${r.envVar} = "…" or: codewhip auth login ${r.id} · ${r.keyUrl}`);
-    }
-    console.log(`    limits: ${r.limits}`);
-  }
-}
-
 /** Fixture tasks ship at the package root (uncompiled) — resolve from this file. */
 function defaultEvalTasksRoot(): string {
   const here = fileURLToPath(import.meta.url);
@@ -2181,24 +2064,9 @@ async function cmdEval(args: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // Provider/model resolution mirrors `run`: explicit flags win, --free walks
-  // to the first usable chain hop, otherwise the run default (nvidia).
+  // Provider/model resolution mirrors `run`: explicit flags win, defaults to nvidia.
   let provider = flag("--provider");
   let model = flag("--model");
-  if (model !== undefined && provider === undefined) {
-    console.error("codewhip eval: --model needs --provider (or use --free)");
-    process.exitCode = 1;
-    return;
-  }
-  if (args.includes("--free")) {
-    const head = freeChainCandidates()[0];
-    if (head === undefined) {
-      console.error("codewhip eval: --free found no runnable free provider — see: codewhip free");
-      process.exitCode = 1;
-      return;
-    }
-    provider = head;
-  }
   provider = provider ?? "nvidia";
   const cfg = getProviderConfig(provider);
   if (cfg === null || cfg === undefined) {
@@ -3180,10 +3048,6 @@ async function main(): Promise<void> {
   }
   if (command === "provider") {
     cmdProvider(args.slice(1));
-    return;
-  }
-  if (command === "free") {
-    cmdFree();
     return;
   }
   console.error(`unknown command: ${command}`);

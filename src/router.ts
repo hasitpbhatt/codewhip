@@ -1,9 +1,5 @@
-import { PROVIDERS, type ProviderId } from "./provider.js";
-import { getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, listLocalProviders } from "./custom-providers.js";
-import { resolveKey } from "./auth.js";
-import { readProviderCalls, summarizeCalls, type ModelHealth } from "./provider-stats.js";
-import { isBlocked } from "./provider-blocklist.js";
-import { isModelAllowed } from "./model-allowlist.js";
+import { type ProviderId } from "./provider.js";
+import { getProviderConfig, isLoopbackBaseUrl, listLocalProviders } from "./custom-providers.js";
 import type { OutcomeRecord, UsageBucket } from "./outcomes.js";
 
 export type TaskClass = "implement" | "polish" | "private";
@@ -70,179 +66,15 @@ export function classify(prompt: string): { taskClass: TaskClass; reason: string
  * never earns the new calls that would rehabilitate it — a bad hour would
  * lock it out of auto forever (the explore/exploit ratchet).
  */
-export const STALE_HEALTH_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Share of CLI random-mode auto picks spent on candidates the health gate
- * excluded but that remain eligible and past their failure TTL — the epsilon
- * in explore/exploit, so a failed route is re-discovered instead of never
- * tried again. auto explores structurally: its health weights keep gated
- * models in the pool at reduced probability instead of hard-excluding.
- */
-export const EXPLORE_RATE = 0.1;
-
-/**
- * Recency-aware success rate for auto gating: the rolling RECENT_WINDOW once
- * it holds >= 5 calls, else the lifetime rate. Recency dominates so recovery
- * is immediate; the lifetime floor keeps thin history honest.
- */
-export function healthRate(mh: ModelHealth): number {
-  return mh.recentTotal >= 5 ? mh.recentSuccessRate : mh.successRate;
-}
-
-/**
- * The auto-pick health gate (CLI random mode + auto `model: "auto"` — one
- * rule, so the two cannot drift). No record or thin history passes (no data
- * is not failure); stale records pass (unproven again, STALE_HEALTH_MS);
- * otherwise the recency-aware rate must clear `floor`.
- */
-export function healthPasses(mh: ModelHealth | undefined, floor: number): boolean {
-  if (mh === undefined) return true;
-  if (mh.total < 5) return true;
-  if (mh.lastCallTs !== undefined && Date.now() - new Date(mh.lastCallTs).getTime() > STALE_HEALTH_MS) return true;
-  return healthRate(mh) >= floor;
-}
-
-/**
- * Explore/exploit pool selection for uniform random auto picks. Spends
- * ~EXPLORE_RATE of picks (and all of them when nothing currently passes) on
- * gated-out-but-eligible candidates; injected `rng` keeps it testable.
- */
-export function pickExplorePool<T>(pass: T[], gatedOut: T[], rng: () => number): { pool: T[]; exploring: boolean } {
-  const wantExplore = gatedOut.length > 0 && (pass.length === 0 || rng() < EXPLORE_RATE);
-  return wantExplore ? { pool: gatedOut, exploring: true } : { pool: pass, exploring: false };
-}
-
-function healthOk(providerId: ProviderId, model: string) {
-  if (isBlocked(providerId, model)) return false;
-  const records = readProviderCalls();
-  const summary = summarizeCalls(records);
-  const ph = summary.providers.find((p) => p.provider === providerId);
-  if (!ph) return true; // no data yet
-  const mh = ph.models.find((m) => m.model === model);
-  return healthPasses(mh, 0.7);
-}
-
-export const TTL_MS = {
-  quota: 15 * 60 * 1000,
-  balance_low: 24 * 60 * 60 * 1000,
-  auth: 60 * 60 * 1000,
-  timeout: 5 * 60 * 1000,
-  network: 5 * 60 * 1000,
-  bad_model: 24 * 60 * 60 * 1000,
-  other: 5 * 60 * 1000,
-};
-
-/**
- * Exported for `auto` health-pick: reuses the same TTL
- * deactivation so `model: "auto"` never routes at a model the CLI just
- * watched fail. Single source for the TTL table lives here.
- * Also returns true when the model is permanently blocked (410 received).
- */
-export function isRecentlyFailed(providerId: string, model: string): boolean {
-  if (isBlocked(providerId, model)) return true;
-  const records = readProviderCalls();
-  const summary = summarizeCalls(records);
-  const ph = summary.providers.find((p) => p.provider === providerId);
-  if (!ph) return false;
-  const mh = ph.models.find((m) => m.model === model);
-  if (!mh || !mh.lastFailureTs || !mh.lastFailureOutcome) return false;
-  const last = new Date(mh.lastFailureTs).getTime();
-  const ttl = TTL_MS[mh.lastFailureOutcome as keyof typeof TTL_MS] ?? 5 * 60 * 1000;
-  return Date.now() - last < ttl;
-}
-
-/**
- * Paid-key protection shared by every auto path (CLI `CODEWHIP_AUTO_RANDOM=1`
- * and auto `model: "auto"` / `--provider auto`). Auto only spends keys that
- * are free by construction:
- * - `anonymous` source — keyless free tiers (llm7, kilo, opencode, …), or
- * - a route with a known $0 price — a user key there only raises rate limits.
- *
- * A user-supplied key (`env`/`file`) on an untracked-cost route — sensenova,
- * tokenharbor, custom gateways, anything that might bill — is never
- * auto-touched unless `CODEWHIP_AUTO_INCLUDE_UNTRACKED=1` opts in. Without
- * this, setting a paid key would silently enroll it in random spend.
- */
-export function isAutoEligible(providerId: string, model: string): boolean {
-  const cfg = getProviderConfig(providerId);
-  if (cfg === null) return false;
-  if (isLoopbackBaseUrl(cfg.baseUrl)) return false; // auto never guesses at local
-  const { key, source } = resolveKey(providerId);
-  if (key.length === 0) return false; // auto never routes at a certain 401
-  if (source === "anonymous") return true;
-  if (estimateCost(providerId as ProviderId, model, 1000, 1000) === 0) return true;
-  return process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED === "1";
-}
-
-export function pickRandomHealthy(rng: () => number = Math.random): Route | { error: string } {
-  const configs = listAllProviderConfigs();
-  const summary = summarizeCalls(readProviderCalls());
-  const pass: { provider: string; model: string }[] = [];
-  const gatedOut: { provider: string; model: string }[] = [];
-  for (const cfg of configs) {
-    const provider = cfg.id as ProviderId;
-    const model = cfg.defaultModel;
-    if (!isModelAllowed(provider, model)) continue; // consent gate: exact ids only
-    if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
-    if (isRecentlyFailed(provider, model)) continue;
-    const ph = summary.providers.find((p) => p.provider === provider);
-    const mh = ph?.models.find((m) => m.model === model);
-    (mh === undefined || healthPasses(mh, 0.5) ? pass : gatedOut).push({ provider, model });
-  }
-  const { pool, exploring } = pickExplorePool(pass, gatedOut, rng);
-  if (pool.length === 0) {
-    return { error: "auto random: no enabled, healthy provider/model combos available — enable one with: codewhip provider enable <provider>:<model> (see: codewhip provider allowed), or pass --provider to override" };
-  }
-  const pick = pool[Math.floor(rng() * pool.length)];
-  return {
-    provider: pick.provider as ProviderId,
-    model: pick.model,
-    note: exploring
-      ? "auto random → exploration probe (health-gated, TTL-respecting)"
-      : "auto random → provider health & TTL deactivation",
-  };
-}
-
 export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: string } {
-  if (process.env.CODEWHIP_AUTO_RANDOM === "1") {
-    if (taskClass === "private") return localRoute(dir);
-    return pickRandomHealthy();
-  }
-  if (taskClass === "implement") {
-    const provider = "nvidia";
-    const model = PROVIDERS.nvidia.defaultModel;
-    if (!isModelAllowed(provider, model)) {
-      return { error: `auto route for 'implement' targets ${provider}:${model}, which is not enabled — run: codewhip provider enable ${provider}:${model}, or pass --provider to override` };
-    }
-    if (!healthOk(provider, model)) {
-      return { error: `auto route for 'implement' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
-    }
-    return { provider, model, note: "implement → frontier free tier" };
-  }
-  if (taskClass === "polish") {
-    // Priced $0 free-tier hop (verified 2026-09-11; 97% ok over 120 calls
-    // per local provider-stats 2026-09-17) — the launch-gate route: priced,
-    // so polishGate can actually pass. Keyless anonymous, never bills.
-    const provider = "kilo";
-    const model = PROVIDERS.kilo.defaultModel;
-    if (!isModelAllowed(provider, model)) {
-      return { error: `auto route for 'polish' targets ${provider}:${model}, which is not enabled — run: codewhip provider enable ${provider}:${model}, or pass --provider to override` };
-    }
-    return { provider, model, note: "polish → cheapest inference (priced $0 free tier)" };
-  }
-  return localRoute(dir);
+  // ponytail: auto routing removed. Explicit --provider is the only way to pick a
+  // destination now; private still prefers a lone registered local runtime so a
+  // secret-bearing prompt never silently hops to the cloud.
+  if (taskClass === "private") return localRoute(dir);
+  return { error: "no provider specified - pass --provider <id> (and --model if needed)" };
 }
 
-/**
- * The `private` destination. Exactly one registered loopback provider is
- * unambiguous; several is not, and guessing which of them should see your
- * secrets is not a decision this classifier gets to make — so it asks.
- *
- * Loopback targets are exempt from the model allowlist by v1 decision: the
- * registration itself (provider add) is the consent, nothing leaves the
- * machine, and nothing bills.
- */
+
 function localRoute(dir?: string): Route | { error: string } {
   const locals = listLocalProviders(dir);
   if (locals.length === 1) {
@@ -309,8 +141,7 @@ export function resolveRoute(opts: {
 /** Known per-1K-token prices in USD. Missing = untracked (never fiction). */
 const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> = {
   "nvidia:moonshotai/kimi-k3": { input: 0, output: 0 },
-  // Free-chain routes (verified 2026-09-11): the free tier/default free
-  // models are real $0 prices. Never price anything off this list.
+  
   "opencode:mimo-v2.5-free": { input: 0, output: 0 },
   "kilo:cohere/north-mini-code:free": { input: 0, output: 0 },
   "openrouter:nvidia/nemotron-3-super-120b-a12b:free": { input: 0, output: 0 },
@@ -328,7 +159,7 @@ const PRICE_PER_1K: Partial<Record<string, { input: number; output: number }>> =
 
 export function costNote(provider: string, model?: string): string {
   // Honest meter: only known-$0 routes print $0 — nvidia's free tier and
-  // the free-chain providers verified 2026-09-11 (kilo/openrouter/opencode
+  // providers verified 2026-09-11 (kilo/openrouter/opencode
   // are $0 only on their free-suffixed models; empero's endpoint is openly
   // free but logs prompts). Everything else bills or caps in provider-
   // specific ways — point at their console, not fiction.

@@ -119,7 +119,8 @@ describe("provider", () => {
     strictEqual(chatUrlFor(PROVIDERS.nvidia), "https://integrate.api.nvidia.com/v1/chat/completions");
     strictEqual(chatUrlFor(PROVIDERS.mistral), "https://api.mistral.ai/v1/chat/completions");
   });
-  it("free aggregators ride their verified endpoints (origin + path shape)", () => {
+  it("providers ride their verified endpoints (origin + path shape)", () => {
+
     const expected: Array<[string, string, string]> = [
       ["opencode", "https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/zen/v1/models"],
       ["kilo", "https://api.kilo.ai/api/gateway/v1/chat/completions", "https://api.kilo.ai/api/gateway/v1/models"],

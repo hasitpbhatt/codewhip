@@ -19,8 +19,7 @@ export type TuiBridgeDeps = {
    * Returns a user-facing confirmation line, or the reason it was refused.
    */
   switchModel?: (provider: string, model: string | null) => string;
-  /** Free-chain visibility in-run: one line describing usable free hops. */
-  describeFree?: () => string;
+  
 };
 
 export type TuiBridge = {
@@ -39,8 +38,7 @@ export type TuiViewHandle = {
 const APPROVAL_TIMEOUT_MS = 30_000;
 
 export function createTuiBridge(deps: TuiBridgeDeps): TuiBridge {
-  const { model, signal, pollBackground, switchModel, describeFree } = deps;
-
+  const { model, signal, pollBackground, switchModel } = deps;
   let view: TuiViewHandle | null = null;
   let _rollbackPrefix: string | null = null;
   let pollTimer: NodeJS.Timeout | null = null;
@@ -172,10 +170,6 @@ export function createTuiBridge(deps: TuiBridgeDeps): TuiBridge {
           model.appendEvent(switchModel(provider, modelId));
           break;
         }
-        case "/free":
-          // Free-chain visibility in-run (roadmap post-H1 item).
-          model.appendEvent(describeFree !== undefined ? describeFree() : "/free: not wired in this run — see `codewhip free`");
-          break;
         case "/plan":
           // Honest label: plan mode is run-scoped; a mid-run toggle would need
           // permission-ladder re-arming, which the spike deliberately skipped.

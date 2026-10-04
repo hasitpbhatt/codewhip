@@ -3,9 +3,8 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classify, estimateCost, healthPasses, healthRate, isAutoEligible, isPolishRun, meteredCost, pickExplorePool, pickRandomHealthy, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
-import type { ModelHealth } from "./provider-stats.js";
-import { addCustomProvider, getProviderConfig } from "./custom-providers.js";
+import { classify, estimateCost, isPolishRun, meteredCost, polishGate, polishRunCost, resolveRoute, routeFor } from "./router.js";
+import { addCustomProvider } from "./custom-providers.js";
 import { PROVIDERS } from "./provider.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
 import { saveAllowedEntries } from "./model-allowlist.js";
@@ -95,40 +94,13 @@ describe("router", () => {
     strictEqual(c.taskClass, "implement");
     ok(c.reason.length > 0);
   });
-  it("routes implement → nvidia, polish → kilo (priced $0), private → error", () => {
+  it("refuses implement and polish without an explicit provider (auto routing removed)", () => {
     const impl = routeFor("implement");
-    ok(!("error" in impl) && impl.provider === "nvidia");
+    ok("error" in impl && impl.error.includes("no provider specified"));
     const pol = routeFor("polish");
-    ok(!("error" in pol) && pol.provider === "kilo");
+    ok("error" in pol && pol.error.includes("no provider specified"));
     const priv = routeFor("private", noLocalDir);
     ok("error" in priv && (priv as { error: string }).error.includes("local provider"));
-  });
-  it("explicit --provider/--model always win (auto=false)", () => {
-    const r = resolveRoute({
-      prompt: "fix typo",
-      provider: "mistral",
-      model: "mistral-small-latest",
-      defaultProvider: "nvidia",
-      defaultModel: "moonshotai/kimi-k3",
-    });
-    ok(!("error" in r));
-    if (!("error" in r)) {
-      strictEqual(r.provider, "mistral");
-      strictEqual(r.model, "mistral-small-latest");
-      strictEqual(r.auto, false);
-    }
-  });
-  it("auto-routes a polish prompt to the priced kilo hop (gate can pass)", () => {
-    const r = resolveRoute({ prompt: "fix typo in docs", defaultProvider: "nvidia", defaultModel: "moonshotai/kimi-k3" });
-    ok(!("error" in r));
-    if (!("error" in r)) {
-      strictEqual(r.provider, "kilo");
-      strictEqual(r.taskClass, "polish");
-      strictEqual(r.auto, true);
-      // Priced $0 (verified free-tier entry) — the launch gate is passable.
-      strictEqual(estimateCost(r.provider, r.model, 14977, 1449), 0);
-      strictEqual(polishGate(estimateCost(r.provider, r.model, 14977, 1449)).pass, true);
-    }
   });
   it("refuses private prompts without an explicit provider", () => {
     const r = resolveRoute({
@@ -178,7 +150,7 @@ describe("router", () => {
     // card-bound credits. Unpriced is the honest answer.
     strictEqual(estimateCost("cerebras", "qwen-3-coder-480b", 1000, 1000), null);
   });
-  it("prices every free-chain default $0 (not null)", () => {
+  it("prices every default $0 (not null)",  () => {
     const pairs: Array<[string, string]> = [
       ["groq", "openai/gpt-oss-120b"],
       ["opencode", "mimo-v2.5-free"],
@@ -192,7 +164,7 @@ describe("router", () => {
       strictEqual(estimateCost(provider, model, 1000, 1000), 0, `${provider}:${model}`);
     }
   });
-  it("polish gate passes on a $0 free-chain route; unpriced pairs stay null", () => {
+  it("polish gate passes on a $0 route; unpriced pairs stay null",  () => {
     const cost = estimateCost("groq", "openai/gpt-oss-120b", 1000, 1000);
     strictEqual(cost, 0);
     ok(polishGate(cost).pass);
@@ -277,17 +249,6 @@ describe("router", () => {
     addCustomProvider({ id: "remote-gw", baseUrl: "https://gateway.example.com", defaultModel: "m", envVar: "REMOTE_GW_API_KEY" }, dir);
     ok("error" in routeFor("private", dir));
   });
-  it("auto-routes a private prompt to local once one is registered", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-auto-"));
-    addCustomProvider({ id: "ollama-local", baseUrl: "http://127.0.0.1:11434", defaultModel: "qwen3:35b", envVar: "OLLAMA_LOCAL_API_KEY" }, dir);
-    const r = resolveRoute({ prompt: "read the production db password", defaultProvider: "nvidia", defaultModel: "moonshotai/kimi-k3", dir });
-    ok(!("error" in r));
-    if (!("error" in r)) {
-      strictEqual(r.provider, "ollama-local");
-      strictEqual(r.taskClass, "private");
-      strictEqual(r.auto, true);
-    }
-  });
   it("an explicit --provider still wins over the local runtime", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-router-override-"));
     addCustomProvider({ id: "ollama-local", baseUrl: "http://127.0.0.1:11434", defaultModel: "qwen3:35b", envVar: "OLLAMA_LOCAL_API_KEY" }, dir);
@@ -304,117 +265,5 @@ describe("router", () => {
       strictEqual(r.taskClass, "private");
     }
   });
-  it("auto eligibility: anonymous tiers yes, env-keyed untracked routes no, opt-in flips it", () => {
-    // llm7 is anonymous in a clean env — free by construction, always eligible.
-    const llm7 = getProviderConfig("llm7");
-    ok(llm7 !== null);
-    const prevLlm7 = process.env[llm7.envVar];
-    delete process.env[llm7.envVar];
-    // sensenova is the paid-key case: untracked cost, no anonymous fallback.
-    const cfg = getProviderConfig("sensenova");
-    ok(cfg !== null);
-    const prevKey = process.env[cfg.envVar];
-    const prevOpt = process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
-    delete process.env[cfg.envVar];
-    delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
-    try {
-      ok(isAutoEligible("llm7", PROVIDERS.llm7.defaultModel));
-      process.env[cfg.envVar] = "paid-key-for-test";
-      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), false);
-      process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = "1";
-      strictEqual(isAutoEligible("sensenova", cfg.defaultModel), true);
-    } finally {
-      if (prevLlm7 === undefined) delete process.env[llm7.envVar];
-      else process.env[llm7.envVar] = prevLlm7;
-      if (prevKey === undefined) delete process.env[cfg.envVar];
-      else process.env[cfg.envVar] = prevKey;
-      if (prevOpt === undefined) delete process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED;
-      else process.env.CODEWHIP_AUTO_INCLUDE_UNTRACKED = prevOpt;
-    }
-  });
 });
 
-describe("auto recovery (explore/exploit)", () => {
-  const FRESH = new Date().toISOString();
-  const STALE = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-  function mh(p: Partial<ModelHealth>): ModelHealth {
-    return {
-      provider: "x", model: "m", total: 20, ok: 6, failed: 14, successRate: 0.3,
-      recentOk: 6, recentTotal: 20, recentSuccessRate: 0.3, lastCallTs: FRESH,
-      errorKinds: {}, promptTokens: 0, completionTokens: 0, tokensPerSec: 0, avgMs: 0,
-      ...p,
-    };
-  }
-  it("recency dominates: a model recovered in the recent window re-enters auto", () => {
-    ok(healthPasses(mh({ recentOk: 18, recentSuccessRate: 0.9 }), 0.5));
-    ok(!healthPasses(mh({ recentOk: 2, recentSuccessRate: 0.1 }), 0.5));
-    // Thin recent window defers to the (bad) lifetime rate.
-    ok(!healthPasses(mh({ recentTotal: 3, recentOk: 0, recentSuccessRate: 0 }), 0.5));
-  });
-  it("staleness reset: 24h of silence makes a bad record unproven again, not condemned", () => {
-    ok(healthPasses(mh({ lastCallTs: STALE }), 0.5));
-    ok(healthPasses(undefined, 0.5));
-  });
-  it("healthRate uses the recent window only once it holds >= 5 calls", () => {
-    strictEqual(healthRate(mh({ recentTotal: 3, recentSuccessRate: 1 })), 0.3);
-    strictEqual(healthRate(mh({ recentTotal: 6, recentSuccessRate: 1 })), 1);
-  });
-  it("pickExplorePool spends ~10% of picks (and all when nothing passes) on gated-out candidates", () => {
-    const pass = ["a"];
-    const gated = ["b"];
-    const exploit = pickExplorePool(pass, gated, () => 0.99);
-    ok(exploit.pool.includes("a") && !exploit.exploring);
-    const explore = pickExplorePool(pass, gated, () => 0.01);
-    ok(explore.exploring && explore.pool.includes("b"));
-    const forced = pickExplorePool([], gated, () => 0.99);
-    ok(forced.exploring && forced.pool.includes("b"));
-  });
-});
-
-describe("allowlist gate (deny by default)", () => {
-  const SEED = [`nvidia:${PROVIDERS.nvidia.defaultModel}`, `kilo:${PROVIDERS.kilo.defaultModel}`];
-  it("routeFor implement/polish refuse unenabled targets and name the remedy", () => {
-    saveAllowedEntries([]);
-    try {
-      const impl = routeFor("implement");
-      ok("error" in impl && (impl as { error: string }).error.includes(`codewhip provider enable nvidia:${PROVIDERS.nvidia.defaultModel}`));
-      const pol = routeFor("polish");
-      ok("error" in pol && (pol as { error: string }).error.includes(`codewhip provider enable kilo:${PROVIDERS.kilo.defaultModel}`));
-    } finally {
-      saveAllowedEntries(SEED);
-    }
-  });
-  it("pickRandomHealthy returns the enable-remedy error when nothing is enabled", () => {
-    saveAllowedEntries([]);
-    try {
-      const r = pickRandomHealthy(() => 0.5);
-      ok("error" in r && (r as { error: string }).error.includes("codewhip provider enable"));
-    } finally {
-      saveAllowedEntries(SEED);
-    }
-  });
-  it("pickRandomHealthy only ever picks exact enabled provider:model combos", () => {
-    // Enable exactly one keyless anonymous default; every other provider must
-    // be skipped no matter its health or key state.
-    const llm7 = getProviderConfig("llm7");
-    ok(llm7 !== null);
-    const prevEnv = llm7 === null ? undefined : process.env[llm7.envVar];
-    if (llm7 !== null) delete process.env[llm7.envVar];
-    saveAllowedEntries([`llm7:${PROVIDERS.llm7.defaultModel}`]);
-    try {
-      const r = pickRandomHealthy(() => 0.5);
-      ok(!("error" in r));
-      if (!("error" in r)) {
-        strictEqual(r.provider, "llm7");
-        strictEqual(r.model, PROVIDERS.llm7.defaultModel);
-      }
-    } finally {
-      if (prevEnv === undefined) {
-        if (llm7 !== null) delete process.env[llm7.envVar];
-      } else if (llm7 !== null) {
-        process.env[llm7.envVar] = prevEnv;
-      }
-      saveAllowedEntries(SEED);
-    }
-  });
-});

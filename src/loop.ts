@@ -114,7 +114,6 @@ export type LoopArgs = {
    * audited record, they just aren't printed live. Terminal exhaustion still
    * reports what was tried (actionable failure, not backend noise).
    */
-  quietFailover?: boolean;
   /**
    * Ordered same-provider model candidates, head first (head === model).
    * Empty by default (no rotation). Each candidate is tried at most once
@@ -763,8 +762,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         waitedOnce = true;
         const wait = Math.min(attempt.retryAfterMs, 60000);
         dbg(`Retry-After ${attempt.retryAfterMs}ms → sleeping ${wait}ms (one wait per run, then the rotation path)`);
-        if (!args.quietFailover) emit("retry", `rate limited on ${current.label} — waiting ${Math.round(wait / 1000)}s (once)`);
-        const slept = await sleepMs(wait, args.signal);
+                const slept = await sleepMs(wait, args.signal);
         if (!slept) {
           cancelled = true;
           break;
@@ -786,7 +784,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const to = `${rotation.label}:${rotation.model}`;
         tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        if (!args.quietFailover) emit("failover", `${cause} on ${current.model} — rotating to ${to}`);
+        emit("failover", `${cause} on ${current.model} — rotating to ${to}`);
         current = { label: rotation.label, model: rotation.model, port: rotation.port };
         continue;
       }
@@ -805,7 +803,7 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
         const to = `${target.label}:${target.model}`;
         tried.add(to);
         failoverTrail.push({ from, to, reason: attempt.error, waitedMs, step });
-        if (!args.quietFailover) emit("failover", `${cause} on ${current.label} — failing over to ${to}`);
+        emit("failover", `${cause} on ${current.model} — failing over to ${to}`);
         current = { label: target.label, model: target.model, port: target.port };
         continue;
       }

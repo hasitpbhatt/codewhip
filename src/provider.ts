@@ -224,15 +224,14 @@ function httpFailure(
 ): PortFailure {
   // 5xx and 408 are transient *server-side* conditions, so rotating to another
   // model or provider is the right move rather than giving up. This matters
-  // most for the free chain: free tiers answer 503 under load and during
-  // declared maintenance windows, and classifying that as terminal "other"
+  // free tiers answer 503 under load and during declared maintenance windows
   // stranded the chain on exactly the failure it exists to survive. 4xx stays
   // terminal — a bad request repeats identically wherever it is sent.
   // Context-overflow 400s are the one 4xx that does NOT repeat identically
   // elsewhere: rotation/hop lands on a different model or provider where the
   // same transcript can fit (and compaction keeps shrinking it). A flat 8k
   // free relay used to kill the run terminally here — the exact population
-  // the free chain serves. Any other 400 stays terminal.
+  // Any other 400 stays terminal.
   const contextOverflow =
     status === 400 &&
     /context length|context length exceeded|too many tokens|maximum context|context_window|prompt is too long|reduce the length/i.test(body);

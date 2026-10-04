@@ -30,8 +30,6 @@ const SURFACE = new Set([
   "src/provider-blocklist.ts",
   "src/provider-stats.ts",
   "src/custom-providers.ts",
-  "src/free-chain.ts",
-  "src/free-providers.ts",
   "src/immunity/llm-run.ts",
   "src/models.ts",
   "src/onemin.ts",
@@ -162,3 +160,4 @@ test("core never imports the surface", () => {
   }
   assert.deepEqual(violations, [], `core/surface boundary violated:\n${violations.join("\n")}`);
 });
+

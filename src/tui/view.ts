@@ -19,7 +19,7 @@ export type TuiViewHandle = {
 };
 
 export type SlashCommand = {
-  cmd: "/model" | "/free" | "/plan" | "/rollback" | "/sessions" | "/help";
+  cmd: "/model" | "/plan" | "/rollback" | "/sessions" | "/help";
   args: string[];
 };
 
@@ -28,7 +28,7 @@ export function parseSlashCommand(input: string): SlashCommand | null {
   if (!trimmed.startsWith("/")) return null;
   const parts = trimmed.split(/\s+/);
   const cmd = parts[0] as SlashCommand["cmd"];
-  if (!["/model", "/free", "/plan", "/rollback", "/sessions", "/help"].includes(cmd)) return null;
+  if (!["/model", "/plan", "/rollback", "/sessions", "/help"].includes(cmd)) return null;
   return { cmd, args: parts.slice(1) };
 }
 
@@ -48,7 +48,7 @@ export function createFallbackView(deps: TuiViewDeps): TuiViewHandle {
     const m = snap.meter;
     const rollbackId = snap.runId ? snap.runId.slice(0, 8) : "<pending>";
     const revoke = snap.pending ? ` | revoke: Esc` : "";
-    return `rollback: ${rollbackId}  |  tokens: ${m.tokens}  |  est: $${m.estCost.toFixed(4)}  |  /model /free /plan /rollback /sessions${revoke}`;
+    return `rollback: ${rollbackId}  |  tokens: ${m.tokens}  |  est: $${m.estCost.toFixed(4)}  |  /model /plan /rollback /sessions${revoke}`;
   }
 
   function renderDiffPreview(snap: TuiModelSnapshot): string | null {
@@ -211,7 +211,7 @@ async function createOpentuiView(deps: TuiViewDeps, mod: {
     const rollbackId = snap.runId ? snap.runId.slice(0, 8) : "<pending>";
     const revoke = snap.pending ? " | Esc = revoke" : "";
     return Box({ borderStyle: "single", title: "footer", width: "100%" }, [
-      Text({ content: `rollback: ${rollbackId}  |  /model /free /plan /rollback /sessions  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}${revoke}` }),
+      Text({ content: `rollback: ${rollbackId}  |  /model /plan /rollback /sessions  |  tokens: ${snap.meter.tokens}  |  est: $${snap.meter.estCost.toFixed(4)}${revoke}` }),
     ]);
   }
 
