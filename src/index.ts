@@ -260,7 +260,7 @@ function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
       console.log('codewhip run "<prompt>" [options] — run an agent session (headless; no prompt on a TTY = REPL).');
       printRunOptions();
       console.log("  No key yet? codewhip demo --deny (offline, $0) — or --provider llm7 (keyless, rate-limited).");
-      console.log("  Key consoles and keyless tiers: codewhip help keys");
+      console.log("  Key consoles and keyless tiers: codewhip help keys (full env-var list: --all).");
       console.log('  Custom commands: codewhip run "/name args" expands .codewhip/commands/<name>.md ($ARGUMENTS substituted).');
       console.log("  One-shot expansion is exact-match only — a prompt like \"/api returns 500\" runs verbatim; in the REPL unknown /name errors. See .help.");
       return true;
@@ -271,7 +271,7 @@ function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
       console.log("codewhip auth login <provider>   — store a key (hidden prompt, 0600 file; env still wins)");
       console.log("codewhip auth logout <provider>  — forget the stored key");
       console.log("codewhip auth status [provider]  — set/missing per provider (keys are never printed)");
-      console.log("  key consoles and keyless tiers: codewhip help keys");
+      console.log("  key consoles and keyless tiers: codewhip help keys (full env-var list: --all).");
       return true;
     case "models":
       console.log("codewhip models [provider] — list served models with agency tags (default: nvidia).");
