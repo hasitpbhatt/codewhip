@@ -224,18 +224,32 @@ function printRunOptions(): void {
   console.log("  --max-budget-usd <n> stop the run when metered cost crosses n on a priced route (refused on untracked routes rather than inert)");
 }
 
-function printKeysHelp(): void {
-  // Key help derives from the registry (builtins + customs) — adding a
-  // provider stays one table row, never a help-text edit. Consoles show
-  // bare domains (the registry holds full URLs for error messages).
+function printKeysHelp(all: boolean = false): void {
+  // Key help names NO provider, env var or console URL: `codewhip help` is
+  // read by people who have not picked a provider yet, and a 134-row dump of
+  // gateway names and *_API_KEY vars is breadth theater, not help. The three
+  // commands below carry the catalog.
+  if (!all) {
+    console.log("Keys: set the provider's env var (CI-friendly) or store one with `codewhip auth login <provider>`.");
+    console.log("  which env var, and where to get the key: `codewhip provider show <provider>` — it prints that provider's var and key URL, and never the key.");
+    console.log("  which providers exist: `codewhip provider list`.");
+    console.log("  keyless tiers (anonymous, rate-limited) and custom OpenAI-compatible endpoints: `codewhip help keys --all`.");
+    return;
+  }
+
+  // --all: the full catalog, one line per provider. Still never prints a key.
   const cfgs = listAllProviderConfigs();
-  console.log(`Keys: env wins when set (${cfgs.map((c) => c.envVar).join("/")}); else \`codewhip auth login <provider>\`.`);
-  console.log(`  key consoles: ${cfgs.map((c) => c.keyUrl.replace(/^https:\/\//, "")).filter((u) => u.length > 0).join(" · ")}`);
-  console.log("  keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited). Custom OpenAI-compatible endpoints: `codewhip provider add <id> --base-url https://… --model <id> --env-var FOO_API_KEY --key-url https://…`.");
+  console.log("All provider env vars (env wins when set):");
+  for (const c of cfgs) {
+    const keyNote = c.anonymousKey !== undefined ? " (anonymous)" : "";
+    console.log(`  ${c.id.padEnd(16)} ${c.envVar}${keyNote}`);
+  }
+  console.log("Key consoles: run `codewhip provider show <id>` for a specific provider's key URL.");
+  console.log("Keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited).");
 }
 
 /** One-command topics for `codewhip help <command>` / `codewhip <command> --help`. Returns false for unknown topics. */
-function printCommandHelp(topic: string): boolean {
+function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
   switch (topic) {
     case "init":
       console.log('codewhip init — scaffold AGENTS.md + codewhip-policy.yaml + .codewhip/key (ed25519, local only).');
@@ -251,7 +265,7 @@ function printCommandHelp(topic: string): boolean {
       console.log("  One-shot expansion is exact-match only — a prompt like \"/api returns 500\" runs verbatim; in the REPL unknown /name errors. See .help.");
       return true;
     case "keys":
-      printKeysHelp();
+      printKeysHelp(extraArgs.includes("--all"));
       return true;
     case "auth":
       console.log("codewhip auth login <provider>   — store a key (hidden prompt, 0600 file; env still wins)");
@@ -2782,7 +2796,7 @@ async function main(): Promise<void> {
       printHelp();
       return;
     }
-    if (printCommandHelp(topic)) return;
+    if (printCommandHelp(topic, args.slice(2))) return;
     printHelpTopicError(topic);
     return;
   }
