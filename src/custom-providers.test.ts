@@ -35,11 +35,9 @@ describe("custom-providers", () => {
     strictEqual(cfg?.modelsPath, "/v1/models");
     strictEqual(cfg?.timeoutMs, 45000);
   });
-  it("rejects duplicates and builtin collisions", () => {
+  it("rejects duplicate ids", () => {
     const dup = addCustomProvider({ ...BASE }, dir);
     strictEqual(dup.ok, false);
-    const builtin = addCustomProvider({ ...BASE, id: "nvidia" }, dir);
-    strictEqual(builtin.ok, false);
   });
   it("rejects invalid input without writing", () => {
     strictEqual(addCustomProvider({ ...BASE, id: "Bad_ID!" }, dir).ok, false);
@@ -48,15 +46,12 @@ describe("custom-providers", () => {
     strictEqual(addCustomProvider({ ...BASE, id: "timeout-bad", timeoutMs: 5 }, dir).ok, false);
     strictEqual(getProviderConfig("env-bad", dir), null);
   });
-  it("lists builtins plus customs; customs resolve case-insensitively", () => {
+  it("lists customs; they resolve case-insensitively", () => {
     const all = listAllProviderConfigs(dir);
-    ok(all.length >= 7);
-    ok(all.some((c) => c.id === "llm7"));
     ok(all.some((c) => c.id === "my-gateway"));
     ok(getProviderConfig("MY-GATEWAY", dir) !== null);
   });
-  it("removes customs but refuses builtins and unknowns", () => {
-    strictEqual(removeCustomProvider("nvidia", dir).ok, false);
+  it("removes customs but refuses unknowns", () => {
     strictEqual(removeCustomProvider("ghost", dir).ok, false);
     strictEqual(removeCustomProvider("my-gateway", dir).ok, true);
     strictEqual(getProviderConfig("my-gateway", dir), null);
@@ -65,7 +60,7 @@ describe("custom-providers", () => {
     fs.writeFileSync(path.join(dir, "custom-providers.json"), "not json{{{", "utf8");
     strictEqual(Object.keys(loadCustomProviders(dir)).length, 0);
     strictEqual(getProviderConfig("my-gateway", dir), null);
-    ok(listAllProviderConfigs(dir).length >= 6);
+    ok(listAllProviderConfigs(dir).length >= 0);
   });
   it("accepts http:// on loopback only — the local-runtime case (2026-09-14)", () => {
     const local = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-local-"));
@@ -77,17 +72,10 @@ describe("custom-providers", () => {
     strictEqual(addCustomProvider({ ...BASE, id: "any", baseUrl: "http://0.0.0.0:11434", envVar: "ANY_API_KEY" }, local).ok, false);
     strictEqual(addCustomProvider({ ...BASE, id: "pub", baseUrl: "http://insecure.example.com", envVar: "PUB_API_KEY" }, local).ok, false);
   });
-  it("explains the remote/local id clash instead of just 'no registration needed'", () => {
-    // "ollama" is the obvious id for a local runtime, but the remote ollama-cloud
-    // builtin owns it. The old message implied the user had done something
-    // unnecessary, when they actually need a different id.
+  it("accepts any id for a local runtime (no builtins to clash with)", () => {
     const local = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-clash-"));
     const r = addCustomProvider({ ...BASE, id: "ollama", baseUrl: "http://127.0.0.1:11434", envVar: "OLLAMA_API_KEY" }, local);
-    strictEqual(r.ok, false);
-    if (!r.ok) {
-      ok(r.error.includes("remote"), r.error);
-      ok(r.error.includes("ollama-local"), r.error);
-    }
+    strictEqual(r.ok, true);
   });
   it("a loopback provider survives the save→load round trip (BOTH guards relaxed)", () => {
     // normalize() accepting it on write is not enough — if isValidRecord() still
@@ -129,7 +117,7 @@ describe("custom-providers", () => {
       strictEqual(isLoopbackBaseUrl(u), false, u);
     }
   });
-  it("listLocalProviders returns only loopback customs, never builtins", () => {
+  it("listLocalProviders returns only loopback customs", () => {
     const local = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-locals-"));
     addCustomProvider({ ...BASE, id: "remote-gw", baseUrl: "https://gateway.example.com", envVar: "REMOTE_GW_API_KEY" }, local);
     addCustomProvider({ ...BASE, id: "ollama-local", baseUrl: "http://127.0.0.1:11434", envVar: "OLLAMA_LOCAL_API_KEY" }, local);

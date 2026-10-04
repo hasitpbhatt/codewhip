@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { query, tool, SdkError, type Query, type SdkMessage } from "./sdk.js";
 import { makeFakePort, textTurn, toolTurn } from "./testkit/fakePort.js";
 import { saveAllowedEntries } from "./model-allowlist.js";
+import { addCustomProvider } from "./custom-providers.js";
 import { CONFIG_DIR_ENV } from "./config-dir.js";
 
 /**
@@ -254,31 +255,33 @@ describe("query()", () => {
     const cfg = tmpDir("codewhip-sdk-cfg-");
     const cwd = tmpDir("codewhip-sdk-cwd-");
     const prevCfg = process.env[CONFIG_DIR_ENV];
-    const prevKey = process.env.GROQ_API_KEY;
+    const prevKey = process.env.MY_GW_API_KEY;
+    // Register provider into this dir before env var is set
+    addCustomProvider({ id: "my-gw", baseUrl: "https://gw.example.com", defaultModel: "made-up-model", envVar: "MY_GW_API_KEY" }, cfg);
     process.env[CONFIG_DIR_ENV] = cfg;
-    delete process.env.GROQ_API_KEY;
+    delete process.env.MY_GW_API_KEY;
     try {
       await rejects(
         collect(query({
           prompt: "hi",
-          options: { provider: "groq", model: "made-up-model", cwd, dir: cfg },
+          options: { provider: "my-gw", model: "other-model", cwd, dir: cfg },
         })),
         sdkFails(/is not enabled/)
       );
       // Enabling it moves the refusal along the same ladder — to the credential
       // check — which is what proves the gate was the first thing blocking.
-      saveAllowedEntries(["groq:made-up-model"], cfg);
+      saveAllowedEntries(["my-gw:other-model"], cfg);
       await rejects(
         collect(query({
           prompt: "hi",
-          options: { provider: "groq", model: "made-up-model", cwd, dir: cfg },
+          options: { provider: "my-gw", model: "other-model", cwd, dir: cfg },
         })),
-        sdkFails(/no key for groq/)
+        sdkFails(/no key for my-gw/)
       );
     } finally {
       if (prevCfg === undefined) delete process.env[CONFIG_DIR_ENV];
       else process.env[CONFIG_DIR_ENV] = prevCfg;
-      if (prevKey !== undefined) process.env.GROQ_API_KEY = prevKey;
+      if (prevKey !== undefined) process.env.MY_GW_API_KEY = prevKey;
     }
   });
 

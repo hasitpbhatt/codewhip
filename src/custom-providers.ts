@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { configDir } from "./config-dir.js";
 import { lockFileOwnerOnly } from "./secure-file.js";
 import { allowedModelsFor, disableEntries, enableEntries } from "./model-allowlist.js";
-import { isBuiltinProviderId, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, type ProviderConfig } from "./provider.js";
+import { MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, type ProviderConfig } from "./provider.js";
 
 /**
  * User-registered OpenAI-compatible providers (`codewhip provider add`).
@@ -72,18 +72,6 @@ function normalize(input: CustomProviderInput): ProviderConfig | { error: string
   const id = input.id.trim().toLowerCase();
   if (!ID_RX.test(id)) return { error: `bad id "${input.id}" (lowercase letters/digits/dashes, 2..32 chars)` };
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
-  if (isBuiltinProviderId(id)) {
-    const builtin = PROVIDERS[id];
-    // The obvious id for a local runtime ("ollama") is usually already owned by
-    // a *remote* builtin of the same name. Saying "no registration needed" there
-    // is actively misleading — the builtin is the cloud service, not your box.
-    if (isLoopbackBaseUrl(baseUrl)) {
-      return {
-        error: `"${id}" is the remote ${builtin.brand} builtin (${builtin.baseUrl}) — use a distinct id for a local runtime, e.g. "${id}-local"`,
-      };
-    }
-    return { error: `"${id}" is a builtin provider — no registration needed` };
-  }
   if (!isAllowedBaseUrl(baseUrl)) {
     return { error: "bad --base-url (need https://origin — or http:// on loopback for a local runtime; no trailing slash)" };
   }
@@ -120,7 +108,6 @@ function isValidRecord(r: unknown): r is ProviderConfig {
   if (typeof r !== "object" || r === null) return false;
   const c = r as Record<string, unknown>;
   return typeof c["id"] === "string" && ID_RX.test((c["id"] as string).toLowerCase())
-    && !isBuiltinProviderId((c["id"] as string).toLowerCase())
     && typeof c["baseUrl"] === "string" && isAllowedBaseUrl(c["baseUrl"] as string)
     && typeof c["defaultModel"] === "string" && (c["defaultModel"] as string).length > 0
     && typeof c["envVar"] === "string" && ENV_RX.test(c["envVar"] as string)
@@ -158,7 +145,6 @@ export function listLocalProviders(dir?: string): ProviderConfig[] {
 /** Builtin first, then customs (case-insensitive). Null when unknown. */
 export function getProviderConfig(id: string, dir?: string): ProviderConfig | null {
   const key = id.trim().toLowerCase();
-  if (isBuiltinProviderId(key)) return PROVIDERS[key];
   return loadCustomProviders(dir)[key] ?? null;
 }
 
@@ -206,14 +192,13 @@ export function isProviderDisabled(id: string, dir?: string): boolean {
 export function listAllProviderConfigs(dir?: string): ProviderConfig[] {
   const disabled = getDisabledProviders(dir);
   const customs = Object.values(loadCustomProviders(dir)).filter((c) => !disabled.has(c.id)).sort((a, b) => a.id.localeCompare(b.id));
-  const builtins = Object.values(PROVIDERS).filter((c) => !disabled.has(c.id));
-  return [...builtins, ...customs];
+  return customs;
 }
 
 /** All providers including disabled ones, for the auth UI. */
 export function listAllProviderConfigsWithDisabled(dir?: string): ProviderConfig[] {
   const disabled = getDisabledProviders(dir);
-  const all = [...Object.values(PROVIDERS), ...Object.values(loadCustomProviders(dir))].sort((a, b) => a.id.localeCompare(b.id));
+  const all = Object.values(loadCustomProviders(dir)).sort((a, b) => a.id.localeCompare(b.id));
   return all.map((c) => ({ ...c, disabled: disabled.has(c.id) }));
 }
 
@@ -247,7 +232,6 @@ export function addCustomProvider(input: CustomProviderInput, dir?: string): { o
 
 export function removeCustomProvider(id: string, dir?: string): { ok: true } | { ok: false; error: string } {
   const key = id.trim().toLowerCase();
-  if (isBuiltinProviderId(key)) return { ok: false, error: `"${key}" is a builtin provider and cannot be removed` };
   const next = loadCustomProviders(dir);
   if (next[key] === undefined) return { ok: false, error: `unknown provider "${id}" (see: codewhip provider list)` };
   delete next[key];

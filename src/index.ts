@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { generateKeyPairSync } from "node:crypto";
-import { isBuiltinProviderId, makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, PROVIDERS, setStreamingEnabled, type ProviderId } from "./provider.js";
+import { makePortForConfig, MAX_CHAT_TIMEOUT_MS, MIN_CHAT_TIMEOUT_MS, setStreamingEnabled, type ProviderId } from "./provider.js";
 import { addCustomProvider, getProviderConfig, isLoopbackBaseUrl, listAllProviderConfigs, removeCustomProvider } from "./custom-providers.js";
 import { allowedModelsFor, disableEntries, enableEntries, isModelAllowed, loadAllowedEntries } from "./model-allowlist.js";
 import { listModels } from "./models.js";
@@ -191,7 +191,7 @@ function printRunOptions(): void {
   console.log("Options (run):");
   console.log(`  --model <id>         model id (default depends on --provider)`);
   console.log(`  --models <a,b,c>     rotate models in order on rate-limit/timeout/5xx, each once per run (default: off)`);
-  console.log("  --provider <id>      provider id (default: nvidia)");
+  console.log("  --provider <id>      provider id (custom providers only)");
   console.log("  --token-budget <n>   max prompt+completion tokens for the run; enforced mid-run, stops with partial transcript + receipt (default: 250000)");
   console.log("  --max-steps <n>      hard stop with partial result + cost (default: 25)");
   console.log(`  --timeout-ms <n>     per-call provider budget in ms (default: provider default, 120s builtin; ${MIN_CHAT_TIMEOUT_MS}..${MAX_CHAT_TIMEOUT_MS})`);
@@ -233,7 +233,7 @@ function printKeysHelp(all: boolean = false): void {
     console.log("Keys: set the provider's env var (CI-friendly) or store one with `codewhip auth login <provider>`.");
     console.log("  which env var, and where to get the key: `codewhip provider show <provider>` — it prints that provider's var and key URL, and never the key.");
     console.log("  which providers exist: `codewhip provider list`.");
-    console.log("  keyless tiers (anonymous, rate-limited) and custom OpenAI-compatible endpoints: `codewhip help keys --all`.");
+    console.log("  custom OpenAI-compatible endpoints: `codewhip help keys --all`.");
     return;
   }
 
@@ -245,7 +245,7 @@ function printKeysHelp(all: boolean = false): void {
     console.log(`  ${c.id.padEnd(16)} ${c.envVar}${keyNote}`);
   }
   console.log("Key consoles: run `codewhip provider show <id>` for a specific provider's key URL.");
-  console.log("Keyless: kilo/opencode/empero/llm7 run with no key (anonymous, rate-limited).");
+  console.log("Keyless/anonymous providers run without a stored key.");
 }
 
 /** One-command topics for `codewhip help <command>` / `codewhip <command> --help`. Returns false for unknown topics. */
@@ -254,13 +254,13 @@ function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
     case "init":
       console.log('codewhip init — scaffold AGENTS.md + codewhip-policy.yaml + .codewhip/key (ed25519, local only).');
       console.log("  Existing files are kept, never overwritten.");
-      console.log("  Next: codewhip demo --deny (offline, $0) — then: codewhip auth login nvidia");
+      console.log("  Next: codewhip demo --deny (offline, $0) — then: codewhip provider add <id>");
       return true;
     case "run":
       console.log('codewhip run "<prompt>" [options] — run an agent session (headless; no prompt on a TTY = REPL).');
       printRunOptions();
-      console.log("  No key yet? codewhip demo --deny (offline, $0) — or --provider llm7 (keyless, rate-limited).");
-      console.log("  Key consoles and keyless tiers: codewhip help keys (full env-var list: --all).");
+      console.log("  No key yet? codewhip demo --deny (offline, $0) — or: codewhip provider add <id>.");
+      console.log("  Keys: codewhip help keys (full env-var list: --all).");
       console.log('  Custom commands: codewhip run "/name args" expands .codewhip/commands/<name>.md ($ARGUMENTS substituted).');
       console.log("  One-shot expansion is exact-match only — a prompt like \"/api returns 500\" runs verbatim; in the REPL unknown /name errors. See .help.");
       return true;
@@ -271,11 +271,11 @@ function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
       console.log("codewhip auth login <provider>   — store a key (hidden prompt, 0600 file; env still wins)");
       console.log("codewhip auth logout <provider>  — forget the stored key");
       console.log("codewhip auth status [provider]  — set/missing per provider (keys are never printed)");
-      console.log("  key consoles and keyless tiers: codewhip help keys (full env-var list: --all).");
+      console.log("  keys: codewhip help keys (full env-var list: --all).");
       return true;
     case "models":
-      console.log("codewhip models [provider] — list served models with agency tags (default: nvidia).");
-      console.log("  Needs the provider key (see: codewhip help auth) — except llm7, which is anonymous.");
+      console.log("codewhip models [provider] — list served models with agency tags.");
+      console.log("  Needs the provider key (see: codewhip help auth).");
       return true;
     case "provider":
       console.log("codewhip provider list            — known providers (builtin + custom) with enabled-model counts");
@@ -370,7 +370,7 @@ function printHelp(): void {
   console.log("  init                 scaffold AGENTS.md + policy + local key (30s)");
   console.log('  run "<prompt>"       run an agent session (headless; no prompt = REPL)');
   console.log("  auth                 store provider keys (login/logout/status [provider])");
-  console.log("  models [provider]    list served models with agency tags (default: nvidia)");
+  console.log("  models [provider]    list served models with agency tags");
   console.log("  provider             register OpenAI-compatible providers (list/add <id>/remove <id>/show <id>)");
   console.log("  rollback <run>       undo a run: restore files it edited/wrote (or --list runs)");
   console.log("  sessions             list saved conversation transcripts (newest first; --continue to resume)");
@@ -446,7 +446,7 @@ function takeValue(flag: string, args: string[], i: number, needs: string): Flag
 const MAX_TOOL_FILTERS = 64;
 
 function parseRunArgs(args: string[]): RunOptions | null {
-  let model = PROVIDERS.nvidia.defaultModel;
+  let model = "default";
   let modelExplicit = false;
   let modelsArg: string[] | null = null;
   let provider: ProviderId = "nvidia";
@@ -1067,7 +1067,7 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     );
   }
   const pid = opts.providerExplicit ? opts.provider : "nvidia";
-  const mid = opts.modelExplicit ? opts.model : PROVIDERS.nvidia.defaultModel;
+  const mid = opts.modelExplicit ? opts.model : "default";
   opts = { ...opts, provider: pid, model: mid };
   say(`route: ${pid}:${mid}`);
   // Flags and settings meet once, here, into one mode: `--permission-mode`
@@ -2036,11 +2036,11 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
   const sub = args[0] ?? "list";
   if (sub === "list") {
     const all = listAllProviderConfigs();
-    const nCustom = all.filter((c) => !isBuiltinProviderId(c.id)).length;
+    const nCustom = all.filter((c) => true).length;
     console.log(`provider: ${all.length} known (${all.length - nCustom} builtin + ${nCustom} custom):`);
     for (const c of all) {
       const { source } = resolveKey(c.id);
-      const tag = isBuiltinProviderId(c.id) ? "builtin" : "custom";
+      const tag = "custom";
       const key = source === "none" ? "no key" : source;
       const n = allowedModelsFor(c.id).length;
       console.log(`  ${c.id} [${tag}] ${c.baseUrl} default=${c.defaultModel} env=${c.envVar} key=${key} enabled=${n}`);
@@ -2059,7 +2059,7 @@ const PROVIDER_ADD_USAGE = 'usage: codewhip provider add <id> --base-url https:/
       process.exitCode = 1;
       return;
     }
-    console.log(`provider: ${cfg.id} [${isBuiltinProviderId(cfg.id) ? "builtin" : "custom"}]`);
+    console.log(`provider: ${cfg.id} [${"custom"}]`);
     console.log(`  base: ${cfg.baseUrl}${cfg.chatPath} (models: ${cfg.baseUrl}${cfg.modelsPath})`);
     console.log(`  default model: ${cfg.defaultModel} · env: ${cfg.envVar} · key: ${cfg.keyUrl.length > 0 ? cfg.keyUrl : "(none)"}`);
     return;

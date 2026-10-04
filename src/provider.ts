@@ -13,35 +13,23 @@ import { configDir } from "./config-dir.js";
 import { recordProviderCall, outcomeForStatus } from "./provider-stats.js";
 import { blockModel, isBlocked } from "./provider-blocklist.js";
 import { parseRetryAfter, resolveBaseUrl, unresolvedBaseUrlVars } from "./wire-util.js";
-import { oneminPort } from "./onemin.js";
-
 /**
- * Builtin provider registry — adding a builtin is ONE table row, nothing else.
- * User-registered providers live outside this file (see custom-providers.ts:
- * `codewhip provider add`) and ride the same OpenAI-compatible ChatPort.
- * The loop only ever sees a ChatPort; openAiPort adapts any config.
- */
-
 /**
- * Registry data (ids, configs, port kinds, timeout bounds) lives in
- * src/provider-registry.ts — a zero-import data leaf (the former src/lib
- * fork drifted 20 providers behind the CLI before it was deleted; see
- * docs/moat/torvalds-architecture-review.md). The re-exports below keep
- * every existing `from "./provider.js"` import working unchanged.
+ * Provider types and constants. There are no builtin providers.
+ * Every provider is user-registered with `codewhip provider add <id>
+ * --base-url <https origin> --env-var <VAR>`: a custom base URL and
+ * the bearer token it needs. Registry types live in src/provider-registry.ts.
  */
 import {
-  PROVIDER_IDS,
-  PROVIDERS,
-  type BuiltinProviderId,
+  DEFAULT_CHAT_TIMEOUT_MS,
+  MAX_CHAT_TIMEOUT_MS,
+  MIN_CHAT_TIMEOUT_MS,
   type ProviderConfig,
 } from "./provider-registry.js";
 export {
   DEFAULT_CHAT_TIMEOUT_MS,
   MAX_CHAT_TIMEOUT_MS,
   MIN_CHAT_TIMEOUT_MS,
-  PROVIDER_IDS,
-  PROVIDERS,
-  isBuiltinProviderId,
 } from "./provider-registry.js";
 export type {
   BuiltinProviderId,
@@ -52,10 +40,11 @@ export type {
 
 const MAX_BODY_CHARS = 500;
 
-export function parseProviderId(value: string | undefined): BuiltinProviderId | null {
-  return (PROVIDER_IDS as readonly string[]).includes(value ?? "")
-    ? (value as BuiltinProviderId)
-    : null;
+/**
+ * There are no builtin providers. Every provider must be user-registered.
+ */
+export function parseProviderId(_value: string | undefined): never {
+  return null as never;
 }
 
 /**
@@ -421,7 +410,7 @@ function openAiPort(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, key
       return { ok: false, error: "missing api key", retryable: "other" };
     }
     // --- AUTH HEADER RULE ---
-    // keySource === "anonymous" means the provider is configured with
+    // _keySource === "anonymous" means the provider is configured with
     // an `anonymousKey` placeholder (kilo/opencode/llm7 etc.). These
     // providers either (a) need NO Authorization header at all (kilo's
     // ':free' models — verified 2026-09-11: "chat works with no
@@ -681,14 +670,10 @@ const outcome = outcomeForStatus(res.status, respBody);
 export function makePortForConfig(cfg: ProviderConfig, apiKey: string, timeoutMs?: number, keySource?: string): ChatPort {
   // One branch, keyed by the row's own discriminator — a non-OpenAI provider
   // never has to be special-cased by id at every call site.
-  return cfg.port === "onemin" ? oneminPort(cfg, apiKey, timeoutMs, keySource) : openAiPort(cfg, apiKey, timeoutMs, keySource);
+  return openAiPort(cfg, apiKey, timeoutMs);
 }
 
-/** Tool-calling adapter implementing the loop's ChatPort for a builtin provider. */
-export function makePort(provider: string, apiKey: string, timeoutMs?: number): ChatPort {
-  const cfg = PROVIDERS[provider as BuiltinProviderId];
-  if (cfg === undefined) {
-    return async () => ({ ok: false, error: `unknown provider: ${provider}`, retryable: "other" });
-  }
-  return openAiPort(cfg, apiKey, timeoutMs);
+/** There are no builtin providers. All providers are custom. */
+export function makePort(_provider: string, _apiKey: string, _timeoutMs?: number): ChatPort {
+  return async () => ({ ok: false, error: "no builtin providers — use codewhip provider add", retryable: "other" });
 }

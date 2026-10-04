@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { configDir } from "./config-dir.js";
 import { getProviderConfig } from "./custom-providers.js";
 import { lockDirOwnerOnly, lockFileOwnerOnly, writeOwnerOnlyFile } from "./secure-file.js";
-import type { BuiltinProviderId } from "./provider.js";
 
 export type { ProviderId } from "./provider.js";
 export { configDir, CONFIG_DIR_ENV } from "./config-dir.js";
@@ -167,158 +166,14 @@ type StoredCreds = {
   [key: string]: unknown;
 };
 
-const FIELD_BY_PROVIDER: Record<BuiltinProviderId, string> = {
-  nvidia: "nvidiaApiKey",
-  mistral: "mistralApiKey",
-  sensenova: "sensenovaApiKey",
-  alibaba: "alibabaApiKey",
-  llm7: "llm7ApiKey",
-  tokenharbor: "tokenharborApiKey",
-  bai: "baiApiKey",
-  fabryka: "fabrykaApiKey",
-  opencode: "opencodeApiKey",
-  kilo: "kiloApiKey",
-  openrouter: "openrouterApiKey",
-  gemini: "geminiApiKey",
-  groq: "groqApiKey",
-  cerebras: "cerebrasApiKey",
-  zai: "zaiApiKey",
-  empero: "emperoApiKey",
-  // Onboarded free OpenAI-compatible providers (2026-09-11 addendum).
-  pollinations: "pollinationsApiKey",
-  sambanova: "sambanovaApiKey",
-  chutes: "chutesApiKey",
-  hyperbolic: "hyperbolicApiKey",
-  xai: "xaiApiKey",
-  huggingface: "huggingfaceApiKey",
-  upstage: "upstageApiKey",
-  novita: "novitaApiKey",
-  parasail: "parasailApiKey",
-  volcengine: "volcengineApiKey",
-  qianfan: "qianfanApiKey",
-  hunyuan: "hunyuanApiKey",
-  moonshot: "moonshotApiKey",
-  deepseek: "deepseekApiKey",
-  minimax: "minimaxApiKey",
-  stepfun: "stepfunApiKey",
-  ppio: "ppioApiKey",
-  // Free-tier candidates harvested 2026-09-13.
-  cloudflare: "cloudflareApiKey",
-  modelscope: "modelscopeApiKey",
-  ovhcloud: "ovhcloudApiKey",
-  ollama: "ollamaApiKey",
-  cohere: "cohereApiKey",
-  siliconflow: "siliconflowApiKey",
-  aionlabs: "aionlabsApiKey",
-  agnes: "agnesApiKey",
-  requesty: "requestyApiKey",
-  inference: "inferenceApiKey",
-  hetzner: "hetznerApiKey",
-  venice: "veniceApiKey",
-  scaleway: "scalewayApiKey",
-  friendli: "friendliApiKey",
-  nscale: "nscaleApiKey",
-  nebius: "nebiusApiKey",
-  ai21: "ai21ApiKey",
-  coze: "cozeApiKey",
-  "1min": "oneminApiKey",
-  hcnsec: "hcnsecApiKey",
-  hashneuron: "hashneuronApiKey",
-  // 2026-09-16: new providers.
-  anyrouter: "anyrouterApiKey",
-  apinex: "apinexApiKey",
-  zukijourney: "zukijourneyApiKey",
-  nagaai: "nagaaiApiKey",
-  zanityai: "zanityaiApiKey",
-  kimetsu: "kimetsuApiKey",
-  navyapi: "navyapiApiKey",
-  mnn: "mnnApiKey",
-  hcap: "hcapApiKey",
-  voltai: "voltaiApiKey",
-  electronhub: "electronhubApiKey",
-  // User-sourced gateways (2026-09-16).
-  xkiro: "xkiroApiKey",
-  gonkarouter: "gonkarouterApiKey",
-  bazaarlink: "bazaarlinkApiKey",
-  seldon: "seldonApiKey",
-  cavoti: "cavotiApiKey",
-  getunikey: "getunikeyApiKey",
-  // 2026-09-18: freellm free providers.
-  freetheai: "freetheaiApiKey",
-  gmicloud: "gmicloudApiKey",
-  inferx: "inferxApiKey",
-  kkiai: "kkiaiApiKey",
-  seekai: "seekaiApiKey",
-  bynara: "bynaraApiKey",
-  atria: "atriaApiKey",
-  onerouter: "onerouterApiKey",
-  xpiki: "xpikiApiKey",
-  // 2026-09-18: completeness batch.
-  githubmodels: "githubmodelsApiKey",
-  aihubmix: "aihubmixApiKey",
-  fastrouter: "fastrouterApiKey",
-  vercel: "vercelApiKey",
-  zenmux: "zenmuxApiKey",
-  llmgateway: "llmgatewayApiKey",
-  together: "togetherApiKey",
-  deepinfra: "deepinfraApiKey",
-  fireworks: "fireworksApiKey",
-  cometapi: "cometapiApiKey",
-  suyu: "suyuApiKey",
-  voapi: "voapiApiKey",
-  nio: "nioApiKey",
-  mkeai: "mkeaiApiKey",
-  apiyi: "apiyiApiKey",
-  codiv: "codivApiKey",
-  // 2026-09-19: cross-harvest batch.
-  openai: "openaiApiKey",
-  perplexity: "perplexityApiKey",
-  writer: "writerApiKey",
-  lambda: "lambdaApiKey",
-  featherless: "featherlessApiKey",
-  metallama: "metallamaApiKey",
-  yi: "yiApiKey",
-  baichuan: "baichuanApiKey",
-  internlm: "internlmApiKey",
-  iflytek: "iflytekApiKey",
-  reka: "rekaApiKey",
-  sarvam: "sarvamApiKey",
-  typhoon: "typhoonApiKey",
-  plamo: "plamoApiKey",
-  liquid: "liquidApiKey",
-  inception: "inceptionApiKey",
-  nous: "nousApiKey",
-  byteplus: "byteplusApiKey",
-  xiaomi: "xiaomiApiKey",
-  arcee: "arceeApiKey",
-  heroku: "herokuApiKey",
-  modal: "modalApiKey",
-  baseten: "basetenApiKey",
-  predibase: "predibaseApiKey",
-  monsterapi: "monsterapiApiKey",
-  wandb: "wandbApiKey",
-  aimlapi: "aimlapiApiKey",
-  bytez: "bytezApiKey",
-  synthetic: "syntheticApiKey",
-  nanogpt: "nanogptApiKey",
-  kie: "kieApiKey",
-  morph: "morphApiKey",
-  galadriel: "galadrielApiKey",
-  v0: "v0ApiKey",
-  factory: "factoryApiKey",
-  poe: "poeApiKey",
-  wrouter: "wrouterApiKey",
-  arouter: "arouterApiKey",
-  tokenrouter: "tokenrouterApiKey",
-  darkbloom: "darkbloomApiKey",
-};
+;
 
 function customFieldFor(provider: string): string {
   return `custom_${provider.toLowerCase().replace(/[^a-z0-9]/g, "_")}_ApiKey`;
 }
 
 function fieldFor(provider: string): string {
-  return FIELD_BY_PROVIDER[provider as BuiltinProviderId] ?? customFieldFor(provider);
+  return customFieldFor(provider);
 }
 
 function credsPath(): string {
