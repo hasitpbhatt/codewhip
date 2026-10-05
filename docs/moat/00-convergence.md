@@ -260,3 +260,17 @@ P1 — trust that spreads:
   dropped, keeping "nothing touches disk unless you arm it" true while making
   the arming visible. `outcomes.jsonl` and `audit.log` are untouched — the
   audit chain still keys on run ids, which is why `lastRunId` exists.
+
+- 2026-10-05 — **Free-chain ruling (T8): builtin provider registry removed permanently.**
+  The auto-routing / aggregator / free-tier provider chain was removed in
+  `removal-of-auto-routing-aggregator-free-chain` (commits 8b8427f →
+  f1a5931 → 5db6e1b → HEAD). `src/provider-registry.ts` now declares
+  `BuiltinProviderId = never` and `PROVIDERS: Record<string, never> = {}`;
+  every provider is user-registered via `codewhip provider add`. This is a
+  decision, not a placeholder: the free chain provided no switching cost
+  advantage, violated the trust model (unsigned keyless calls with no
+  provenance on the audit chain), and added provider-maintenance surface
+  that the moat does not depend on. The OpenAI-compatible wire port
+  (`PortKind = "openai"`) and `custom-providers.ts` are retained — they
+  cover the entire use case a user has a key for. No builtin row returns
+  in H1; reintroduction requires a new ruling with a named user pain.

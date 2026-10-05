@@ -34,7 +34,7 @@ import { DEFAULT_COMPACT_TOKENS } from "./compact.js";
 import { NOOP_DEBUG, openDebug, rejectDebugPath } from "./debug.js";
 import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
-import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath, revokePromotedDeny } from "./policy-store.js";
+import { appendPromotedDeny, declineCandidates, loadPromotedDenies, matchesPromoted, policyMdPath, revokePromotedDeny } from "./policy-store.js";
 import { BUILTIN_AGENTS, CHILD_MAX_STEPS_CAP, listAgentsWithErrors, mainThreadTurn, parseAgentsJson, type AgentDef } from "./subagents.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { loadHooks } from "./hooks.js";
@@ -334,6 +334,7 @@ function printCommandHelp(topic: string, extraArgs: string[] = []): boolean {
       console.log("codewhip policy candidates        — tools declined 3+ times with the same shape (promotion-ready)");
       console.log('codewhip policy approve "<tool:shape>" — promote a candidate into a standing deny');
       console.log("codewhip policy list              — standing denies");
+      console.log('codewhip policy preview "<tool:shape>" — show effective allow/deny/ask decision and which layer produced it');
       return true;
     case "pack":
       console.log("codewhip pack list                — policy packs shipped locally (no registry in H1)");
@@ -1673,6 +1674,45 @@ function cmdSessions(args: string[]): void {
 }
 
 /** How a session gets announced: `1a2b3c4d ("auth")` when it has a name. */
+async function cmdCompactPreview(args: string[]): Promise<void> {
+  const cwd = process.cwd();
+  const prefix = args[0] ?? "";
+  const { loadSession } = await import("./sessions.js");
+  const { estimateTokens, DEFAULT_COMPACT_TOKENS, compactTranscript } = await import("./compact.js");
+  const { segmentUnits, KEEP_RECENT_UNITS } = await import("./compact.js");
+
+  const sessionLoad = loadSession(cwd, prefix);
+  if (!sessionLoad.ok) {
+    console.error(`codewhip: ${sessionLoad.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  const messages = sessionLoad.record.messages;
+  const tokensBefore = estimateTokens(messages);
+  const wouldDrop = compactTranscript(messages, DEFAULT_COMPACT_TOKENS);
+  console.log(`compact-preview: session ${sessionLoad.record.runId.slice(0, 8)} —`);
+  console.log(`  Current token estimate: ${tokensBefore} est.`);
+  console.log(`  Ceiling (DEFAULT_COMPACT_TOKENS): ${DEFAULT_COMPACT_TOKENS} est.`);
+  console.log(`  If we compacted right now, we would drop:`);
+  console.log(`    • ${wouldDrop.truncated} old tool output(s) truncated (…[compacted])`);
+  console.log(`    • ${wouldDrop.dropped} exchange(s) elided as stubs`);
+  console.log(`    • resulting transcript: ${wouldDrop.tokensAfter} est. tokens`);
+  console.log(`  Top layers to drop (oldest first):`);
+  if (wouldDrop.truncated === 0 && wouldDrop.dropped === 0) {
+    console.log(`    • none – already under the ceiling`);
+  } else {
+    const units = segmentUnits(messages);
+    const nonProtected = units.filter(u => !u.protected);
+    const recent = new Set(nonProtected.slice(-KEEP_RECENT_UNITS));
+    const eligible = nonProtected.filter(u => !recent.has(u));
+    const oldUnits = eligible.slice(-3);
+    for (const u of oldUnits) {
+      const tools = messages.slice(u.start, u.end).flatMap(m => (m.toolCalls ?? []).map(c => c.name));
+      console.log(`    • exchange ${u.start}–${u.end}: ${tools.join(", ") || "(no tools)"}`);
+    }
+  }
+}
+
 function replSessionLabel(state: ReplState, id: string): string {
   const name = state.labels.name;
   return name === undefined ? id.slice(0, 8) : `${id.slice(0, 8)} ("${name}")`;
@@ -2376,7 +2416,45 @@ function cmdPolicy(args: string[]): void {
     console.log(`policy: revoked deny "${raw}" — future runs fall back to the allowlist/ask ladder`);
     return;
   }
-  console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|revoke \"<tool:shape>\"|list]");
+  if (sub === "preview") {
+    const raw = args[1] ?? "";
+    const sep = raw.indexOf(":");
+    const tool = raw.slice(0, sep);
+    const shape = raw.slice(sep + 1);
+    if (sep <= 0 || shape.length === 0 || /[\r\n]/.test(raw)) {
+      console.error('usage: codewhip policy preview "<tool:shape>"  (e.g. "bash:npm publish *")');
+      process.exitCode = 1;
+      return;
+    }
+    const cwd = process.cwd();
+    const promotes = loadPromotedDenies(cwd);
+    const matchedPromoted = matchesPromoted(tool, `${tool}:${shape}`, promotes);
+    if (matchedPromoted !== null) {
+      console.log(`policy: denied by promoted policy.md: ${tool}:${shape} (line ${matchedPromoted.line})`);
+      return;
+    }
+    const remembered = listRules(cwd);
+    const matchedRemembered = remembered.find(r => r.tool === tool && r.shape === shape);
+    if (matchedRemembered !== undefined) {
+      console.log(`policy: allowed by remembered rule: ${tool}:${shape} (created ${matchedRemembered.ts} by run ${matchedRemembered.runId.slice(0, 8)})`);
+      return;
+    }
+    if (tool === "read" || tool === "search") {
+      console.log(`policy: allowed by default (read/search tool): ${tool}:${shape}`);
+      return;
+    }
+    if (tool === "delegate" || tool === "delegate_many") {
+      console.log(`policy: allowed by default (delegation tool): ${tool}:${shape}`);
+      return;
+    }
+    if (tool === "bash" || tool === "edit" || tool === "write" || tool === "webfetch") {
+      console.log(`policy: ${tool}:${shape} is ask-gated by default (approve with: codewhip policy approve "${tool}:${shape}")`);
+    } else {
+      console.log(`policy: ${tool}:${shape} is ask-gated by default (see: codewhip policy candidates)`);
+    }
+    return;
+  }
+  console.log("Usage: codewhip policy [candidates|approve \"<tool:shape>\"|revoke \"<tool:shape>\"|preview \"<tool:shape>\"|list]");
 }
 
 function cmdPack(args: string[]): void {
@@ -2649,7 +2727,11 @@ function cmdTrust(args: string[]): void {
   const cwd = process.cwd();
   const jsonOutput = args.includes("--json");
   const verbose = args.includes("--verbose");
-  const lines: string[] = ["codewhip trust — single-command trust certificate"];
+  const ci = args.includes("--ci");
+  const lines: string[] = [];
+  // Gate marks: [ok] passes, [!!] is missing evidence, [XX] is broken.
+  const ok = (good: boolean): string => (good ? "[ok]" : "[!!]");
+  const bad = (good: boolean): string => (good ? "[ok]" : "[XX]");
   const broken: string[] = []; // things that are WRONG (fail closed)
   const unproven: string[] = []; // things merely not yet evidenced
 
@@ -2658,7 +2740,7 @@ function cmdTrust(args: string[]): void {
   const raw = verifyChain(cwd);
   const v = interpretVerification(raw, cwd);
   const chainClean = v.clean;
-  lines.push(`  audit chain: ${v.status} (${raw.total} entries, ${raw.signed} signed, ${raw.unsigned} unsigned${raw.keyPresent ? ", key present" : ", no local key"})`);
+  lines.push(`  ${bad(chainClean)} audit chain: ${v.status} (${raw.total} entries, ${raw.signed} signed, ${raw.unsigned} unsigned${raw.keyPresent ? ", key present" : ", no local key"})`);
   if (!chainClean) {
     for (const p of v.problems) {
       lines.push(`    ! ${p}`);
@@ -2690,7 +2772,7 @@ function cmdTrust(args: string[]): void {
   }
   const promotedDenies = loadPromotedDenies(cwd);
   const denyWord = (n: number): string => `den${n === 1 ? "y" : "ies"}`;
-  lines.push(`  policy: ${baseDenies} base ${denyWord(baseDenies)} + ${promotedDenies.length} promoted ${denyWord(promotedDenies.length)} active`);
+  lines.push(`  ${bad(baseDenies > 0 || promotedDenies.length > 0)} policy: ${baseDenies} base ${denyWord(baseDenies)} + ${promotedDenies.length} promoted ${denyWord(promotedDenies.length)} active`);
   if (baseDenies === 0 && promotedDenies.length === 0) {
     broken.push("policy");
   }
@@ -2708,7 +2790,7 @@ function cmdTrust(args: string[]): void {
     polishGatePassed = gate.pass;
     polishGateStatus = gate.pass ? `PASS (${gate.reason})` : `OPEN (${gate.reason})`;
   }
-  lines.push(`  polish gate: ${polishGateStatus}`);
+  lines.push(`  ${ok(polishGatePassed)} polish gate: ${polishGateStatus}`);
   if (!polishGatePassed) {
     unproven.push("polish");
   }
@@ -2717,7 +2799,7 @@ function cmdTrust(args: string[]): void {
   // press `a` (the UX panel: a trust certificate must not farm grants).
   const remembered = listRules(cwd);
   const hasMemory = remembered.length > 0;
-  lines.push(`  memory: ${remembered.length} remembered rule(s) accruing${hasMemory ? " — inspect: codewhip remember list" : ""}`);
+  lines.push(`  ${ok(hasMemory)} memory: ${remembered.length} remembered rule(s) accruing${hasMemory ? " — inspect: codewhip remember list" : ""}`);
   if (!hasMemory) {
     unproven.push("memory");
   }
@@ -2742,7 +2824,7 @@ function cmdTrust(args: string[]): void {
       }
     }
   }
-  lines.push(`  keys: ${usableKeys.length} usable (env/file), ${anonymousKeys.length} anonymous (rate-limited)${missingKeys.length > 0 ? `, ${missingKeys.length} missing` : ""}`);
+  lines.push(`  ${bad(usableKeys.length > 0 || anonymousKeys.length > 0)} keys: ${usableKeys.length} usable (env/file), ${anonymousKeys.length} anonymous (rate-limited)${missingKeys.length > 0 ? `, ${missingKeys.length} missing` : ""}`);
   if (usableKeys.length > 0) {
     lines.push(`    usable: ${usableKeys.join(", ")}`);
   }
@@ -2811,19 +2893,23 @@ function cmdTrust(args: string[]): void {
     return;
   }
 
-  lines.push("");
-  lines.push(`TRUST: ${verdict}`);
   const suggestions: string[] = [];
   if (broken.includes("audit")) suggestions.push("codewhip audit --verify");
   if (broken.includes("policy")) suggestions.push("codewhip init (creates base policy with 3 denies)");
   if (broken.includes("keys")) suggestions.push("codewhip auth login <provider> (or set env var)");
   if (unproven.includes("memory")) suggestions.push("codewhip remember list (see what the agent may auto-run)");
   if (unproven.includes("polish") && polishRuns.length > 0) suggestions.push('codewhip run --class polish "..." (prove <$0.05)');
+  const head = [
+    `codewhip trust — TRUST: ${verdict}`,
+    allGood ? "  This repo is trusted for delegation." : "",
+    "",
+  ];
   if (suggestions.length > 0) {
-    lines.push("  next: " + suggestions.join(" | "));
+    head.push("  next: " + suggestions.join(" | "));
   }
-  void allGood;
-  console.log(lines.join("\n"));
+  // Verdict on top, gates below: a certificate is scanned, not read to the end.
+  console.log([...head, ...lines].join("\n"));
+  if (ci) process.exitCode = allGood ? 0 : 1;
 }
 
 async function main(): Promise<void> {
@@ -2966,6 +3052,10 @@ async function main(): Promise<void> {
   }
   if (command === "sessions") {
     cmdSessions(args.slice(1));
+    return;
+  }
+  if (command === "compact-preview") {
+    await cmdCompactPreview(args.slice(1));
     return;
   }
   if (command === "demo") {

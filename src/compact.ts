@@ -21,7 +21,7 @@ export const DEFAULT_COMPACT_TOKENS = 60000;
 /** Old tool outputs keep their head at this many chars. */
 const TOOL_KEEP_CHARS = 600;
 /** The newest N non-protected units are never compacted. */
-const KEEP_RECENT_UNITS = 2;
+export const KEEP_RECENT_UNITS = 2;
 
 /** chars/4 estimate over the whole transcript (labels: "est."). */
 export function estimateTokens(messages: LoopMsg[]): number {
@@ -55,7 +55,7 @@ function weightedLength(s: string): number {
 /** One contiguous run of messages: an assistant (or user/system) turn plus any tool responses it owns. */
 type Unit = { start: number; end: number; protected: boolean };
 
-function segmentUnits(messages: LoopMsg[]): Unit[] {
+export function segmentUnits(messages: LoopMsg[]): Unit[] {
   const units: Unit[] = [];
   let i = 0;
   while (i < messages.length) {
