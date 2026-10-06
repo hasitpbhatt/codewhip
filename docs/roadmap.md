@@ -85,6 +85,18 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   sake — is a kill-list item, so it stays unprioritized until a user asks.
 - [ ] Auditor bundle v2 (quarterly export → SOC2 CC7/CC8 mapping doc);
   redacted public share index as trust corpus.
+- [ ] **`--goal` loop-to-goal** — `codewhip run "<prompt>" --goal "<goal>"`
+  loops turns toward a goal instead of stopping at one; the goal is injected
+  into the system prompt so it survives compaction across turns. Stops when
+  `--verify <cmd>` exits 0, `--max-goal-turns` is hit (default 10), the budget
+  is met, or the model reaches a final answer without tool calls. `--interject`
+  reads a line of stdin between turns and injects it as the next prompt (EOF
+  continues autonomously). Each turn is an ordinary `agentLoop` call, so
+  autocompact and the policy ladder stay unchanged; receipts split per turn
+  (one result line per turn under `--output-format stream-json`).
+  Core `runGoalLoop` in `src/goal.ts` (21 tests in `src/goal.test.ts`,
+  classified core by `src/boundary.test.ts`). CLI wiring (`--goal/--verify/--interject/--max-goal-turns`
+  in `cmdRun`, `SessionRecord.goal` field for resume) not yet implemented.
 - [ ] TUI/desktop/IDE only after terminal trusted-runs compound.
 
 ## Kill list (final — needs evidence to reopen)

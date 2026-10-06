@@ -260,3 +260,17 @@ P1 — trust that spreads:
   dropped, keeping "nothing touches disk unless you arm it" true while making
   the arming visible. `outcomes.jsonl` and `audit.log` are untouched — the
   audit chain still keys on run ids, which is why `lastRunId` exists.
+
+- 2026-09-26 — **`--goal` loop-to-goal ships (surface around a core leaf).**
+  Two primitives already existed: `compactTranscript`/`estimateTokens` for
+  autocompact (one turn) and `SessionRecord` persistence for resume. The wedge
+  missing was a loop that keeps turning toward a stated goal instead of
+  stopping at one: the goal rides the **user prompt each turn** (survives
+  compaction via the transcript, not the system prompt), `--verify <cmd>`
+  (spawned in the platform shell, 60s wall timeout) grades each turn and
+  exits 0 to stop, `--interject` lets a human steer between turns from stdin
+  without pausing a step already running, and `--max-goal-turns` (1..100,
+  default 10) caps spend. Each turn is an ordinary `agentLoop` call, so the
+  policy ladder, per-run receipts and token/cost budgets keep their meaning.
+  **Core only:** `src/goal.ts` exports `runGoalLoop` (21 tests, classified core).
+  **Not yet:** CLI flags in `cmdRun`, `sessions.goal` field, `--interject` stdin wiring.

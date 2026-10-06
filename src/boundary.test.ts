@@ -95,6 +95,7 @@ const CORE_EXPECTED = new Set([
   "src/eval-store.ts",
   "src/eval.ts",
   "src/frontmatter.ts",
+  "src/goal.ts",
   "src/hash.ts",
   "src/hooks.ts",
   "src/immunity/adversarial.ts",
