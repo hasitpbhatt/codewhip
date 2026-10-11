@@ -2,6 +2,7 @@ import type { ChatPort } from "../provider-port.js";
 import type { UsageBucket } from "../outcomes.js";
 import type { Debug } from "../debug.js";
 import type { ToolFilter } from "../tool-filter.js";
+import type { StopReason } from "../loop.js";
 import type { AgentDef } from "../subagents.js";
 
 /**
@@ -96,6 +97,14 @@ export type ToolContext = {
   /** Same-provider rotation candidates + 429 retry-wait, forwarded so a
    * rate-limited child rotates instead of dying (parallel fan-out friendly). */
   rotationModels?: string[];
+  /**
+   * The run's dollar ceiling as the parent evaluates it. Forwarded to a SINGLE
+   * child (not a fan-out: four concurrent children each holding the same
+   * closure each see only their own buckets, so the fan-out would report a
+   * ceiling it spends four times). Same shape as `LoopArgs.costCheck`, and
+   * injected by the surface — core never imports a price table.
+   */
+  costCheck?: (buckets: UsageBucket[]) => { stopReason: StopReason; message: string } | null;
   retryWait?: boolean;
   /** Parent's compaction ceiling (children share the transcript-size policy). */
   compactTokens?: number;

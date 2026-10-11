@@ -562,6 +562,14 @@ export type ChildRunOptions = {
   parentRunId?: string;
   /** Parent's `--debug` sink — a child's decisions join the same log. */
   debug?: Debug;
+  /**
+   * The run's dollar ceiling, forwarded to a SINGLE child only. A fan-out
+   * deliberately does not get it: four concurrent children each holding the
+   * same closure each see only their own buckets, so each would believe it
+   * alone owns the ceiling and the fan-out would spend four times what it
+   * reports. Its ceiling stays at the parent's turn boundary.
+   */
+  costCheck?: LoopArgs["costCheck"];
   /** Progress lines, already prefixed with the agent name. */
   onEvent?: (text: string) => void;
   /** Per-child wall clock — the child's signal aborts when it fires. */
@@ -603,9 +611,17 @@ export async function runChildAgent(opts: ChildRunOptions): Promise<ChildRunResu
     ...(opts.debug === undefined ? {} : { debug: opts.debug }),
     ...(opts.parentRunId === undefined ? {} : { parentRunId: opts.parentRunId }),
     ...(opts.roots === undefined ? {} : { roots: opts.roots }),
-    ...(opts.tokenBudget === undefined ? {} : { tokenBudget: Math.max(1, opts.tokenBudget) }),
+    // No floor: a 0 allocation is the split saying "this child gets nothing",
+    // and re-flooring it to 1 is how four children once drew four tokens out
+    // of a two-token pool. The token ceiling is enforced in the loop against
+    // this number as-is.
+    ...(opts.tokenBudget === undefined ? {} : { tokenBudget: opts.tokenBudget }),
     ...(opts.compactTokens === undefined ? {} : { compactTokens: opts.compactTokens }),
     ...(opts.retryWait === undefined ? {} : { retryWait: opts.retryWait }),
+    // One dollar ceiling, enforced inside the child too — the parent's own
+    // check evaluates at its next turn, so without this a child runs its whole
+    // (bounded, 85%-share) budget before the ceiling is read at all.
+    ...(opts.costCheck === undefined ? {} : { costCheck: opts.costCheck }),
     // Rotation only makes sense on the parent's model family; a per-agent
     // model override rides a different id space — never forward candidates.
     ...(opts.models !== undefined && opts.agent.model === undefined && opts.models.length > 0 ? { models: opts.models } : {}),

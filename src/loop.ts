@@ -952,6 +952,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 onChildEvent: (text) => emit("tool", text),
                 remainingBudget: args.tokenBudget === undefined ? undefined : Math.max(0, args.tokenBudget - (promptTokens + completionTokens)),
                 rotationModels: args.models,
+                // The run's dollar ceiling, forwarded to a SINGLE child (see
+                // ToolContext.costCheck: a fan-out holding the same closure
+                // would each see only its own buckets and report a ceiling it
+                // spends MAX_FANOUT times).
+                ...(args.costCheck === undefined ? {} : { costCheck: args.costCheck }),
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
                 disallowedTools: args.disallowedTools,
@@ -1436,6 +1441,11 @@ export async function agentLoop(args: LoopArgs): Promise<LoopResult> {
                 remainingBudget:
                   args.tokenBudget === undefined ? undefined : Math.max(0, args.tokenBudget - (promptTokens + completionTokens)),
                 rotationModels: args.models,
+                // The run's dollar ceiling, forwarded to a SINGLE child (see
+                // ToolContext.costCheck: a fan-out holding the same closure
+                // would each see only its own buckets and report a ceiling it
+                // spends MAX_FANOUT times).
+                ...(args.costCheck === undefined ? {} : { costCheck: args.costCheck }),
                 retryWait: args.retryWait,
                 compactTokens: args.compactTokens,
                 disallowedTools: args.disallowedTools,
