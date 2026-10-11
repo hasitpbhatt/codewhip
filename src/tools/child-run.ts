@@ -47,6 +47,10 @@ export function runChild(
     disallowedTools: ctx.disallowedTools,
     parentRunId: ctx.parentRunId,
     debug: ctx.debug,
+    // The parent's dollar ceiling rides a single child only (delegate_many's
+    // four concurrent holders would each see only their own buckets, so the
+    // fan-out keeps its ceiling at the parent's turn boundary).
+    ...(ctx.costCheck === undefined ? {} : { costCheck: ctx.costCheck }),
     deadlineMs: child.deadlineMs,
     ...(ctx.onChildEvent === undefined ? {} : { onEvent: ctx.onChildEvent }),
   });

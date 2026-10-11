@@ -63,18 +63,27 @@ export async function runDelegate(ctx: ToolContext, args: { agent: string; task:
   const budget = ctx.remainingBudget === undefined
     ? undefined
     : allocateChildBudgets(ctx.remainingBudget, 1);
+  const share = budget?.children[0]?.allocated;
+  ctx.onChildEvent?.(`[${agent.name}] started: ${args.task.slice(0, 120)}`);
+  if (share === 0) {
+    // The pool cannot fund this child. Spawning it would over-allocate the
+    // parent's own ceiling, so it is refused with the numbers, not run.
+    return {
+      ok: false,
+      output: `delegate: the parent's remaining token pool (${ctx.remainingBudget}) is too small to fund ${agent.name} (allocated 0) — spend fewer steps, raise --token-budget, or do the work in this run`,
+    };
+  }
   if (budget !== undefined) {
     ctx.onChildEvent?.(
       `[budget] parent=${budget.parentBudget} coord=${budget.coordinationBudget}` +
       ` child=${budget.children[0]?.allocated ?? 0} (85% share, 15% reserve)`
     );
   }
-  ctx.onChildEvent?.(`[${agent.name}] started: ${args.task.slice(0, 120)}`);
   const r = await runChild(ctx, {
     agent,
     task: args.task,
     signal,
-    tokenBudget: budget?.children[0]?.allocated,
+    tokenBudget: share,
     deadlineMs: DELEGATE_TIMEOUT_MS,
   });
   ctx.onChildUsage?.(r.usageByModel);

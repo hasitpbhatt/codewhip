@@ -91,22 +91,45 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
   const budget = ctx.remainingBudget === undefined
     ? undefined
     : allocateChildBudgets(ctx.remainingBudget, agents.length);
+  // The visible start is unconditional. It used to sit inside the
+  // `budget !== undefined` branch, so a fan-out on a run without a token
+  // budget started several children with nothing between the last event and
+  // the first report — the exact "silent silence" the line exists to prevent.
+  for (const { name, task } of agents) {
+    ctx.onChildEvent?.(`[${name}] started: ${task.slice(0, 120)}`);
+  }
+  // `allocated === 0` is the split saying "the pool cannot fund this child".
+  // Running it anyway is how four children once drew four tokens out of a
+  // two-token pool, so a zero is dropped — and named, because a silently
+  // dropped perspective is the unaccountable outcome this codebase refuses.
+  const dropped = agents.filter((_, i) => budget?.children[i]?.allocated === 0);
+  if (dropped.length > 0) {
+    ctx.onChildEvent?.(
+      `[budget] dropped ${dropped.length} child(ren): ${dropped.map((d) => d.name).join(", ")} — each allocated 0 of the parent's remaining pool (${ctx.remainingBudget})`
+    );
+  }
+  const runnable = agents
+    .map((a, i) => ({ entry: a, index: i, tokens: budget?.children[i]?.allocated }))
+    .filter((r) => r.tokens === undefined || r.tokens > 0);
+  if (runnable.length === 0) {
+    return {
+      ok: false,
+      output: `delegate_many: the parent's remaining token pool (${ctx.remainingBudget}) cannot fund any child (each allocated 0) — spend fewer steps, raise --token-budget, or do the work in this run`,
+    };
+  }
   if (budget !== undefined) {
-    for (const { name, task } of agents) {
-      ctx.onChildEvent?.(`[${name}] started: ${task.slice(0, 120)}`);
-    }
     ctx.onChildEvent?.(
       `[budget] parent=${budget.parentBudget} coord=${budget.coordinationBudget}` +
-      ` children=${budget.children.reduce((s, c) => s + c.allocated, 0)} (${agents.length} children, 85% share, 15% reserve)`
+      ` children=${runnable.reduce((s, r) => s + (r.tokens ?? 0), 0)} (${runnable.length} of ${agents.length} children, 85% share, 15% reserve)`
     );
   }
   const runs = await Promise.all(
-    agents.map((agentEntry, i) =>
+    runnable.map((r) =>
       runChild(ctx, {
-        agent: agentEntry.def,
-        task: agentEntry.task,
+        agent: r.entry.def,
+        task: r.entry.task,
         signal,
-        tokenBudget: budget?.children[i]?.allocated,
+        tokenBudget: r.tokens,
         deadlineMs: DELEGATE_TIMEOUT_MS,
       })
     )
@@ -114,15 +137,16 @@ export async function runDelegateMany(ctx: ToolContext, args: { entries: Entry[]
   const lines: string[] = [];
   const runIds: string[] = [];
   let failed = 0;
-  runs.forEach((r, i) => {
+  runs.forEach((r, k) => {
     ctx.onChildUsage?.(r.usageByModel);
-    const name = agents[i]?.name ?? `agent${i + 1}`;
+    const name = runnable[k]?.entry.name ?? `agent${k + 1}`;
+    const slot = runnable[k]?.index ?? k;
     if (r.ok) {
       runIds.push(r.runId);
-      lines.push(`#${i + 1} [${name}]\n${r.text}`);
+      lines.push(`#${slot + 1} [${name}]\n${r.text}`);
     } else {
       failed += 1;
-      lines.push(`#${i + 1} [${name}] FAILED: ${r.error}`);
+      lines.push(`#${slot + 1} [${name}] FAILED: ${r.error}`);
     }
   });
   const tail = runIds.length > 0 ? `\n[subagent runIds: ${runIds.join(", ")}]` : "";
