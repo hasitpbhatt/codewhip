@@ -79,7 +79,7 @@ jobs:
           cp package.json README.md LICENSE release/
           tar -czf codewhip-${{ inputs.version }}.tar.gz -C release .
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: codewhip-${{ inputs.version }}.tar.gz
           tag_name: ${{ inputs.version }}
