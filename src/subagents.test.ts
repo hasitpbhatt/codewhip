@@ -347,7 +347,8 @@ describe("subagents", () => {
     try {
       const { port } = makeFakePort([
         toolTurn("delegate_many", JSON.stringify({ entries: [{ agent: "explore", task: "burn" }, { agent: "review", task: "light" }] }), { prompt: 100, completion: 0 }),
-        // Child A (explore): one 60-token turn — over its 100/2 = 50 share.
+        // Child A (explore): one 60-token turn — over its 42-token share
+        // (remaining 100 → 85 child pool → floor(85/2) = 42).
         textTurn("A over budget", { prompt: 60, completion: 0 }),
         // Child B (review): well inside its share.
         textTurn("B report", { prompt: 10, completion: 0 }),
@@ -489,7 +490,13 @@ describe("subagents", () => {
     ok(r.error.includes("depth cap"));
   });
 
-  it("per-agent model override: the child calls the port with the agent's model", async () => {
+  it("per-agent model override: the child calls the port with the agent's model, on the PARENT's port", async () => {    // Core plumbing only: the pin rides the parent's provider port and
+    // overrides the id. This says nothing about CONSENT — `agentLoop` is core
+    // and knows no allowlist, so the gate a committed `model:` must pass lives
+    // one layer up in both mouths (src/agent-consent.ts, wired in cmdRun and
+    // sdk.prepare). Before 2026-10-11 no gate existed, so this test was the
+    // only evidence of what the hole allowed; it now pins the behaviour the
+    // gate is designed to stop, and the gate has its own file.
     const runCwd = tmpDir("codewhip-sub-model-");
     try {
       fs.mkdirSync(path.join(runCwd, ".codewhip", "agents"), { recursive: true });
@@ -508,6 +515,38 @@ describe("subagents", () => {
       });
       strictEqual(record[1]?.model, "m-cheap");
       strictEqual(record[2]?.model, "m");
+    } finally {
+      fs.rmSync(runCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("a forwarded dollar ceiling stops the CHILD mid-run, not just at the parent's next turn", async () => {
+    // Before 2026-10-11 `childArgs` carried no costCheck key at all, so a
+    // `delegate` under `--max-budget-usd` spent its whole 85%-share token
+    // allocation before the parent re-read the ceiling at its next turn. A
+    // fan-out still does NOT get the closure (four concurrent holders each see
+    // only their own buckets), so this pins the single-child path only.
+    const runCwd = tmpDir("codewhip-sub-costcheck-");
+    try {
+      const checks: number[] = [];
+      const r = await runChildAgent({
+        cwd: runCwd,
+        agent: BUILTIN_AGENTS[0] as NonNullable<(typeof BUILTIN_AGENTS)[number]>,
+        task: "look",
+        port: makeFakePort([textTurn("first", { prompt: 500, completion: 500 }), textTurn("report")]).port,
+        model: "m",
+        label: "nvidia",
+        depth: 0,
+        tokenBudget: 100000,
+        costCheck: (buckets) => {
+          const total = buckets.reduce((s, b) => s + b.prompt + b.completion, 0);
+          checks.push(total);
+          return total > 100 ? { stopReason: "cost_budget" as const, message: "cost budget exhausted" } : null;
+        },
+      });
+      ok(checks.length > 0, "the child evaluated the ceiling inside its own run");
+      ok(!r.ok, "a child that crossed the ceiling does not report success");
+      ok(r.error?.includes("cost budget"), `the child reports why it stopped: ${r.error ?? ""}`);
     } finally {
       fs.rmSync(runCwd, { recursive: true, force: true });
     }

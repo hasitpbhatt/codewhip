@@ -5,6 +5,7 @@ import type { ChatPort } from "./provider-port.js";
 import { getProviderConfig, isLoopbackBaseUrl } from "./custom-providers.js";
 import { resolveKey } from "./auth.js";
 import { isModelAllowed } from "./model-allowlist.js";
+import { notEnabledMessage, unconsentedAgentModels } from "./agent-consent.js";
 import { costNote, estimateCost, meteredCost, mixReceiptString, resolveRoute, type TaskClass } from "./router.js";
 import { agentLoop, type AskContext, type ApprovalAnswer, type LoopEvent, type LoopResult } from "./loop.js";
 import type { LoopMsg } from "./provider-port.js";
@@ -279,6 +280,16 @@ function prepare(options: QueryOptions, promptText: string, signal: AbortSignal)
     options.permissionMode
     ?? (options.plan ? "plan" : options.yolo ? "bypassPermissions" : settings.defaultMode ?? "default");
   const roots = resolveRoots(settings.additionalDirs, cwd).roots;
+  // The SDK re-derives the roster from disk too, so a repo whose agent file
+  // pins an unconsented model must be refused here exactly as the CLI refuses
+  // it. A host-supplied port keeps the host's own consent decision, and a plan
+  // run cannot delegate, so neither is gated.
+  if (options.port === undefined && mode !== "plan") {
+    const pins = unconsentedAgentModels(cwd, [], [pid], options.dir);
+    if (pins.length > 0) {
+      throw new SdkError(`agents: ${pins.map((p) => `${p.name} pins "${p.model}" — ${notEnabledMessage(pid, p.model, options.dir)}`).join("; ")}`);
+    }
+  }
   if (options.maxBudgetUsd !== undefined && estimateCost(pid, mid, 1000, 1000) === null) {
     throw new SdkError(
       `maxBudgetUsd refused: ${pid}:${mid} is unpriced (cost untracked) — cap tokens with tokenBudget`

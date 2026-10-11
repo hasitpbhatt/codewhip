@@ -38,6 +38,7 @@ import { EVAL_TASKS_DIR, listEvalTasks, runEval } from "./eval.js";
 import { readEvalRecords, summarizeEval } from "./eval-store.js";
 import { appendPromotedDeny, declineCandidates, loadPromotedDenies, policyMdPath } from "./policy-store.js";
 import { BUILTIN_AGENTS, CHILD_MAX_STEPS_CAP, listAgentsWithErrors, mainThreadTurn, parseAgentsJson, type AgentDef } from "./subagents.js";
+import { notEnabledMessage, unconsentedAgentModels } from "./agent-consent.js";
 import { expandCommand, listCommandsWithErrors, maybeExpandCommand } from "./commands.js";
 import { loadHooks } from "./hooks.js";
 import { removeRule } from "./remember-store.js";
@@ -1122,6 +1123,15 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   // and not only the loop — and an unknown name is refused before a token is
   // spent, exactly like a mistyped --add-dir or an unreadable schema file.
   let agentPersona = "";
+  // The pin the `--agent` entry chose, if it chose one. It travels to
+  // `resolveRoute` as a pin — a model ON whatever provider routing picks —
+  // not into `opts.model`, which is what "the human typed --model" means.
+  // The old code set `modelExplicit: true` to carry it, which made the router
+  // short-circuit on an override-shaped model and skip class routing: a
+  // private-class prompt never reached `localRoute` and went to nvidia, and a
+  // pinned id belonging to another provider (qwen3:35b on ollama, say) was
+  // shipped to nvidia's API. Both die with the real bug.
+  let agentPin: string | undefined;
   if (opts.agent !== undefined) {
     const roster = listAgentsWithErrors(process.cwd(), opts.agents ?? []);
     for (const e of roster.errors) say(`!! agents: ${e}`);
@@ -1139,10 +1149,14 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       disallowedTools: opts.disallowedTools,
     });
     agentPersona = turn.append;
+    agentPin = turn.rotationOff ? turn.model : undefined;
+    // A pin belongs to one model id, so rotation candidates for the routed
+    // family are dropped exactly as on a child (src/subagents.ts) — but
+    // `modelExplicit` keeps its meaning, so the class-routing refusal below
+    // (and the receipt's note) stay true.
     opts = {
       ...opts,
-      model: turn.model,
-      ...(turn.rotationOff ? { modelExplicit: true, models: [] } : {}),
+      ...(turn.rotationOff ? { models: [] } : {}),
       disallowedTools: turn.disallowedTools,
     };
     const added = turn.disallowedTools.length - wantedFilters;
@@ -1156,7 +1170,11 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     prompt: opts.prompt,
     taskClass: opts.taskClass,
     provider: opts.providerExplicit || opts.free || opts.autoFailover ? opts.provider : undefined,
-    model: opts.modelExplicit || opts.free || opts.autoFailover ? opts.model : undefined,
+    // The human's own model only. A `--free`/`--auto-failover` head model is a
+    // derived default, not a typed one: passing it here would outrank an agent
+    // pin the human never contradicted (and would pretend the head was chosen).
+    model: opts.modelExplicit ? opts.model : undefined,
+    ...(agentPin === undefined ? {} : { pin: agentPin }),
     defaultProvider: "nvidia",
     defaultModel: PROVIDERS.nvidia.defaultModel,
   });
@@ -1164,6 +1182,24 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
     console.error(`codewhip: ${routed.error}`);
     process.exitCode = 1;
     logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:private-without-consent", routed.error);
+    printStubReceipt(opts.model, opts.provider);
+    return;
+  }
+  // A `--free`/`--auto-failover` head is the HARNESS's pick from the free chain,
+  // not the human naming a provider — but handing it to resolveRoute as one
+  // short-circuits class routing, so `localRoute`'s private-without-consent
+  // refusal never ran and a secret-bearing prompt went to a cloud free tier
+  // while the banner under it claimed consent ("private run: head provider
+  // only"). The hops were cleared; the head still ran. Refuse instead: the
+  // only honest destination for a private prompt is a runtime the operator
+  // registered, or a provider they typed. `--provider x --free` is still
+  // explicit consent, because the human named x.
+  if (routed.taskClass === "private" && !opts.providerExplicit && (opts.free || opts.autoFailover)) {
+    console.error(
+      "codewhip: --free/--auto-failover choose their head from the free chain, which is a cloud tier the harness picked — a private-class prompt may not go there. Route a local runtime (codewhip provider add ollama-local --base-url http://127.0.0.1:11434 --model <id>) or name a provider with --provider to consent"
+    );
+    process.exitCode = 1;
+    logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:private-without-consent", "free-chain head is not provider consent");
     printStubReceipt(opts.model, opts.provider);
     return;
   }
@@ -1234,7 +1270,10 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
   }
   // Consent gate: no exact provider:model entry, no run. Loopback locals are exempt (registration is the consent there).
   if (!isLoopbackBaseUrl(runCfg.baseUrl) && !isModelAllowed(opts.provider, opts.model)) {
-    console.error(`codewhip: model "${opts.provider}:${opts.model}" is not enabled — run: codewhip provider enable ${opts.provider}:${opts.model} (see: codewhip provider allowed)`);
+    // The same sentence the roster gate below prints: a stale pin enabled on
+    // another provider is the likeliest real case, and "enable it here" would
+    // send someone reinstalling the line they already have.
+    console.error(`codewhip: ${notEnabledMessage(opts.provider, opts.model)}`);
     process.exitCode = 1;
     logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:model-not-enabled", `${opts.provider}:${opts.model} not enabled`);
     printStubReceipt(opts.model, opts.provider);
@@ -1334,6 +1373,30 @@ async function cmdRun(opts: RunOptions, replState?: ReplState): Promise<void> {
       model: targetModel,
       port: makePortForConfig(nextCfg, failoverKey, undefined, failoverSource),
     }];
+  }
+  // Consent for every model id this run's roster could dial besides its own
+  // head. A child's `model:` rides this run's port (`child-run.ts` → the
+  // parent's `current.port`), so the pairs in play are the routed head plus
+  // each hop above — a hop could hand a child a port its pin was never
+  // enabled on. REFUSED, not stripped: the loop re-derives the roster itself
+  // (`loop.ts`), so a "pin dropped" banner here would be a lie over a pin that
+  // still dials. Plan mode is exempt because plan runs cannot delegate at all
+  // (delegate is refused pre-ladder), and refusing a run that cannot make the
+  // call would be a memo, not a gate.
+  if (mode !== "plan") {
+    const ports = [opts.provider, ...failoverTargets.map((t) => t.label)];
+    const pins = unconsentedAgentModels(process.cwd(), opts.agents ?? [], ports);
+    if (pins.length > 0) {
+      for (const p of pins) {
+        console.error(
+          `codewhip: agents: ${p.name} pins "${p.model}", which is not enabled on any provider this run can use (${ports.join(", ")}) — ${notEnabledMessage(ports[0] ?? opts.provider, p.model)}`
+        );
+      }
+      process.exitCode = 1;
+      logPreLoopDeny(process.cwd(), opts.prompt, opts.model, "route:agent-model-not-enabled", pins.map((p) => `${p.name}:${p.model}`).join(", "));
+      printStubReceipt(opts.model, opts.provider);
+      return;
+    }
   }
   // Run-scoped request shaping, resolved pre-flight (before a token is spent)
   // so an unreadable --append-system-prompt-file fails like every other guard.

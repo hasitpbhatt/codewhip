@@ -47,6 +47,11 @@ const SURFACE = new Set([
   "src/stream-input.ts",
   "src/metrics.ts",
   "src/model-allowlist.ts",
+  // Consent for the model ids a delegated child could dial. The loop
+  // re-derives the roster from disk, so a pin can only be stopped at the mouth
+  // that resolves the provider; core stays free of the allowlist file (and of
+  // the provider table) by making this surface.
+  "src/agent-consent.ts",
 ]);
 
 const SURFACE_DIRS = new Set(["src/tui", "src/bench"]);
