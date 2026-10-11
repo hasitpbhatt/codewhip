@@ -12,20 +12,31 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DOC = process.argv[2] ?? "docs/moat/20-parity-matrix.md";
+const DOC = process.argv.slice(2).find((a) => !a.startsWith("-")) ?? "docs/moat/20-parity-matrix.md";
 const STATUSES = ["HAVE-plus", "HAVE", "ALIAS", "PARTIAL", "N/S", "GAP"];
 const COUNTED = new Set(["HAVE-plus", "HAVE", "ALIAS", "PARTIAL", "GAP"]);
 
 const lines = fs.readFileSync(path.resolve(DOC), "utf8").split(/\r?\n/);
 const rows = [];
 const problems = [];
+let section = "";
 for (const [i, raw] of lines.entries()) {
+  if (raw.startsWith("## ")) section = raw.slice(3).trim();
   if (!raw.startsWith("|")) continue;
   const cells = raw
     .replace(/\\\|/g, "\u0000")
     .split("|")
     .map((c) => c.trim().replace(/\u0000/g, "|"));
-  if (cells.length < 5) continue; // fewer than 3 real cells: not a matrix row
+  if (cells.length < 5) {
+    // Fewer than 3 cells. Inside the legend that is the 2-column meaning
+    // table; anywhere else it is a matrix row whose cells a bad edit sliced
+    // in half, and skipping it is exactly how rows go missing from the count
+    // without anyone noticing — the header's own rule, enforced.
+    if (section !== "Legend") {
+      problems.push(`${DOC}:${i + 1}: truncated row (${cells.length} cells): ${cells[1] ?? ""}`);
+    }
+    continue;
+  }
   const [feature, status] = [cells[1], cells[2]];
   if (!feature || /^:?-{2,}:?$/.test(status)) continue;
   if (status === "Status" || status === "meaning") continue;
@@ -88,9 +99,36 @@ console.log(`  GAP by wave: ${Object.entries(byWave).map(([w, n]) => `${w}→${n
 const open = rows.filter((r) => r.status === "GAP" && r.wave === "2");
 if (open.length > 0) console.log(`  wave 2 left: ${open.map((r) => r.feature).join(", ")}`);
 for (const p of problems) console.error(`!! ${p}`);
+
+// `--write` owns the Score paragraph. A hand-counted progress bar is what
+// this script exists to replace, and the first version of this block was
+// miscounted by eye (recorded below in the doc itself); the number and the
+// sentences around it are now written from the same parse that checks them.
+const argv = process.argv.slice(2);
+if (argv.includes("--write")) {
+  const waveList = Object.entries(byWave)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([w, n]) => `${w} → ${n}`)
+    .join(", ");
+  const block = [
+    `**${inScope} in-scope rows** — **HAVE/ALIAS/HAVE-plus ${have}**, **PARTIAL ${partial}**, **GAP ${gap}**,`,
+    `i.e. **${pct}%** at parity or better. Remaining GAP rows by wave: ${waveList}. Wave 2 is closed.`,
+  ].join("\n");
+  const marked = lines.join("\n");
+  if (!/\*\*\d+ in-scope rows\*\*[\s\S]*?Wave 2 is closed\./.test(marked)) {
+    console.error(`${DOC}: the Score paragraph was not found — not writing`);
+    process.exit(1);
+  }
+  fs.writeFileSync(DOC, marked.replace(/\*\*\d+ in-scope rows\*\*[\s\S]*?Wave 2 is closed\./, block), "utf8");
+  console.log(`wrote the Score paragraph in ${DOC} from ${rows.length} rows`);
+}
 for (const d of drift) console.error(`!! ${d}`);
-if (problems.length > 0 || drift.length > 0) {
-  console.error(`parity report is inconsistent: ${problems.length + drift.length} problem(s)`);
+if (problems.length > 0) {
+  console.error(`parity report is inconsistent: ${problems.length} problem(s)`);
+  process.exit(1);
+}
+if (!argv.includes("--write") && drift.length > 0) {
+  console.error(`parity report is inconsistent: ${drift.length} problem(s)`);
   process.exit(1);
 }
 console.log("score matches the rows");

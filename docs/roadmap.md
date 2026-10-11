@@ -58,10 +58,10 @@ five-persona committee verdict (`docs/moat/07-committee.md`). All are implementa
   giving the session a ledger, agent files gaining `tools`/`disallowedTools`
   (the other eight fields refused by name), `ask_user` letting the model put
   one question back to the human, and `--agents`/`--agent` moving that roster onto
-  the command line: 43 HAVE/ALIAS,
-  18 PARTIAL, 41 GAP (**42.2%**), 19 rows left in the wave, led by parallel tool
-  exec and hook events 3→33. No row is closed by downgrading it, and the MCP
-  client row carries its own ruling before it lands.
+  the command line. No row is closed by downgrading it, and the MCP client row
+  carries its own ruling before it lands. The tally lives in one place —
+  `npm run parity` over `docs/moat/20-parity-matrix.md`, machine-written and
+  CI-gated — and is not restated here.
 - [ ] **Pick the 90-day frame** — verifiable team delegation vs honest $0 on-ramp; running both produces a brand war (trust pitch vs anonymous free relays). Decision + analysis: `docs/moat/10-competitive-reality.md`.
 - [x] **Paper track: REOPENED as verdict-driven privilege (C3, ML frame).** 2026-09-20 ruling (`docs/moat/00-convergence.md`): single bet = induce per-repo least-privilege tool permissions from one-bit human verdicts + near-miss co-signals; target NeurIPS/ICML (main: method + sample-complexity; D&B: first public verdict-telemetry corpus). Shipped: core/surface boundary (`src/boundary.test.ts`, no deletions — registry/serve/TUI frozen as product surface), approval-shape telemetry on outcomes, `src/immunity/` samples+rules+miner+simuser+LLM baselines, 67-case escape suite (`npm run immunity`; first run found+fixed a real Windows-destructor escape), 16-seed robustness sweep (`--sim --seeds`), salted corpus export (`--export`), induced-set replay (`--replay`, P3 PASS). Protocol + results: `docs/moat/18-verdict-privilege-experiments.md`. Next: real dogfood telemetry (≥100 labeled events), capable-model baselines, arXiv. *(2026-09-18 physiology scaffold in `docs/moat/15-agent-physiology.md` stays as the frame; C2/C1 demoted to follow-up)*
 

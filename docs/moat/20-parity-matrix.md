@@ -70,7 +70,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `--model` / `--fallback-model` | HAVE | `--model`, `--models`, `--failover`, `--free` |
 | `--effort low…max` | **GAP-3** | no thinking-budget control |
 | `--permission-mode` 7 modes | **HAVE** | six modes shipped (`default`/`acceptEdits`/`plan`/`bypassPermissions`/`dontAsk`/`manual`) — set at `src/settings.ts:21`, exact-match parse `:32`, flag parse `src/index.ts:613`, precedence `:1208`, ladder rungs `src/loop.ts:951`–`:1020`. The 7th (`auto`) is the classifier row below, not counted twice. Before Wave 2c this row was `--plan` + `--yolo` only |
-| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:5`), `:76` read and `:104` write containment over all roots; flag parse `src/index.ts:625`, validation before the run `:1209`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:82` → read/edit/write/search → `src/subagents.ts:604`. Was a single-cwd jail before Wave 2c |
+| `--add-dir` multi-root | **HAVE** | `src/tools/jail.ts:23` `resolveRoots` (existence + realpath + `MAX_ROOTS:16`), `:76` read and `:104` write containment over all roots; flag parse and cap `src/index.ts:605`, validation before the run `:1224`; `src/checkpoints.ts:65` admits an out-of-cwd target so `rollback` can undo it; threaded through `src/tools/types.ts:82` → read/edit/write/search → `src/subagents.ts:604`. Was a single-cwd jail before Wave 2c |
 | `--bare` (skip discovery of hooks/skills/commands) | **GAP-4** | absent |
 | `--debug`, `--debug-file` | **HAVE** | both arms exist and neither is a verbosity dial on the transcript: they capture the decisions the loop makes and never prints. `--debug` writes to the prose channel (so `-p` keeps stdout as data), `--debug-file <path>` appends to a file (`src/index.ts:592`, `:594`). The sink owns the rules so no call site can forget them: every line is redacted before it lands (`src/debug.ts:120`), an `*.env*` target and any path inside `.codewhip/` are refused because that is where the audit chain, keys and policy this log describes live (`src/debug.ts:41`), and at 8 MiB — or any write error — it warns once and goes quiet, since a broken diagnostic must never kill the run it is explaining (`src/debug.ts:88`). Lines append synchronously: the tail of the run that crashed is the only part anyone reads (`src/debug.ts:104`). 16 sentences sit in the loop, led by the rung that answered a call (`src/loop.ts:1140`) and per-call exec timing with the audit seq (`src/loop.ts:1273`); subagents inherit the parent's sink, because the surprise usually hides in the child (`src/subagents.ts:602`) |
 | `--ax-screen-reader` / 80-col safe output | ALIAS | `--no-tui` |
@@ -78,7 +78,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | `update`, `install [version]` | **GAP-4** | no update path |
 | `doctor` (read-only diagnostics) | PARTIAL | `codewhip trust` covers chain/policy/keys/memory, not installation |
 | `setup-token` (long-lived CI token) | **GAP-4** | env keys only |
-| `gateway` (self-hosted gateway) | ALIAS | `codewhip 
+| `gateway` (self-hosted gateway) | N/S | distribution of a hosted service, per the scope ruling above — codewhip's own equivalent was removed with `serve` |
 | `import` from other agents | **GAP-5** | absent |
 | `logs`/`attach`/`respawn`/`stop`/`rm`/`daemon` — background session supervisor | **GAP-3** | `run_in_background` jails *commands* (`src/tools/background-tasks.ts`); no detachable *agent session* |
 | `--bg/--background` session start | **GAP-3** | absent |
@@ -134,7 +134,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | TaskCreate/Get/List/Update | **HAVE** | per-item tasks whose edges gate claiming: `todo` list/get/replace/update (`src/tools/todo.ts:71`, `:62`), items carry `description`/`activeForm`/`owner`/`blocks`/`blockedBy`, either edge direction stored both ways (`src/tools/todo-store.ts:146`), a dangling edge (`:129`), a cycle (`:131`) and a claim past an open edge (`:133`) all refused — and re-checked on every write, so the file's invariants hold rather than the argument's (`src/tools/todo.ts:47`) |
 | Agent/`Skill` tool | PARTIAL | `delegate`, `delegate_many`; no model-invoked skills |
 | AskUserQuestion | PARTIAL | `ask_user`: one question per call (not up to four), no `header`/`preview` field, and a numbered readline rather than a selection widget — `src/tools/ask-user.ts:82`, rendered at `src/index.ts:968`; allow-class at `src/policy.ts:430`, refused for a child at `src/loop.ts:884`, advertised only where a keyboard is reachable (`src/tools/registry.ts:316`) |
-| ToolSearch / WaitForMcp
+| ToolSearch / WaitForMcpServers | **GAP-3** | absent — no MCP client, so there is no MCP tool to search for |
 | EnterWorktree/ExitWorktree, `isolation: worktree` | **GAP-3** | absent; worktree *escape* is denied today |
 | LSP tool | **GAP-5** | absent |
 | CronCreate/List/Delete, RemoteTrigger, PushNotification, SendUserFile, EndConversation, ReportFindings, Artifact | N/S | cloud/push platform surface |
@@ -147,7 +147,7 @@ recorded ruling when it lands, because it touches the audit boundary.
 | Category capability | Status | codewhip evidence |
 |---|---|---|
 | `<tool>/agents/*.md` + frontmatter | PARTIAL | `.codewhip/agents/<name>.md` (not the competitor dir), flat frontmatter: `description`, `model`, `max_steps`, `tools`, `disallowedTools` (`src/subagents.ts:344`) |
-| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcp
+| `tools`, `disallowedTools`, `permissionMode`, `skills`, `mcpServers` in an agent file | PARTIAL | `tools`/`disallowedTools` are honoured (narrow-only, compiled onto the child's refusal list); `permissionMode`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation` are refused BY NAME with their reason, as is any unknown key (`src/subagents.ts:73`, `:482`) |
 | `--agents` JSON, `--agent` | PARTIAL | `--agents '{"<name>":{"description":…,"prompt":…}}'` is the same roster in JSON (`src/subagents.ts:209`) and outranks `.codewhip/agents/*.md`, which outranks the built-ins (`src/subagents.ts:424`, `src/loop.ts:426`); `--agent <name>` puts an entry on the main thread (`src/index.ts:1145` → `src/subagents.ts:522`). Three deltas: the prompt is appended, never a replacement for the harness base; a `tools` narrowing on the main thread can only refuse read/search (`src/subagents.ts:480`); and there is no mid-session agent switch |
 | Built-in Explore / Plan / general-purpose | ALIAS | `explore`, `review`, `plan` |
 | Agent view panel, parallel background agents, `SendMessage`, teammates | **GAP-3** | children are synchronous and depth-capped |
@@ -175,8 +175,8 @@ recorded ruling when it lands, because it touches the audit boundary.
 | MCP client: stdio/SSE/HTTP/ws, `mcp add` subcommand, scopes local/project/user | **GAP-3** | zero MCP in `src/` — needs a kill-list ruling |
 | MCP OAuth (`mcp login/logout`) | **GAP-3** | absent |
 | MCP resources/prompts as tools and slash commands | **GAP-3** | absent |
-| `mcp__
-| `allowedMcp
+| `mcp__<server>__<tool>` tools | **GAP-3** | absent — no MCP client |
+| `allowedMcpServers` settings | **GAP-4** | absent |
 | Agent SDK (TS/Python `query()`, `canUseTool`, custom tools) | PARTIAL → **GAP-2** → **HAVE** · Python ALIAS | `src/sdk.ts:480` `query()`, `:161` `tool()`, `:319` `askUserFor` (`canUseTool` on the ask rung); gates resolved at `:217` before any call. Python drives the same engine over NDJSON (`--input-format`/`--output-format stream-json`), without an in-process decider |
 
 ## H. Memory and project files
@@ -210,10 +210,16 @@ recorded ruling when it lands, because it touches the audit boundary.
 ## Score
 
 Counted by `npm run parity` (`scripts/parity.mjs`), which parses the status
-column of every row above and fails if this section no longer matches them:
-**102 in-scope rows** — **HAVE/ALIAS/HAVE-plus 44**, **PARTIAL 20**, **GAP 38**,
-i.e. **43.1%** at parity or better. Remaining GAP rows by wave: 3 → 16, 4 → 13,
-5 → 9. Wave 2 is closed.
+column of every row above and fails if this section no longer matches them.
+The paragraph itself is **written by `npm run parity -- --write`** from that
+parse; a hand-edited score is overwritten, and a row whose cells a bad edit
+sliced in half is reported as an error rather than skipped — three rows of this
+table were dropped that way in 2026-10 (the debranding sweep deleted the
+substring "serve" and took "pre**served**", "ob**serve**d", "mcp**Servers**"
+with it), which made the counter under-report and the score look *closer*
+than the rows:
+**101 in-scope rows** — **HAVE/ALIAS/HAVE-plus 43**, **PARTIAL 20**, **GAP 38**,
+i.e. **42.6%** at parity or better. Remaining GAP rows by wave: 3 → 15, 4 → 14, 5 → 9. Wave 2 is closed.
 
 Two corrections, recorded rather than made silently (2026-09-24, at Wave 1
 close):
