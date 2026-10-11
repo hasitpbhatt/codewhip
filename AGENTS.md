@@ -10,13 +10,15 @@ npm run dev        # tsx src/index.ts (dev loop)
 npm run build      # tsc -> dist/
 npm run typecheck  # tsc --noEmit (run before finishing any src/ change)
 npm run lint       # oxlint src --deny-warnings (TS-7-native; typescript-eslint can't run here)
-npm test           # tsx --test src/**/*.test.ts
+npm test           # tsx --test src/*.test.ts src/*/*.test.ts  (both patterns: the shell expands them, so a nested src/x/y/*.test.ts is NOT discovered)
 npm start          # node dist/index.js
 ```
 
 Optional runners: `npm run bench` (quality/cost benchmarks),
-`npm run parity` (recount `docs/moat/20-parity-matrix.md` and fail if its
-Score section no longer matches its own rows — run it after touching that file)
+`npm run parity` (recount `docs/moat/20-parity-matrix.md`, fail if its Score
+section no longer matches its own rows, and with `-- --write` own that section
+from the rows; it is a CI step, so it can no longer drift — run it after
+touching that file)
 and `npm run immunity` (the C3 escape suite and replay; see
 `docs/moat/18-verdict-privilege-experiments.md`).
 

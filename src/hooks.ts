@@ -273,6 +273,11 @@ function defaultSpawnHook(command: string, stdin: string, env: Record<string, st
     child.stderr?.on("data", (d: Buffer) => {
       if (stderr.length < STDOUT_CAP) stderr += d.toString("utf8");
     });
+    // A hook that exits without draining stdin (exit 2, false, grep -q,
+    // git diff --quiet) is ordinary, not an error: the write races the
+    // child's exit and loses. Without this listener that EPIPE surfaces as
+    // an uncaught exception on the socket and kills the run that spawned it.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(stdin);
     child.on("error", (err) => {
       clearTimeout(timer);
