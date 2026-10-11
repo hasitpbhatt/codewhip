@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseRunArgs } from "./index.js";
 import { CHILD_DEFAULT_MAX_STEPS } from "./subagents.js";
+import { PROVIDERS } from "./provider.js";
 
 /**
  * Wave 3f CLI surface (docs/moat/20-parity-matrix.md row `--agents` JSON,
@@ -68,4 +69,21 @@ test("the two flags never match each other's spelling", () => {
   const eq = parse(["--agents={}", "go"]);
   assert.ok(eq !== null);
   assert.equal(eq.agent, undefined, "--agents=… is not --agent with an s left over");
+});
+
+test("--agent never claims to be --model: modelExplicit stays false until the human types one", () => {
+  // `--agent` is the only flag that can change which model the run uses without
+  // the human naming one (an agent file may pin one). It arrives with
+  // modelExplicit: false by design, and cmdRun must keep it that way: driving
+  // resolveRoute through the model parameter instead of a `pin` makes the
+  // router skip class routing, which is how a private-class prompt once
+  // reached a cloud provider under "explicit override" (regression 2026-10-11,
+  // covered end-to-end by the built CLI — cmdRun is not unit-driven,
+  // session-naming.test.ts:27 — and by the `pin` cases in router.test.ts).
+  const opts = parse(["--agent", "review", "go"]);
+  assert.ok(opts !== null);
+  assert.equal(opts.modelExplicit, false, "the entry's pin is not the human's --model");
+  assert.equal(opts.model, PROVIDERS.nvidia.defaultModel, "the routed default survives; the pin rides resolveRoute");
+  // ...and the shorthand that actually means it still works.
+  assert.equal(parse(["--agent", "review", "--model", "m", "go"])?.modelExplicit, true);
 });

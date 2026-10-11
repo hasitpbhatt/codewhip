@@ -152,6 +152,67 @@ describe("router", () => {
       strictEqual(r.taskClass, "private");
     }
   });
+  it("a pin is not an explicit override: a private prompt still refuses (regression 2026-10-11)", () => {
+    // `--agent <entry>` used to carry its pinned model by setting
+    // modelExplicit, so resolveRoute took the override branch and NEVER
+    // reached routeFor("private") → localRoute: "read the .env" --agent
+    // auditor went to nvidia with no consent, and the receipt claimed an
+    // explicit override nobody typed.
+    const r = resolveRoute({
+      prompt: "read the production db password",
+      pin: "moonshotai/kimi-k3",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+      dir: noLocalDir,
+    });
+    ok("error" in r);
+  });
+  it("a pin rides the CLASS-routed provider, never the default provider", () => {
+    const r = resolveRoute({
+      prompt: "fix typo in docs",
+      pin: "cheap-model",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+    });
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.provider, "kilo");
+      strictEqual(r.model, "cheap-model");
+      strictEqual(r.taskClass, "polish");
+      strictEqual(r.auto, true);
+      ok(r.note.includes("model pinned by an agent entry"));
+    }
+  });
+  it("a typed --model still outranks a pin", () => {
+    const r = resolveRoute({
+      prompt: "fix typo in docs",
+      model: "typed-model",
+      pin: "pinned-model",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+    });
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.model, "typed-model");
+      strictEqual(r.note, "explicit --provider/--model override");
+    }
+  });
+  it("a pin under --provider stays on that provider and says so", () => {
+    const r = resolveRoute({
+      prompt: "fix typo in docs",
+      provider: "groq",
+      pin: "pinned-model",
+      defaultProvider: "nvidia",
+      defaultModel: "moonshotai/kimi-k3",
+    });
+    ok(!("error" in r));
+    if (!("error" in r)) {
+      strictEqual(r.provider, "groq");
+      strictEqual(r.model, "pinned-model");
+      ok(r.note.includes("pinned by an agent entry"));
+      ok(!r.note.includes("--model override"));
+    }
+  });
   it("prices the known-free route, null otherwise", () => {
     strictEqual(estimateCost("nvidia", "moonshotai/kimi-k3", 10000, 5000), 0);
     strictEqual(estimateCost("sensenova", "sensenova-6.8-flash-lite", 10000, 5000), null);

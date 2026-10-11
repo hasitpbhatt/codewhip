@@ -271,12 +271,20 @@ export type RouteResolution =
 /**
  * Explicit flags always win. Otherwise classify the prompt and route by
  * class. Returns {error} for private-without-explicit-provider.
+ *
+ * `pin` is a model an agent roster entry named (`model:` in
+ * `.codewhip/agents/<n>.md`, or `--agent <n>`). It is a model ON the routed
+ * provider and nothing else, which is why it is deliberately not part of the
+ * explicit-override test: an override-shaped pin short-circuits `routeFor`,
+ * so `localRoute`'s private-without-consent refusal never runs and the
+ * receipt claims an override nobody typed. A typed `--model` still outranks it.
  */
 export function resolveRoute(opts: {
   prompt: string;
   taskClass?: TaskClass;
   provider?: ProviderId;
   model?: string;
+  pin?: string;
   defaultProvider: ProviderId;
   defaultModel: string;
   /** Config dir for the local-provider lookup; tests inject a temp dir. */
@@ -286,10 +294,12 @@ export function resolveRoute(opts: {
     const pid = opts.provider ?? opts.defaultProvider;
     return {
       provider: pid,
-      model: opts.model ?? getProviderConfig(pid)?.defaultModel ?? opts.defaultModel,
+      model: opts.model ?? opts.pin ?? getProviderConfig(pid)?.defaultModel ?? opts.defaultModel,
       taskClass: opts.taskClass ?? classify(opts.prompt).taskClass,
       auto: false,
-      note: "explicit --provider/--model override",
+      note: opts.model === undefined && opts.pin !== undefined
+        ? "explicit --provider; model pinned by an agent entry"
+        : "explicit --provider/--model override",
     };
   }
   const taskClass = opts.taskClass ?? classify(opts.prompt).taskClass;
@@ -299,10 +309,12 @@ export function resolveRoute(opts: {
   }
   return {
     provider: routed.provider,
-    model: opts.model ?? routed.model,
+    // `opts.model` cannot be set here — the branch above returned it — so the
+    // pin takes that dead term's place rather than sitting beside it.
+    model: opts.pin ?? routed.model,
     taskClass,
     auto: opts.taskClass === undefined,
-    note: routed.note,
+    note: opts.pin === undefined ? routed.note : `${routed.note}, model pinned by an agent entry`,
   };
 }
 
