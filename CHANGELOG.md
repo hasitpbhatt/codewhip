@@ -502,6 +502,93 @@ parse time there rather than silently doing nothing.
   `docs/features.md` and this file; every fact removed from it is verifiably
   preserved in one of those three.
 
+### Fixed
+
+- **A child budget split could hand out more than the parent had.**
+  `allocateChildBudgets` clamped each share at `Math.max(1, …)`, so four
+  children on a two-token remainder each drew 1 and the *sum exceeded the
+  pool* while `parentBudget` still reported 2 — exactly the tight-budget case
+  the split exists for. The clamps are gone (the fix is their deletion), the
+  remainder stays in the coordination reserve, and `src/budget.test.ts` pins
+  the invariant over a table of (parent, count) pairs; the module had no test
+  file at all. A 0 allocation is now dropped and *named* in the tool output
+  rather than re-floored into a run, and `delegate`'s pool-exhausted case is
+  a refusal with the numbers instead of a 1-token child.
+- **A `delegate_many` on a run with no token budget started silently.** The
+  "`[agent] started:`" lines sat inside the `budget !== undefined` branch, so
+  a fan-out went quiet between the last parent event and the first report.
+  The start line is unconditional now — it is the reason the line exists.
+- **A single child had no dollar ceiling of its own.** `childArgs` carried no
+  `costCheck`, so `delegate` under `--max-budget-usd` spent its whole 85%
+  token share before the parent re-read the ceiling at its next turn. The
+  ceiling is forwarded to a *single* child; a fan-out deliberately does not
+  get it — four concurrent holders each see only their own buckets, so each
+  would believe it alone owns the cap and the fan-out would spend four times
+  what it reports. Its ceiling stays at the parent's turn boundary.
+- **Three capability rows were silently deleted from the parity matrix, and
+  the counter agreed.** A debranding sweep deleted the substring "serve" from
+  the whole tree, which took "pre**served**", "ob**serve**d", "mcp**Servers**"
+  and "WaitForMcp**Servers**" with it and sliced five rows in half;
+  `scripts/parity.mjs` skipped any table line with fewer than 3 cells, so the
+  counter under-reported (97 in-scope against the truth of 101) and the drift
+  read as *the score being wrong*. The rows are restored, the parser now
+  reports a truncated row as an error instead of skipping it (its own header
+  prohibited exactly that), and the Score paragraph is **written by
+  `npm run parity -- --write`** from the same parse — a hand-counted progress
+  bar is what this script exists to replace. Parity is now a CI step, so it
+  cannot drift again. The `--add-dir` row's `MAX_ROOTS:5` was also wrong
+  (`src/tools/jail.ts:5` says 16) and two of its `index.ts` anchors pointed at
+  unrelated lines; `docs/roadmap.md` lost its third hand-maintained copy of
+  the tally (`AGENTS.md` forbids shadow roadmaps).
+- **`--free`/`--auto-failover` let a private-class prompt through to a cloud
+  tier.** The free chain picks its own head, and cmdRun handed that head to
+  `resolveRoute` as an explicit provider — which short-circuits class routing,
+  so `localRoute`'s private-without-consent refusal never ran while the banner
+  *under* the run claimed consent ("private run: head provider only"). The hops
+  were cleared; the head still ran. The run now refuses, naming the local
+  runtime to register or `--provider` to consent. `--provider x --free` still
+  consents, because the human named x.
+- **`npm test` ran 16 of 64 test files.** The script was
+  `tsx --test src/**/*.test.ts`; npm runs scripts through a POSIX shell, where
+  `**` without `globstar` is `*`, so the pattern expanded to only
+  `src/<dir>/*.test.ts`. `loop.test.ts`, `policy.test.ts`, `audit.test.ts`,
+  `subagents.test.ts` and 44 other files never executed — in CI and in
+  `prepublishOnly`, which is how this package's governance story shipped on a
+  suite that had not run it. The patterns are now explicit and expanded by the
+  shell, which is the one form that behaves identically on Node 20 and Node 22
+  (a *quoted* glob works only on ≥21, where the test runner expands it itself);
+  `AGENTS.md` records the consequence, that a test nested deeper than
+  `src/<dir>/` is discovered by neither pattern.
+- **A hook that exits without draining stdin crashed the run.** `sh -c` hooks
+  (`exit 2`, `false`, `grep -q`, `git diff --quiet`) lose the write race
+  against the child's exit, and the resulting EPIPE had no `error` listener on
+  the stdin socket, so it surfaced as an uncaught exception inside the hook
+  spawner. `src/hooks.test.ts` caught it — in one of the 48 files that never
+  ran. Reproduced 7 failures in 20 runs before the guard, 0 in 20 after.
+- **`--agent <entry>` routed a private-class prompt past the refusal and onto a
+  cloud provider.** The entry's pinned model was carried by setting
+  `modelExplicit`, so `resolveRoute` short-circuited on an override-shaped
+  model and never called `routeFor("private")`/`localRoute`;
+  `codewhip run "read the .env" --agent auditor` went to nvidia with no
+  consent, and the receipt claimed an explicit override nobody typed. `router.ts`
+  now takes a distinct `pin` — a model *on the routed provider*, not an
+  override — so class routing (and its refusal) runs and the note on the
+  receipt stays true. The same line also shipped a pinned id belonging to
+  another provider (`qwen3:35b` on an ollama run) to nvidia's API; the head
+  gate now grades the routed pair and refuses it by name.
+- **A committed agent file could dial any model on the operator's key.** A
+  child's `model:` rides the parent's port and was never checked against the
+  consent allowlist, so `.codewhip/agents/review.md` (a file a repo commit, or
+  a clone, can drop in) chose the model — with the file's body replacing the
+  child's system prompt. One gate, in both mouths that resolve a provider
+  (`cmdRun`, `sdk.prepare`), grades the resolved roster against the run's head
+  plus every hop a failover could hand a child, and refuses with a sentence
+  naming the provider the id *is* enabled for. Refused, not stripped: the loop
+  re-derives the roster from disk, so a "pin dropped" banner would be a lie
+  over a pin that still dials. The old `src/subagents.test.ts` case that
+  asserted the pin reaching the port is kept and relabelled as core plumbing
+  only — consent was never this layer's job.
+
 ## [0.4.0] — 2026-09-24
 
 Cost behavior: new builtins are unpriced (`cost untracked`, console
