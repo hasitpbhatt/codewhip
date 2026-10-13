@@ -246,7 +246,7 @@ test("goal loop: maxBudgetUsd stops when metered cost is met", async () => {
   assert.equal(res.turns, 1);
 });
 
-test("goal loop: maxBudgetUsd with unknown cost never pretends to meter", async () => {
+test("goal loop: maxBudgetUsd stops when a turn becomes unpriced", async () => {
   const { run } = makeFakeLoop([
     { text: "t1", stopReason: "complete", toolCalls: 1, usageByModel: [{ label: "x", model: "m", prompt: 10, completion: 5 }] },
     { text: "t2", stopReason: "complete", toolCalls: 0 },
@@ -255,15 +255,14 @@ test("goal loop: maxBudgetUsd with unknown cost never pretends to meter", async 
     goal: "g",
     prompt: "p",
     maxTurns: 2,
-    maxBudgetUsd: 0,
+    maxBudgetUsd: 1,
     cwd: process.cwd(),
     agentLoop: run,
-    // No estimateCost injected, and one leg explicitly unpriced: the
-    // ceiling cannot be evaluated, so the loop runs to completion
-    // instead of stopping on a fiction.
     estimateCost: (buckets) => (buckets.length === 0 ? 0 : null),
   });
-  assert.equal(res.stopReason, "complete");
+  assert.equal(res.stopReason, "error");
+  assert.equal(res.turns, 1);
+  assert.equal(res.finalResult.error?.includes("cost became untracked"), true);
   assert.equal(res.receipts[0].costUsd, null);
 });
 

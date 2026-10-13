@@ -222,6 +222,10 @@ export async function runGoalLoop(opts: GoalOpts): Promise<GoalResult> {
       return { turns: turn, receipts, finalResult: lastResult, stopReason: lastResult.cancelled ? "cancelled" : "error" };
     }
 
+    if (opts.maxBudgetUsd !== undefined && totalCost === null) {
+      return { turns: turn, receipts, finalResult: { ...lastResult, error: "cost became untracked; stopping because --max-budget-usd cannot be enforced", stopReason: "error" }, stopReason: "error" };
+    }
+
     // Strip system messages by role, not position: the loop rebuilds the
     // system prompt fresh per turn (same rule as cmdRun's continued).
     history = lastResult.messages.filter((m) => m.role !== "system");

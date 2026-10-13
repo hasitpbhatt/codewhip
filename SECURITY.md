@@ -49,9 +49,11 @@ repos claiming signed status, misleading receipts.
 
 Honest about what sandbox v1 is *not*:
 
-- The jail is a Node path jail, not OS isolation. A malicious model output
-  that stays inside the jail and inside policy is contained by policy, not
-  by a sandbox — E2B/Firecracker profiles are H2 (`docs/roadmap.md`).
+- The jail is a Node path jail, not OS isolation. Path validation and file
+  mutation are separate operations; a concurrent local attacker who can swap
+  symlinks in the workspace may race that check. Do not treat the jail as a
+  boundary against hostile local processes — use OS isolation for that threat.
+  E2B/Firecracker profiles are H2 (`docs/roadmap.md`).
 - The `init` keypair is filesystem permissions (0600), not encryption. On a
   shared machine, prefer env-var keys over `auth login`.
 - Unsigned repos (`sig: null`) are expected before `codewhip init`; verify

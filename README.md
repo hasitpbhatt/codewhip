@@ -42,6 +42,14 @@ git diff HEAD~1 | codewhip run -p --output-format json --max-budget-usd 0.10 \
   "review this diff" > review.json
 ```
 
+`--free` means no provider charge, not guaranteed availability or privacy:
+free-tier providers may rate-limit, retain, or train on prompts. Review provider
+terms before sending sensitive code.
+
+`-p` cannot answer interactive approval prompts. `ask` actions are held and
+denied; configure explicit policy/allowlists for headless work rather than
+enabling `--yolo` by default.
+
 `demo --deny` is the whole pitch in 20 seconds and the reason to install it:
 watch it refuse `rm -rf`, then prove the refusal is recorded.
 

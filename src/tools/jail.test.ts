@@ -3,7 +3,7 @@ import { strictEqual, ok } from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { jailPath } from "./jail.js";
+import { jailPath, resolveRoots, MAX_ROOTS } from "./jail.js";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-jail-"));
 
@@ -28,5 +28,17 @@ describe("jail", () => {
     // Forward slash separates on win32 and posix alike.
     const r = jailPath(cwd, "../secret.txt");
     strictEqual(r, null);
+  });
+  it("reports only the root that exceeds the limit", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "codewhip-roots-"));
+    const dirs = Array.from({ length: MAX_ROOTS + 1 }, (_, i) => {
+      const dir = path.join(parent, `root-${i}`);
+      fs.mkdirSync(dir);
+      return dir;
+    });
+    const result = resolveRoots(dirs, cwd);
+    strictEqual(result.roots.length, MAX_ROOTS);
+    strictEqual(result.errors.length, 1);
+    ok(result.errors[0]?.includes(dirs[MAX_ROOTS] as string));
   });
 });

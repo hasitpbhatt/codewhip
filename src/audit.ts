@@ -146,19 +146,26 @@ function readTailEntry(cwd: string): AuditEntry | undefined {
     } finally {
       fs.closeSync(fd);
     }
+    if (st.size > len && !raw.includes("\n")) {
+      throw new Error("audit tail exceeds 8KB without a complete entry");
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+  const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+  const last = lines.at(-1);
+  if (last === undefined) return undefined;
+  let entry: AuditEntry;
+  try {
+    entry = JSON.parse(last) as AuditEntry;
   } catch {
-    return undefined; // missing file = empty chain
+    throw new Error("audit tail is malformed; refusing append");
   }
-  const lines = raw.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]?.trim();
-    if (line === undefined || line.length === 0) continue;
-    try {
-      const e = JSON.parse(line) as AuditEntry;
-      if (typeof e.seq === "number") return e;
-    } catch { /* torn tail line or foreign bytes — keep walking back */ }
+  if (!Number.isSafeInteger(entry.seq) || entry.seq < 1 || typeof entry.prev_hash !== "string") {
+    throw new Error("audit tail entry is invalid; refusing append");
   }
-  return undefined;
+  return entry;
 }
 
 export function appendEntry(cwd: string, input: AuditInput): string | null {

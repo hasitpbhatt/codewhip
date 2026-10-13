@@ -151,6 +151,15 @@ test("buildResult maps every stop reason and keeps the receipt verbatim", () => 
   assert.equal(err.error, "provider failed");
 });
 
+test("buildResult marks invalid structured output as an error", () => {
+  const result = loopResult({
+    structured: { ok: false, errors: ["missing required field"] },
+  });
+  const payload = buildResult(result, facts);
+  assert.equal(payload.is_error, true);
+  assert.deepEqual(payload.structured_errors, ["missing required field"]);
+});
+
 test("buildResult carries the governance fields a script needs", () => {
   const p = buildResult(loopResult({
     checkpoints: 2,

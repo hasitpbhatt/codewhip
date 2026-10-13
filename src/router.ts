@@ -113,10 +113,8 @@ export function pickExplorePool<T>(pass: T[], gatedOut: T[], rng: () => number):
   return wantExplore ? { pool: gatedOut, exploring: true } : { pool: pass, exploring: false };
 }
 
-function healthOk(providerId: ProviderId, model: string) {
+function healthOk(providerId: ProviderId, model: string, summary = summarizeCalls(readProviderCalls())) {
   if (isBlocked(providerId, model)) return false;
-  const records = readProviderCalls();
-  const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);
   if (!ph) return true; // no data yet
   const mh = ph.models.find((m) => m.model === model);
@@ -139,10 +137,8 @@ export const TTL_MS = {
  * watched fail. Single source for the TTL table lives here.
  * Also returns true when the model is permanently blocked (410 received).
  */
-export function isRecentlyFailed(providerId: string, model: string): boolean {
+export function isRecentlyFailed(providerId: string, model: string, summary = summarizeCalls(readProviderCalls())): boolean {
   if (isBlocked(providerId, model)) return true;
-  const records = readProviderCalls();
-  const summary = summarizeCalls(records);
   const ph = summary.providers.find((p) => p.provider === providerId);
   if (!ph) return false;
   const mh = ph.models.find((m) => m.model === model);
@@ -185,7 +181,7 @@ export function pickRandomHealthy(rng: () => number = Math.random): Route | { er
     const model = cfg.defaultModel;
     if (!isModelAllowed(provider, model)) continue; // consent gate: exact ids only
     if (!isAutoEligible(cfg.id, cfg.defaultModel)) continue;
-    if (isRecentlyFailed(provider, model)) continue;
+    if (isRecentlyFailed(provider, model, summary)) continue;
     const ph = summary.providers.find((p) => p.provider === provider);
     const mh = ph?.models.find((m) => m.model === model);
     (mh === undefined || healthPasses(mh, 0.5) ? pass : gatedOut).push({ provider, model });
@@ -215,7 +211,7 @@ export function routeFor(taskClass: TaskClass, dir?: string): Route | { error: s
     if (!isModelAllowed(provider, model)) {
       return { error: `auto route for 'implement' targets ${provider}:${model}, which is not enabled — run: codewhip provider enable ${provider}:${model}, or pass --provider to override` };
     }
-    if (!healthOk(provider, model)) {
+    if (!healthOk(provider, model, summarizeCalls(readProviderCalls()))) {
       return { error: `auto route for 'implement' skipped ${provider}:${model} due to low success rate — pass --provider to override` };
     }
     return { provider, model, note: "implement → frontier free tier" };

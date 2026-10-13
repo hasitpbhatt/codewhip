@@ -55,7 +55,7 @@ export function resolveRoots(raw: readonly string[], cwd: string): { roots: stri
     if (seen.has(key)) continue;
     seen.add(key);
     if (roots.length >= MAX_ROOTS) {
-      errors.push(`dropped ${raw.length} entries beyond the ${MAX_ROOTS}-root limit`);
+      errors.push(`${trimmed}: exceeds the ${MAX_ROOTS}-root limit`);
       break;
     }
     roots.push(real);

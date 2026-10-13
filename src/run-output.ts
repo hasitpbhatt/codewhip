@@ -164,7 +164,7 @@ export function buildResult(result: LoopResult, f: RunFacts): Record<string, unk
   return {
     type: "result",
     subtype: SUBTYPE[result.stopReason],
-    is_error: result.error !== undefined || result.cancelled || result.stopReason !== "complete",
+    is_error: result.error !== undefined || result.cancelled || result.stopReason !== "complete" || result.structured?.ok === false,
     run_id: result.runId,
     ...(f.sessionId === undefined ? {} : { session_id: f.sessionId }),
     provider: f.provider,

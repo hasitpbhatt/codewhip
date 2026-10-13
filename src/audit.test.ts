@@ -125,6 +125,20 @@ describe("audit chain", () => {
     ok(v.problems.some((p) => p.includes("not valid JSON")), v.problems.join(" | "));
   });
 
+  it("refuses to append after a malformed tail", () => {
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    fs.appendFileSync(auditPath(cwd), "not-json\n", "utf8");
+    const error = appendEntry(cwd, { runId: "r1", actor: "policy", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    ok(error?.includes("audit tail is malformed"));
+  });
+
+  it("refuses to append after a torn tail instead of skipping it", () => {
+    appendEntry(cwd, { runId: "r1", actor: "policy", tool: "bash", args_hash: "x", result_hash: "y", policy: "a" });
+    fs.appendFileSync(auditPath(cwd), "{\"seq\":", "utf8");
+    const error = appendEntry(cwd, { runId: "r1", actor: "policy", tool: "edit", args_hash: "p", result_hash: "q", policy: "b" });
+    ok(error?.includes("audit tail is malformed"));
+  });
+
 
   it("genesis marker: init upgrade bounds the pre-key prefix (P0)", () => {
     // Legacy chain: unsigned entries recorded before any key existed.

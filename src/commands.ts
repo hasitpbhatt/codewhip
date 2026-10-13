@@ -41,8 +41,9 @@ export function listCommandsWithErrors(cwd: string): { commands: CommandDef[]; e
   let files: string[];
   try {
     files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
-  } catch {
-    return { commands: [], errors: [] };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { commands: [], errors: [] };
+    return { commands: [], errors: [`commands directory unreadable: ${err instanceof Error ? err.message : "error"}`] };
   }
   const commands: CommandDef[] = [];
   const errors: string[] = [];

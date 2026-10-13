@@ -52,6 +52,16 @@ describe("custom slash commands", () => {
     strictEqual(r.errors.length, 0);
   });
 
+  it("reports command discovery errors when commands path is not a directory", () => {
+    const cwd = tmpCwd();
+    fs.mkdirSync(path.join(cwd, ".codewhip"));
+    fs.writeFileSync(path.join(cwd, ".codewhip", "commands"), "not a directory");
+    const r = listCommandsWithErrors(cwd);
+    strictEqual(r.commands.length, 0);
+    strictEqual(r.errors.length, 1);
+    ok(r.errors[0]?.includes("commands directory unreadable"));
+  });
+
   it("expandCommand substitutes every $ARGUMENTS occurrence", () => {
     const cwd = tmpCwd();
     writeCommand(cwd, "fix.md", "---\n---\nFix $ARGUMENTS then test $ARGUMENTS");
